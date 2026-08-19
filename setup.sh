@@ -72,17 +72,23 @@ fi
 
 # The three EdgeTAM stages that dominate tracking time, converted to CoreML:
 # image encoder + memory attention + memory encoder, one static-shape graph per
-# object count. ~15 s to build, ~130 MB on disk, and worth 8.3 -> 15.0 fps.
-# Cached: rebuilt only if the checkpoint or the exporter is newer than it.
-CML="$ENVD/coreml/manifest.json"
+# object count -- and one set per tracking resolution the UI offers, because the
+# shapes differ. ~20 s and 55-68 MB each (183 MB for all three), and worth
+# 9.4 -> 15.4 fps at 1024 px.
+# Cached: a size is rebuilt only if the checkpoint or the exporter is newer.
 if "$VENV/bin/python" -c "import coremltools" >/dev/null 2>&1; then
-  if [ ! -f "$CML" ] || [ "$CKPT" -nt "$CML" ] || [ "$HERE/coreml/export.py" -nt "$CML" ] \
-     || [ "$HERE/coreml/wrappers.py" -nt "$CML" ]; then
-    echo "[setup] exporting CoreML graphs (once, ~15 s)"
-    "$VENV/bin/python" "$HERE/coreml/export.py" --batch 1,2,3 >/dev/null 2>&1 \
-      && echo "[setup] CoreML export ok" \
-      || echo "[setup] CoreML export failed - falling back to the torch backends"
-  fi
+  for SZ in 1024 768 512; do
+    CML="$ENVD/coreml/$SZ/manifest.json"
+    if [ -f "$CML" ] && [ ! "$CKPT" -nt "$CML" ] && [ ! "$HERE/coreml/export.py" -nt "$CML" ] \
+       && [ ! "$HERE/coreml/wrappers.py" -nt "$CML" ]; then
+      continue
+    fi
+    echo "[setup] exporting CoreML graphs at $SZ px (once, ~15 s)"
+    "$VENV/bin/python" "$HERE/coreml/export.py" --batch 1,2,3 --image-size "$SZ" \
+      >/dev/null 2>&1 \
+      && echo "[setup] CoreML export $SZ ok" \
+      || echo "[setup] CoreML export $SZ failed - that quality falls back to torch"
+  done
 fi
 
 # the serial dither modes (error diffusion, Riemersma) run a per-pixel loop that

@@ -18,8 +18,9 @@ cd ~/dither-video
 
 `run.sh` is idempotent. It calls `setup.sh` (creates `env/venv`, clones
 `env/EdgeTAM`, fetches the checkpoint, compiles `env/libcdither.dylib`, exports the
-CoreML tracking graphs to `env/coreml/` — all no-ops after the first time), starts
-`server.py` on `http://127.0.0.1:8765`, and opens the browser. If 8765 is taken it walks forward to the next free port and says which one.
+CoreML tracking graphs to `env/coreml/<size>/` — one minute and 183 MB the first
+time, a no-op every time after), starts `server.py` on `http://127.0.0.1:8765`,
+and opens the browser. If 8765 is taken it walks forward to the next free port and says which one.
 `DV_PORT=` overrides, `DV_NO_OPEN=1` skips the browser.
 
 ## What you can do
