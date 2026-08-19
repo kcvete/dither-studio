@@ -127,6 +127,34 @@ async function run(page, name, subjects) {
   await page.screenshot({ path: path.join(DOCS, `${name}-step3-preview.png`) });
   await page.locator('#vcv').screenshot({ path: path.join(DOCS, `${name}-preview-frame20.png`) });
 
+  // before/after wipe: drag the divider, then confirm it survives playback
+  await page.click('#bCmp');
+  const wb = await page.locator('#wipe').boundingBox();
+  await page.mouse.move(wb.x + wb.width * 0.5, wb.y + wb.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(wb.x + wb.width * 0.42, wb.y + wb.height * 0.5, { steps: 8 });
+  await page.mouse.up();
+  await sleep(400);
+  const colColours = (x) => page.evaluate((cx) => {
+    const c = document.querySelector('#vcv'), g = c.getContext('2d');
+    const d = g.getImageData(cx < 0 ? c.width + cx : cx, 0, 1, c.height).data;
+    const set = new Set();
+    for (let i = 0; i < d.length; i += 4) set.add(d[i] + ',' + d[i + 1] + ',' + d[i + 2]);
+    return set.size;
+  }, x);
+  r.wipe = { split: await page.evaluate(() => window.DV.split),
+             leftColumnColours: await colColours(120),      // photo -> many colours
+             rightColumnColours: await colColours(-120) };  // dither -> bg + dots only
+  await page.screenshot({ path: path.join(DOCS, `${name}-step3-compare.png`) });
+  await page.click('#bPlay');
+  await sleep(2000);
+  r.wipe.leftColumnColoursWhilePlaying = await colColours(120);
+  r.wipe.frameWhilePlaying = await page.evaluate(() => window.DV.cur);
+  await page.click('#bPlay');
+  await page.click('#bCmp');
+  await page.evaluate(() => window.DV_draw(20));
+  await sleep(300);
+
   const t1 = Date.now();
   await page.click('#st4 .sh');
   await page.click('#bRender');

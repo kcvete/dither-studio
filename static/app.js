@@ -20,6 +20,7 @@ const S = {
   tracked: false, trackInfo: null,
   playing: false, cur: 0,
   tile: null, seed: 7,
+  compare: false, split: 0.5,
   P: { mode: 'cutout', bg: '#c9d4c5', n: 8000, cell: 4, dotpx: 3, gamma: 1.0,
        fill: 0.7, stray: 0.02, band: 9, invert: false },
   palettes: [], pal: 0,
@@ -473,7 +474,18 @@ function ditherFrame(bmp, dots) {
 
   const cv = $('#vcv');
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
-  cv.getContext('2d').putImageData(E.out, 0, 0);
+  const g = cv.getContext('2d');
+  g.putImageData(E.out, 0, 0);
+  if (S.compare) {
+    // reveal the untouched frame to the left of the divider; export is unaffected
+    const x = Math.round(clamp(S.split, 0, 1) * W);
+    if (x > 0) {
+      g.save();
+      g.beginPath(); g.rect(0, 0, x, H); g.clip();
+      g.drawImage(bmp.frame, 0, 0);
+      g.restore();
+    }
+  }
   return lit;
 }
 
@@ -531,6 +543,36 @@ async function startPreview() {
 }
 
 /* --------------------------------------------------------------- transport */
+const wipe = $('#wipe');
+
+function setSplit(v) {
+  S.split = clamp(v, 0, 1);
+  wipe.style.setProperty('--x', (S.split * 100).toFixed(2) + '%');
+  if (S.tracked && !S.playing) drawAt(S.cur);   // while playing the loop repaints
+}
+
+function setCompare(on) {
+  S.compare = on;
+  wipe.hidden = !on;
+  $('#bCmp').setAttribute('aria-pressed', String(on));
+  if (on) setSplit(S.split);
+  else if (S.tracked && !S.playing) drawAt(S.cur);
+}
+$('#bCmp').addEventListener('click', () => setCompare(!S.compare));
+
+let wiping = false;
+const wipeAt = (e) => {
+  const r = wipe.getBoundingClientRect();
+  setSplit((e.clientX - r.left) / r.width);
+};
+wipe.addEventListener('pointerdown', (e) => {
+  wiping = true; wipe.setPointerCapture(e.pointerId); wipeAt(e); e.preventDefault();
+});
+wipe.addEventListener('pointermove', (e) => { if (wiping) wipeAt(e); });
+wipe.addEventListener('pointerup', () => { wiping = false; });
+wipe.addEventListener('pointercancel', () => { wiping = false; });
+setSplit(0.5);
+
 $('#bPlay').addEventListener('click', () => { S.playing ? stop() : play(); });
 $('#sFrame').addEventListener('input', (e) => { stop(); drawAt(+e.target.value); });
 

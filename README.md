@@ -49,6 +49,10 @@ Stop it with Ctrl-C. Re-running while a server is up just re-opens the tab.
    Palettes (sage / forest / ember / mist), per-subject dot colour, cutout vs
    overlay, and the dots / cell / dot-size / gamma / fill / stray / halo sliders all
    update the current frame instantly.
+   **compare** (in the transport bar) turns on a before/after wipe: drag the divider
+   across the frame to slide between the untouched clip and the dithered version. It
+   keeps working while the clip is playing, and it is preview-only — the export is
+   never affected.
 4. **Export MP4** — renders the same parameters server-side with numpy + ffmpeg
    (libx264, crf 18), then offers a download link and an inline player.
 
@@ -130,17 +134,63 @@ Results on this machine (M4 Pro, 24 GB, macOS 26.1, torch 2.13 / MPS), 150-frame
 
 | | 1 subject | 2 subjects |
 |---|---|---|
-| track | 150/150 frames, 25.1 s, **6.0 fps** | 150/150 frames, 39.3 s, **3.8 fps** |
-| browser preview | 73 fps per frame | 50 fps per frame |
-| MP4 export | 150 frames, 2.7 s (55 fps) | 150 frames, 3.9 s (38 fps) |
+| track | 150/150 frames, 25–32 s, **4.7–6.0 fps** | 150/150 frames, 39–67 s, **2.2–3.8 fps** |
+| browser preview | 73–77 fps per frame | 50 fps per frame |
+| MP4 export | 150 frames, 2.7 s (55 fps) | 150 frames, 4.1 s (37 fps) |
 | `ffprobe` output | 1280×720, 30/1, 150 frames | 1280×720, 30/1, 150 frames |
+| before/after wipe | divider at 0.42, 285 colours left / 1 right, still 285→220 while playing | same, 285 left / 2 right |
 | console / page errors | 0 | 0 |
+
+Track times are given as ranges because they vary run to run by up to ~1.7× on a
+sustained GPU load (thermals); the fastest observed numbers are 25.1 s and 39.3 s.
 
 Preview-vs-export parity, dual-subject frame 20: the browser lit **3991** cells, the
 Python renderer lit **3992** (0.03 % apart; the one cell is a JPEG-decode borderline).
 
 Prompting from a middle frame (frame 75, backward + forward propagation) produced all
 150 masks in 21.5 s with a non-empty mask on frame 0.
+
+## Why tracking runs at ~5 fps and not EdgeTAM's advertised 16
+
+EdgeTAM's README quotes **15.7 FPS on iPhone 15 Pro Max** and **150.9 FPS on A100**,
+and the same table footnotes that *"the FPS on A100 is obtained with torch compile"*;
+the iPhone number comes from the **CoreML export running on the Neural Engine** (the
+repo ships `coreml/export_to_coreml.py` for exactly that). This tool runs the
+**PyTorch eager** graph on **MPS** in fp32 — a third, much slower execution path. The
+model is identical; the runtime is not.
+
+Measured breakdown, 1 subject, 150 frames, 23.0 s total propagate:
+
+| stage | seconds | share | per frame |
+|---|---|---|---|
+| memory attention | 12.18 | 53 % | 81 ms |
+| image encoder | 4.81 | 21 % | 32 ms |
+| memory encoder | 3.28 | 14 % | 22 ms |
+| SAM heads | 2.60 | 11 % | 17 ms |
+| GPU→CPU mask copy | 0.07 | <1 % | 0.5 ms |
+| PNG mask write | ~0.9 | ~4 % | 6 ms |
+
+So it is the model, not this tool's I/O — frame decode, mask transfer and PNG writing
+together are under 5 % of the time.
+
+Things that were tried and did **not** help on MPS:
+
+| change | 1-subject fps |
+|---|---|
+| baseline (fp32 eager) | **6.5** |
+| `torch.autocast(fp16)` | 6.4 (no change) |
+| `torch.autocast(bfloat16)` | 3.7 (2× worse — the RepViT encoder falls back) |
+| `torch.compile(memory_attention)` | 3.4 (inductor's MPS path loses on dynamic shapes) |
+| `num_maskmem` 7 → 3 (shorter memory bank) | 6.5 vs 5.5, i.e. within run-to-run noise; mask IoU unchanged (0.985) |
+
+Scaling with subjects: the image encoder is shared and stays flat (4.8 / 5.7 / 6.7 s
+for 1 / 2 / 4 subjects) but memory attention scales linearly (12.2 / 27.8 / 72.0 s),
+which is why 4 subjects drops to 1.4 fps.
+
+The real path to iPhone-class throughput is the CoreML export onto the ANE. Note that
+EdgeTAM's exporter only covers the image encoder, prompt encoder and mask decoder —
+the memory attention that costs us 53 % is not among the three exported models, so a
+straight port would not automatically deliver the full speed-up for video tracking.
 
 ## Limits
 
@@ -150,8 +200,9 @@ Prompting from a middle frame (frame 75, backward + forward propagation) produce
   10 s by default. Longer clips mean linearly more tracking time and disk.
 * **One track at a time.** A process-wide lock serialises EdgeTAM runs; a second
   track request while one is running gets `409`.
-* **Objects cost time.** ~6 fps for one subject, ~3.8 fps for two on this machine.
-  Six subjects on a 300-frame clip is several minutes.
+* **Objects cost time.** ~5–6 fps for one subject, ~2–4 fps for two, ~1.4 fps for
+  four on this machine (see the performance section above). Six subjects on a
+  300-frame clip is several minutes.
 * **Tracking quality is EdgeTAM's.** Fast motion, motion blur and occlusion can make
   a mask drift or bleed; the fix is a better prompt (add a negative point, or prompt
   on a cleaner frame), not a renderer setting. There is no per-frame mask correction.
@@ -159,6 +210,8 @@ Prompting from a middle frame (frame 75, backward + forward propagation) produce
   thread and caches at most 48 frames of decoded bitmaps. On a 1280×720 clip it runs
   at ~50–75 fps of compute for 1–2 subjects, but heavier settings (small `cell`, many
   subjects) will drop below the clip's own frame rate.
+* **Compare is preview-only.** The before/after wipe is a canvas overlay; it is not
+  baked into the exported MP4.
 * **No audio, no morphing.** The export is video only. The image-demo's shape-morph
   is out of scope here.
 * **Jobs are never garbage collected.** `jobs/` grows ~13 MB per 150-frame clip per

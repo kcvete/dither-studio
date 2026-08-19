@@ -99,12 +99,16 @@
 
     <!-- preview stage -->
     <div id="vwrap" hidden>
-      <div id="vstage"><canvas id="vcv"></canvas></div>
+      <div id="vstage">
+        <canvas id="vcv"></canvas>
+        <div id="wipe" hidden><i></i><b></b><em>before</em><s>after</s></div>
+      </div>
       <div id="transport">
         <button class="chip" id="bPlay" aria-pressed="false">play</button>
         <input type="range" id="sFrame" min="0" max="0" step="1" value="0">
         <span class="mono" id="fcount">0 / 0</span>
         <span class="mono" id="fps">– fps</span>
+        <button class="chip" id="bCmp" aria-pressed="false" title="drag the divider on the video">compare</button>
       </div>
     </div>
     <div id="toast" hidden></div>

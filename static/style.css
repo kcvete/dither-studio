@@ -90,3 +90,19 @@ input[type=color]{width:26px;height:20px;padding:0;border:1px solid var(--line);
   background:#0a1310ee;border:1px solid var(--line);border-radius:8px;padding:8px 14px;
   font-size:11px;z-index:9;max-width:80%}
 #toast.err{border-color:var(--warn);color:var(--warn)}
+
+/* ------------------------------------------------------- before/after wipe */
+#vstage{position:relative}
+#wipe{position:absolute;inset:0;cursor:ew-resize;touch-action:none;--x:50%}
+#wipe i{position:absolute;top:0;bottom:0;left:var(--x);width:2px;margin-left:-1px;
+  background:#e8efe6;box-shadow:0 0 0 1px #0006,0 0 14px #0007}
+#wipe b{position:absolute;top:50%;left:var(--x);width:34px;height:34px;margin:-17px 0 0 -17px;
+  border-radius:50%;background:#e8efe6;box-shadow:0 2px 14px #0008;
+  display:grid;place-items:center}
+#wipe b::before{content:"\2039\203A";color:#0e1512;font-size:15px;letter-spacing:1px;
+  line-height:1;font-weight:700}
+#wipe em,#wipe s{position:absolute;top:10px;font-style:normal;text-decoration:none;
+  font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#e8efe6;
+  background:#0a1310cc;border-radius:99px;padding:3px 8px;pointer-events:none}
+#wipe em{right:calc(100% - var(--x) + 12px)}
+#wipe s{left:calc(var(--x) + 12px)}

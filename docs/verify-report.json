@@ -5,37 +5,29 @@
   "pageErrors": [],
   "requestFailures": [
     {
-      "url": "http://127.0.0.1:8767/api/jobs/fd23930570b8/out.mp4?t=1787152067852",
+      "url": "http://127.0.0.1:8767/api/jobs/98907cd89efa/out.mp4?t=1787153175689",
       "why": "net::ERR_ABORTED"
     },
     {
-      "url": "http://127.0.0.1:8767/api/jobs/fd23930570b8/out.mp4?t=1787152067852",
-      "why": "net::ERR_ABORTED"
-    },
-    {
-      "url": "http://127.0.0.1:8767/api/jobs/fd23930570b8/out.mp4?t=1787152067852",
-      "why": "net::ERR_ABORTED"
-    },
-    {
-      "url": "http://127.0.0.1:8767/api/jobs/595118263f23/out.mp4?t=1787152118953",
+      "url": "http://127.0.0.1:8767/api/jobs/67f551b53b2f/out.mp4?t=1787153258337",
       "why": "net::ERR_ABORTED"
     }
   ],
   "runs": {
     "single": {
-      "upload": "150 frames · 1280×720 · 30 fps · job fd23930570b8",
+      "upload": "150 frames · 1280×720 · 30 fps · job 98907cd89efa",
       "nFrames": 150,
       "subjectChips": [
         "subject 1 · 1pt+box"
       ],
-      "trackInfo": "tracked 150 frames in 25.1 s (6.0 fps) on MPS · 1 subject",
-      "trackWallSeconds": 25.2,
+      "trackInfo": "tracked 150 frames in 32.1 s (4.7 fps) on MPS · 1 subject",
+      "trackWallSeconds": 32.7,
       "status": {
         "state": "done",
         "done_frames": 150,
         "n_frames": 150,
-        "elapsed_s": 25.09,
-        "fps": 5.98,
+        "elapsed_s": 32.11,
+        "fps": 4.67,
         "device": "mps"
       },
       "dots": [
@@ -51,7 +43,7 @@
         "bg": 915631,
         "other": 0
       },
-      "previewFps": "73.0 fps · 1093 dots",
+      "previewFps": "76.9 fps · 1029 dots",
       "previewFrame20": {
         "w": 1280,
         "h": 720,
@@ -61,10 +53,17 @@
         "bg": 915050,
         "other": 0
       },
-      "renderInfo": "rendered 150 frames in 2.7 s (55.2 fps)",
-      "renderWallSeconds": 3,
-      "downloadHref": "/api/jobs/fd23930570b8/out.mp4?t=1787152067852",
-      "job": "fd23930570b8",
+      "wipe": {
+        "split": 0.4200000076413341,
+        "leftColumnColours": 285,
+        "rightColumnColours": 1,
+        "leftColumnColoursWhilePlaying": 220,
+        "frameWhilePlaying": 78
+      },
+      "renderInfo": "rendered 150 frames in 2.8 s (53.8 fps)",
+      "renderWallSeconds": 3.6,
+      "downloadHref": "/api/jobs/98907cd89efa/out.mp4?t=1787153175689",
+      "job": "98907cd89efa",
       "ffprobe": {
         "width": 1280,
         "height": 720,
@@ -78,20 +77,20 @@
       "exportedNearBg": 912357
     },
     "dual": {
-      "upload": "150 frames · 1280×720 · 30 fps · job 595118263f23",
+      "upload": "150 frames · 1280×720 · 30 fps · job 67f551b53b2f",
       "nFrames": 150,
       "subjectChips": [
         "subject 1 · 1pt+box✕",
         "subject 2 · 1pt+box✕"
       ],
-      "trackInfo": "tracked 150 frames in 39.3 s (3.8 fps) on MPS · 2 subjects",
-      "trackWallSeconds": 39.7,
+      "trackInfo": "tracked 150 frames in 66.9 s (2.2 fps) on MPS · 2 subjects",
+      "trackWallSeconds": 67.4,
       "status": {
         "state": "done",
         "done_frames": 150,
         "n_frames": 150,
-        "elapsed_s": 39.3,
-        "fps": 3.82,
+        "elapsed_s": 66.94,
+        "fps": 2.24,
         "device": "mps"
       },
       "dots": [
@@ -109,7 +108,7 @@
         "bg": 874636,
         "other": 0
       },
-      "previewFps": "50.0 fps · 1059 dots",
+      "previewFps": "50.5 fps · 1059 dots",
       "previewFrame20": {
         "w": 1280,
         "h": 720,
@@ -120,10 +119,17 @@
         "bg": 887989,
         "other": 0
       },
-      "renderInfo": "rendered 150 frames in 3.9 s (38.5 fps)",
-      "renderWallSeconds": 4.1,
-      "downloadHref": "/api/jobs/595118263f23/out.mp4?t=1787152118953",
-      "job": "595118263f23",
+      "wipe": {
+        "split": 0.4200000076413341,
+        "leftColumnColours": 285,
+        "rightColumnColours": 2,
+        "leftColumnColoursWhilePlaying": 241,
+        "frameWhilePlaying": 79
+      },
+      "renderInfo": "rendered 150 frames in 4.1 s (36.7 fps)",
+      "renderWallSeconds": 4.6,
+      "downloadHref": "/api/jobs/67f551b53b2f/out.mp4?t=1787153258337",
+      "job": "67f551b53b2f",
       "ffprobe": {
         "width": 1280,
         "height": 720,
