@@ -1,0 +1,113 @@
+<!doctype html>
+<title>Dither Video</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230f1f18'/%3E%3Cg fill='%23b0413e'%3E%3Crect x='3' y='3' width='2' height='2'/%3E%3Crect x='7' y='5' width='2' height='2'/%3E%3Crect x='11' y='3' width='2' height='2'/%3E%3Crect x='5' y='9' width='2' height='2'/%3E%3Crect x='9' y='11' width='2' height='2'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+
+<div id="app">
+  <aside id="panel">
+    <div class="hd"><b>Dither Video</b><span id="dev" class="tag">mps</span></div>
+
+    <!-- ---------------------------------------------------------- step 1 -->
+    <section class="step" id="st1" data-open="1">
+      <div class="sh"><i>1</i><span>Source clip</span><em id="s1sum"></em></div>
+      <div class="sb">
+        <div id="drop">drop an mp4 / mov here &middot; or click to pick</div>
+        <input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
+        <div class="lbl"><span>Max length</span><span id="vSec">10 s</span></div>
+        <input type="range" id="sSec" min="1" max="10" step="1" value="10">
+        <div class="note">Extracted at 720p / 30 fps, capped at 300 frames.</div>
+        <div id="upstat" class="stat" hidden></div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- step 2 -->
+    <section class="step" id="st2" data-open="0">
+      <div class="sh"><i>2</i><span>Select subjects</span><em id="s2sum"></em></div>
+      <div class="sb">
+        <div class="lbl"><span>Prompt frame</span><span id="vPF">0</span></div>
+        <input type="range" id="sPF" min="0" max="0" step="1" value="0">
+        <div class="lbl"><span>Subjects</span><span id="vSubs">1 / 6</span></div>
+        <div class="chips" id="subs"></div>
+        <div class="row">
+          <button class="btn" id="bAdd">+ add subject</button>
+          <button class="btn" id="bClr">clear prompts</button>
+        </div>
+        <div class="note">Click = positive point &middot; shift/alt-click = negative &middot;
+          drag = box. Lasso isn't offered here: the video tracker only accepts
+          points and boxes, and it derives the outline itself on every frame.</div>
+        <div class="row"><button class="btn go" id="bTrack">Track</button></div>
+        <div id="prog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
+        <div id="tinfo" class="stat" hidden></div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- step 3 -->
+    <section class="step" id="st3" data-open="0">
+      <div class="sh"><i>3</i><span>Style &amp; preview</span><em id="s3sum"></em></div>
+      <div class="sb">
+        <div class="lbl"><span>Palette</span></div>
+        <div class="chips" id="pals"></div>
+        <div class="lbl"><span>Dot colours</span></div>
+        <div class="chips" id="dotcols"></div>
+        <div class="lbl"><span>Mode</span></div>
+        <div class="chips">
+          <button class="chip" data-mode="cutout" aria-pressed="true">cutout</button>
+          <button class="chip" data-mode="overlay" aria-pressed="false">overlay</button>
+        </div>
+        <div class="lbl"><span>Dots</span><span id="vN">8000</span></div>
+        <input type="range" id="sN" min="500" max="30000" step="500" value="8000">
+        <div class="lbl"><span>Cell</span><span id="vCell">4 px</span></div>
+        <input type="range" id="sCell" min="2" max="12" step="1" value="4">
+        <div class="lbl"><span>Dot size</span><span id="vDot">3 px</span></div>
+        <input type="range" id="sDot" min="1" max="8" step="1" value="3">
+        <div class="lbl"><span>Gamma</span><span id="vGam">1.00</span></div>
+        <input type="range" id="sGam" min="0.4" max="3" step="0.05" value="1">
+        <div class="lbl"><span>Fill cap</span><span id="vFill">0.70</span></div>
+        <input type="range" id="sFill" min="0.1" max="1" step="0.05" value="0.7">
+        <div class="lbl"><span>Stray</span><span id="vStray">0.02</span></div>
+        <input type="range" id="sStray" min="0" max="0.2" step="0.005" value="0.02">
+        <div class="lbl"><span>Halo band</span><span id="vBand">9</span></div>
+        <input type="range" id="sBand" min="0" max="30" step="1" value="9">
+        <div class="chips" style="margin-top:9px">
+          <button class="chip" id="tInv" aria-pressed="false">invert tone</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- step 4 -->
+    <section class="step" id="st4" data-open="0">
+      <div class="sh"><i>4</i><span>Export MP4</span><em id="s4sum"></em></div>
+      <div class="sb">
+        <div class="row"><button class="btn go" id="bRender">Render MP4</button></div>
+        <div id="rprog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
+        <div id="rinfo" class="stat" hidden></div>
+        <a id="dl" class="btn dl" hidden download>download mp4</a>
+        <video id="outvid" hidden controls loop playsinline></video>
+      </div>
+    </section>
+  </aside>
+
+  <main id="stage">
+    <div id="empty">drop a clip to begin</div>
+
+    <!-- prompt stage -->
+    <div id="pwrap" hidden>
+      <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas></div>
+    </div>
+
+    <!-- preview stage -->
+    <div id="vwrap" hidden>
+      <div id="vstage"><canvas id="vcv"></canvas></div>
+      <div id="transport">
+        <button class="chip" id="bPlay" aria-pressed="false">play</button>
+        <input type="range" id="sFrame" min="0" max="0" step="1" value="0">
+        <span class="mono" id="fcount">0 / 0</span>
+        <span class="mono" id="fps">– fps</span>
+      </div>
+    </div>
+    <div id="toast" hidden></div>
+  </main>
+</div>
+<script src="/static/app.js"></script>

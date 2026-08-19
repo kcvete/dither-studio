@@ -1,0 +1,10 @@
+env/
+jobs/
+checkpoints/
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+node_modules/
+*.mp4
+!docs/*.mp4
