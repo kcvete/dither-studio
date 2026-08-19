@@ -28,6 +28,7 @@ const S = {
   // clip
   job: null, nFrames: 0, W: 0, H: 0, fps: 30,
   scope: 'whole', subjects: [], active: 0, nextId: 1, promptFrame: 0,
+  tool: 'point', curPath: null, hoverXY: null, previewMasks: null,
   trackSize: 1024, tracked: false, playing: false, cur: 0,
   // look
   P: {
@@ -188,14 +189,25 @@ function subjectColor(i) { return (S.meta.subject_colors || ['#b0413e'])[i % 6];
 function addSubject() {
   if (S.subjects.length >= MAX_SUBJECTS) return;
   const i = S.subjects.length;
-  S.subjects.push({ id: S.nextId++, palette: [S.bg, subjectColor(i)], points: [], box: null });
+  S.subjects.push({ id: S.nextId++, palette: [S.bg, subjectColor(i)],
+                    points: [], box: null, paths: [] });
   S.active = S.subjects.length - 1;
   renderSubjects(); buildTargets();
 }
-$('#bAdd').addEventListener('click', addSubject);
+/* Once a clip is tracked the transport takes over the canvas, so anything that
+ * edits a prompt has to hand the prompt canvas back — otherwise there is no way
+ * to correct a bad track short of reloading. The masks stay until you re-track. */
+function backToPrompt() {
+  if (S.kind !== 'video' || S.scope !== 'track') return;
+  $('#pwrap').hidden = false; $('#vwrap').hidden = true;
+  S.playing = false;
+  showPromptFrame(S.promptFrame);
+}
+$('#bAdd').addEventListener('click', () => { addSubject(); backToPrompt(); });
 $('#bClr').addEventListener('click', () => {
-  S.subjects.forEach((s) => { s.points = []; s.box = null; });
-  renderSubjects(); drawOverlay();
+  S.subjects.forEach((s) => { s.points = []; s.box = null; s.paths = []; });
+  S.curPath = null; S.previewMasks = null; $('#pvinfo').hidden = true;
+  renderSubjects(); backToPrompt(); drawOverlay();
 });
 
 function renderSubjects() {
@@ -207,8 +219,11 @@ function renderSubjects() {
     const sw = document.createElement('span');
     sw.className = 'sw'; sw.style.background = s.palette[s.palette.length - 1];
     const nm = document.createElement('span');
-    const np = s.points.length;
-    nm.textContent = `#${s.id}` + (np || s.box ? ` · ${np}pt${s.box ? '+box' : ''}` : '');
+    const np = s.points.length, nl = (s.paths || []).length;
+    const bits = [];
+    if (nl) bits.push(`${nl} shape${nl > 1 ? 's' : ''}`);
+    else if (np || s.box) bits.push(`${np}pt${s.box ? '+box' : ''}`);
+    nm.textContent = `#${s.id}` + (bits.length ? ' · ' + bits.join(' ') : '');
     b.append(sw, nm);
     b.addEventListener('click', () => { S.active = i; renderSubjects(); drawOverlay(); });
     if (S.subjects.length > 1) {
@@ -231,6 +246,7 @@ const pimg = $('#pimg'), pov = $('#pov'), pctx = pov.getContext('2d');
 
 function showPromptFrame(n) {
   S.promptFrame = n;
+  S.previewMasks = null; $('#pvinfo').hidden = true;
   pimg.src = `/api/jobs/${S.job}/frame/${n}`;
   pov.width = S.W; pov.height = S.H;
   drawOverlay();
@@ -266,6 +282,84 @@ function drawOverlay() {
     pctx.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
     pctx.setLineDash([]);
   }
+  drawPaths();
+  drawPreviewMasks();
+}
+
+/* ---- lasso / polygon shapes ------------------------------------------------
+ * A shape is {op:'add'|'sub', pts:[[x,y],…]} in clip-native pixels. They are
+ * rasterised to a binary PNG at the clip's own size and sent as a mask prompt;
+ * EdgeTAM takes a mask OR points+box for a given frame and object, never both,
+ * so a subject with shapes ignores its clicks (the UI says so). */
+function strokeShape(p, col, open, hover) {
+  if (!p.pts.length) return;
+  const path = () => {
+    pctx.beginPath();
+    pctx.moveTo(p.pts[0][0], p.pts[0][1]);
+    for (let i = 1; i < p.pts.length; i++) pctx.lineTo(p.pts[i][0], p.pts[i][1]);
+    if (hover) pctx.lineTo(hover[0], hover[1]);
+    if (!open) pctx.closePath();
+  };
+  pctx.save();
+  pctx.lineJoin = 'round'; pctx.lineCap = 'round';
+  pctx.setLineDash([]); pctx.lineWidth = 5; pctx.strokeStyle = 'rgba(0,0,0,.55)';
+  path(); pctx.stroke();
+  pctx.setLineDash(open ? [9, 7] : []);
+  pctx.lineWidth = 2.5; pctx.strokeStyle = col; path(); pctx.stroke();
+  if (open) {
+    pctx.setLineDash([]); pctx.fillStyle = col;
+    for (const q of p.pts) pctx.fillRect(q[0] - 3, q[1] - 3, 6, 6);
+  }
+  pctx.restore();
+}
+
+function drawPaths() {
+  S.subjects.forEach((s, i) => {
+    const col = s.palette[s.palette.length - 1];
+    pctx.globalAlpha = i === S.active ? 1 : 0.4;
+    (s.paths || []).forEach((p) => strokeShape(p, p.op === 'add' ? col : '#ff9d7c', false));
+    pctx.globalAlpha = 1;
+  });
+  if (S.curPath && S.subjects[S.active]) {
+    const col = S.subjects[S.active].palette.slice(-1)[0];
+    strokeShape(S.curPath, S.curPath.op === 'add' ? col : '#ff9d7c', true,
+                S.tool === 'poly' ? S.hoverXY : null);
+  }
+}
+
+function drawPreviewMasks() {
+  if (!S.previewMasks) return;
+  S.subjects.forEach((s) => {
+    const im = S.previewMasks[String(s.id)];
+    if (!im || !im.complete) return;
+    const t = document.createElement('canvas');
+    t.width = S.W; t.height = S.H;
+    const g = t.getContext('2d');
+    g.drawImage(im, 0, 0, S.W, S.H);          // white-ish where the mask is
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = s.palette[s.palette.length - 1];
+    g.fillRect(0, 0, S.W, S.H);
+    pctx.save(); pctx.globalAlpha = 0.45; pctx.drawImage(t, 0, 0); pctx.restore();
+  });
+}
+
+/* one binary mask per subject, at the clip's own resolution */
+function subjectMaskDataURL(s) {
+  const shapes = (s.paths || []).filter((p) => p.pts.length > 2);
+  if (!shapes.length) return null;
+  const c = document.createElement('canvas');
+  c.width = S.W; c.height = S.H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, S.W, S.H);
+  if (!shapes.some((p) => p.op === 'add')) { g.fillStyle = '#fff'; g.fillRect(0, 0, S.W, S.H); }
+  for (const p of shapes) {
+    g.fillStyle = p.op === 'add' ? '#fff' : '#000';
+    g.beginPath();
+    g.moveTo(p.pts[0][0], p.pts[0][1]);
+    for (let i = 1; i < p.pts.length; i++) g.lineTo(p.pts[i][0], p.pts[i][1]);
+    g.closePath(); g.fill();
+  }
+  return c.toDataURL('image/png');
 }
 
 function povXY(e) {
@@ -274,14 +368,41 @@ function povXY(e) {
           clamp((e.clientY - r.top) / r.height * S.H, 0, S.H - 1)];
 }
 let down = null;
+const MINSTEP = 4;                      // lasso: drop points closer than this
+function commitPath() {
+  const c = S.curPath;
+  S.curPath = null; S.hoverXY = null;
+  if (c && c.pts.length >= 3) { S.subjects[S.active].paths.push(c); S.previewMasks = null; }
+  renderSubjects(); drawOverlay();
+}
 pov.addEventListener('pointerdown', (e) => {
   if (!S.subjects.length) return;
-  pov.setPointerCapture(e.pointerId);
-  down = { xy: povXY(e), moved: false, neg: e.shiftKey || e.altKey };
+  const p = povXY(e), neg = e.shiftKey || e.altKey;
+  if (S.tool === 'point') {
+    pov.setPointerCapture(e.pointerId);
+    down = { xy: p, moved: false, neg };
+    return;
+  }
+  if (S.tool === 'lasso') {
+    pov.setPointerCapture(e.pointerId);
+    S.curPath = { op: neg ? 'sub' : 'add', pts: [p] };
+    down = { lasso: true };
+  } else {                                                   // polygon
+    if (!S.curPath) S.curPath = { op: neg ? 'sub' : 'add', pts: [p] };
+    else S.curPath.pts.push(p);
+    S.hoverXY = p;
+  }
+  drawOverlay();
 });
 pov.addEventListener('pointermove', (e) => {
-  if (!down) return;
   const p = povXY(e);
+  if (S.tool === 'poly') { if (S.curPath) { S.hoverXY = p; drawOverlay(); } return; }
+  if (!down) return;
+  if (down.lasso) {
+    const last = S.curPath.pts[S.curPath.pts.length - 1];
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) < MINSTEP) return;
+    S.curPath.pts.push(p); drawOverlay(); return;
+  }
   if (Math.abs(p[0] - down.xy[0]) > 5 || Math.abs(p[1] - down.xy[1]) > 5) down.moved = true;
   if (down.moved) {
     S.dragBox = [Math.min(down.xy[0], p[0]), Math.min(down.xy[1], p[1]),
@@ -291,12 +412,58 @@ pov.addEventListener('pointermove', (e) => {
 });
 pov.addEventListener('pointerup', (e) => {
   if (!down) return;
+  if (down.lasso) { down = null; commitPath(); return; }
   const p = povXY(e), s = S.subjects[S.active];
   if (down.moved && S.dragBox) s.box = S.dragBox.map(Math.round);
   else s.points.push([Math.round(p[0]), Math.round(p[1]), down.neg ? 0 : 1]);
-  down = null; S.dragBox = null;
+  down = null; S.dragBox = null; S.previewMasks = null;
   renderSubjects(); drawOverlay();
 });
+pov.addEventListener('dblclick', (e) => {
+  if (S.tool === 'poly' && S.curPath) { e.preventDefault(); commitPath(); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && S.tool === 'poly' && S.curPath) { e.preventDefault(); commitPath(); }
+  if (e.key === 'Escape' && S.curPath) { S.curPath = null; S.hoverXY = null; drawOverlay(); }
+});
+
+/* ---- prompt tool ---- */
+const TOOLHINT = {
+  point: "click what you want · shift-click what you don't · drag a box",
+  lasso: 'drag around the subject · shift-drag to subtract · esc cancels',
+  poly: 'click each corner · double-click or enter to close · esc cancels',
+};
+const TOOLNOTE = {
+  point: 'Click = keep this · shift-click = not this · drag = a box. '
+       + 'The tracker re-derives the outline itself on every frame.',
+  lasso: 'Drag to draw around the subject · shift-drag subtracts · esc cancels. '
+       + 'A drawn shape replaces this subject\'s clicks and box — EdgeTAM takes '
+       + 'a mask prompt or points, never both on one frame.',
+  poly: 'Click each corner, double-click or enter to close · shift for a subtracting '
+      + 'shape · esc cancels. A drawn shape replaces this subject\'s clicks and box.',
+};
+function paintTool() {
+  $$('#ptool .chip').forEach((c) => c.setAttribute('aria-pressed',
+    String(c.dataset.tool === S.tool)));
+  $('#vTool').textContent = S.tool === 'point' ? 'point / box'
+    : S.tool === 'lasso' ? 'lasso' : 'polygon';
+  $('#toolnote').textContent = TOOLNOTE[S.tool];
+  $('#phint').textContent = TOOLHINT[S.tool];
+  $('#bUndo').hidden = S.tool === 'point';
+  pov.style.cursor = S.tool === 'poly' ? 'copy' : 'crosshair';
+}
+$$('#ptool .chip').forEach((c) => c.addEventListener('click', () => {
+  if (S.curPath) commitPath();
+  S.tool = c.dataset.tool; paintTool(); backToPrompt(); drawOverlay();
+}));
+$('#bUndo').addEventListener('click', () => {
+  const s = S.subjects[S.active];
+  if (!s) return;
+  if (S.curPath) { S.curPath = null; S.hoverXY = null; }
+  else if (s.paths.length) s.paths.pop();
+  renderSubjects(); drawOverlay();
+});
+paintTool();
 
 /* ---- tracking quality: the square the tracker resizes every frame to ----
  * The clip is untouched; masks come back at the source resolution whatever
@@ -326,13 +493,56 @@ function buildTrackSizes() {
 
 function paintTrackSize() {
   const t = (S.meta.track_sizes || []).find((x) => x.size === S.trackSize);
-  $('#vTQ').textContent = t ? `${t.label} · ${t.size} px` : `${S.trackSize} px`;
+  $('#vTQ').textContent = t ? t.label : `${S.trackSize} px`;
 }
 
 $('#bTrack').addEventListener('click', track);
 
+function promptPayload() {
+  return S.subjects.map((s) => {
+    const mask = subjectMaskDataURL(s);
+    return mask ? { id: s.id, mask }
+                : { id: s.id, points: s.points, box: s.box };
+  });
+}
+
+/* ---- preview: the first-frame prediction only, no propagation ---- */
+$('#bPrev').addEventListener('click', previewFrame);
+async function previewFrame() {
+  if (S.curPath) commitPath();
+  backToPrompt();
+  const bad = S.subjects.filter((s) => !s.points.length && !s.box && !s.paths.length);
+  if (bad.length) { toast('subject #' + bad[0].id + ' has no prompt yet', true); return; }
+  const btn = $('#bPrev'); btn.disabled = true;
+  const info = $('#pvinfo'); info.hidden = false; info.classList.remove('err');
+  info.textContent = 'predicting this frame…';
+  try {
+    const r = await api(`/api/jobs/${S.job}/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frame_idx: S.promptFrame, image_size: S.trackSize,
+                             objects: promptPayload() }),
+    });
+    const imgs = {};
+    await Promise.all(r.objects.map((o) => new Promise((res) => {
+      const im = new Image();
+      im.onload = im.onerror = () => { imgs[o.id] = im; res(); };
+      im.src = o.mask;
+    })));
+    S.previewMasks = imgs;
+    drawOverlay();
+    info.textContent = `frame ${r.frame_idx} · ${r.objects.length} subject`
+      + `${r.objects.length > 1 ? 's' : ''} in ${r.elapsed_s.toFixed(2)} s `
+      + `(${r.image_size} px) · ${r.objects.map((o) => '#' + o.id + ' ' + o.area + ' px').join(' · ')}`;
+  } catch (err) {
+    info.classList.add('err');
+    info.textContent = 'preview failed: ' + err.message;
+  }
+  btn.disabled = false;
+}
+
 async function track() {
-  const bad = S.subjects.filter((s) => !s.points.length && !s.box);
+  if (S.curPath) commitPath();
+  const bad = S.subjects.filter((s) => !s.points.length && !s.box && !s.paths.length);
   if (bad.length) { toast('subject #' + bad[0].id + ' has no prompt yet', true); return; }
   const btn = $('#bTrack'); btn.disabled = true;
   $('#tinfo').hidden = true; $('#tinfo').textContent = '';
@@ -345,7 +555,7 @@ async function track() {
       body: JSON.stringify({
         frame_idx: S.promptFrame,
         image_size: S.trackSize,
-        objects: S.subjects.map((s) => ({ id: s.id, points: s.points, box: s.box })),
+        objects: promptPayload(),
       }),
     });
     await pollTrack();
@@ -996,6 +1206,7 @@ async function exportMP4() {
   buildTargets();
   showSteps('none');
   window.DV = S;
+  window.DV_maskURL = subjectMaskDataURL;
   window.DV_draw = draw;
   window.DV_ready = true;
 })();

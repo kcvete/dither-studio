@@ -8,6 +8,7 @@
  *   B  clip    -> whole-frame dither -> MP4
  *   C  clip    -> two tracked subjects -> dots + a pixel mode -> MP4
  *   D  clip    -> one tracked subject at "fast" tracking quality (512 px)
+ *   E  clip    -> frame-0 preview, then a polygon mask prompt -> tracked
  * Writes screenshots to docs/ and a JSON report to docs/verify-report.json.
  */
 import { chromium } from 'playwright';
@@ -297,6 +298,120 @@ async function runTracked(page) {
   return r;
 }
 
+/* --------- E: lasso prompt + first-frame preview, one subject -------------- */
+async function runLasso(page) {
+  const r = {};
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  await page.setInputFiles('#file', CLIP);
+  await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+  r.job = await page.evaluate(() => window.DV.job);
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(700);
+
+  // --- box prompt first, and preview it: this is the "is my click enough?" step
+  await prompt(page, SUBJECT_A);
+  let t0 = Date.now();
+  await page.click('#bPrev');
+  r.boxPreviewText = await waitText(page, '#pvinfo', /subject|failed/, 120000);
+  r.boxPreviewWallSeconds = +((Date.now() - t0) / 1000).toFixed(2);
+  if (/failed/.test(r.boxPreviewText)) throw new Error(r.boxPreviewText);
+  r.boxPreviewOverlay = await page.evaluate(() => Object.keys(window.DV.previewMasks || {}).length);
+  await page.screenshot({ path: path.join(DOCS, 'e-preview-box.png') });
+
+  // --- now a polygon around the same subject, drawn on the prompt canvas
+  await page.click('#ptool .chip[data-tool="poly"]');
+  await page.click('#bClr');
+  const poly = await page.evaluate(() => {
+    const c = document.querySelector('#pov'), b = c.getBoundingClientRect();
+    // a 27-point trace of the athlete at frame 0 — what a careful lasso looks
+    // like (IoU 0.944 against the box-prompted mask on its own)
+    const P = [[597,111],[580,114],[573,140],[568,144],[527,145],[473,159],[447,158],
+               [444,162],[447,175],[470,167],[524,164],[493,218],[494,236],[507,263],
+               [526,279],[520,296],[520,350],[568,357],[544,338],[564,271],[552,238],
+               [552,216],[560,198],[585,172],[584,158],[607,135],[609,120]];
+    return { rect: { x: b.x, y: b.y, w: b.width, h: b.height }, pts: P, W: c.width, H: c.height };
+  });
+  for (const [x, y] of poly.pts) {
+    await page.mouse.click(poly.rect.x + (x / poly.W) * poly.rect.w,
+                           poly.rect.y + (y / poly.H) * poly.rect.h);
+  }
+  await page.keyboard.press('Enter');
+  r.shapes = await page.evaluate(() => window.DV.subjects[0].paths.map((p) => p.pts.length));
+  r.maskDataURLBytes = await page.evaluate(() => {
+    const u = window.DV_maskURL(window.DV.subjects[0]); return u ? u.length : 0;
+  });
+
+  t0 = Date.now();
+  await page.click('#bPrev');
+  r.lassoPreviewText = await waitText(page, '#pvinfo', /subject|failed/, 120000);
+  r.lassoPreviewWallSeconds = +((Date.now() - t0) / 1000).toFixed(2);
+  if (/failed/.test(r.lassoPreviewText)) throw new Error(r.lassoPreviewText);
+  await page.screenshot({ path: path.join(DOCS, 'e-preview-lasso.png') });
+
+  // --- and it tracks the whole clip from that mask alone
+  t0 = Date.now();
+  await page.click('#bTrack');
+  r.trackInfo = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+  r.trackWallSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+  if (/failed/.test(r.trackInfo)) throw new Error(r.trackInfo);
+  const st = await (await page.request.get(`${BASE}/api/jobs/${r.job}/status`)).json();
+  r.doneFrames = st.done_frames; r.fps = st.fps; r.backend = st.backend;
+  const meta = await (await page.request.get(`${BASE}/api/jobs/${r.job}/meta`)).json();
+  r.promptRecorded = meta.prompts;
+  await setMode(page, 'dots');
+  await page.evaluate(() => window.DV_draw(20)); await sleep(600);
+  r.dotsPreview = await census(page);
+  await page.screenshot({ path: path.join(DOCS, 'e-lasso-tracked.png') });
+
+  // --- and the mask prompt has to agree with the box prompt over the clip
+  const FR = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140];
+  const grab = (want) => page.evaluate(async (frames) => {
+    const out = {};
+    for (const n of frames) {
+      const im = new Image();
+      await new Promise((res) => { im.onload = im.onerror = res;
+        im.src = `/api/jobs/${window.DV.job}/mask/1/${n}?t=` + Date.now(); });
+      const c = document.createElement('canvas');
+      c.width = im.width; c.height = im.height;
+      const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data;
+      const bits = new Uint8Array(c.width * c.height);
+      for (let i = 0, p = 0; i < bits.length; i++, p += 4) bits[i] = d[p] > 127 ? 1 : 0;
+      out[n] = Array.from(bits);
+    }
+    return out;
+  }, want);
+  const lassoMasks = await grab(FR);
+
+  await openStep(page, 'st2');                       // tracking collapses it
+  await page.click('#bClr');
+  await page.click('#ptool .chip[data-tool="point"]');
+  await prompt(page, SUBJECT_A);
+  await page.click('#bTrack');
+  // #tinfo still holds the first run's text; track() clears it on click, so wait
+  // for that before waiting for the new one, or we would read the old masks
+  await page.waitForFunction(() => document.querySelector('#tinfo').hidden === true,
+                             { timeout: 10000 });
+  await waitText(page, '#tinfo', /tracked|failed/, 300000);
+  const boxMasks = await grab(FR);
+
+  const ious = FR.map((n) => {
+    const a = lassoMasks[n], b = boxMasks[n];
+    let i = 0, u = 0;
+    for (let k = 0; k < a.length; k++) { if (a[k] & b[k]) i++; if (a[k] | b[k]) u++; }
+    return u ? i / u : 1;
+  });
+  r.maskVsBoxIoU = {
+    frames: FR, mean: +(ious.reduce((x, y) => x + y, 0) / ious.length).toFixed(4),
+    min: +Math.min(...ious).toFixed(4),
+  };
+  if (r.maskVsBoxIoU.mean < 0.95) {
+    throw new Error('mask-prompt IoU vs box prompt ' + r.maskVsBoxIoU.mean + ' < 0.95');
+  }
+  return r;
+}
+
 /* ------------------------- D: one subject at a non-default tracking quality */
 async function runTrackedFast(page) {
   const r = {};
@@ -358,6 +473,7 @@ try {
   R.runs.whole = await runWhole(page);
   R.runs.tracked = await runTracked(page);
   R.runs.trackedFast = await runTrackedFast(page);
+  R.runs.lasso = await runLasso(page);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
 } finally {

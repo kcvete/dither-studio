@@ -10,3 +10,4 @@ node_modules/
 !docs/*.mp4
 !bench/*.mp4
 bench/_res/
+.claude/

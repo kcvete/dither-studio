@@ -40,14 +40,28 @@ Two choices:
   follows them forward *and* backward through the clip, so a click on a middle
   frame still fills the whole thing.
 
-  There is deliberately no lasso here: the video tracker consumes points and boxes
-  and re-derives the outline itself on every frame.
+  **Prompt tool** — *point / box*, *lasso* or *polygon*. Clicks and a box are the
+  fast path and the one the tracker likes best: it re-derives the outline itself
+  on every frame. When that is not enough, draw the subject instead — freehand
+  with the lasso, corner by corner with the polygon, shift to subtract a shape.
+  The drawing is rasterised to a binary mask at your clip's own resolution and
+  sent as a **mask prompt**.
 
-  **Tracking quality** — *fast (512) / balanced (768) / best (1024)*, with the
-  measured fps on each chip — is the square EdgeTAM resizes every frame to before
-  it looks at it. Your clip keeps its own resolution either way; only the
-  tracker's internal view changes, and with it how fine an outline it can draw.
-  See *Tracking performance* below for what that actually costs.
+  A subject uses one or the other, never both: EdgeTAM's `add_new_mask` drops the
+  frame's point inputs and `add_new_points_or_box` drops its mask, so a subject
+  with a drawn shape ignores its clicks. The chip says which it has.
+
+  **Preview this frame** runs only the first-frame prediction — no propagation —
+  and paints the mask the tracker would produce over your prompt, in about
+  **0.15 s**. It answers "is this click enough?" before you spend the whole clip
+  on it; the lasso is what you reach for when the answer is no.
+
+  **Tracking quality** — *fast · prototyping (512) / balanced · default (768) /
+  best · production (1024)*, with the measured fps on each chip — is the square
+  EdgeTAM resizes every frame to before it looks at it. Your clip keeps its own
+  resolution either way; only the tracker's internal view changes, and with it
+  how fine an outline it can draw. See *Tracking performance* below for what
+  that actually costs.
 
 ### 3 · Look
 Seven algorithms, each labelled with how it behaves on video:
@@ -121,7 +135,9 @@ API:
 POST /api/upload                    mp4/mov -> jobs/<id>/frames/%04d.jpg (720p, 30fps)
 GET  /api/jobs/<id>/meta
 GET  /api/jobs/<id>/frame/<n>       jpeg
-POST /api/jobs/<id>/track           {frame_idx, image_size, objects:[{id, points, box}]}
+POST /api/jobs/<id>/track           {frame_idx, image_size, objects:[{id, points, box, mask}]}
+POST /api/jobs/<id>/preview         same body -> soft masks for that one frame,
+                                    no propagation (~0.15 s)
 GET  /api/jobs/<id>/status          {state, done_frames, fps, backend, image_size, render:{…}}
 GET  /api/jobs/<id>/mask/<obj>/<n>  png (soft mask)
 POST /api/jobs/<id>/render          {mode, algo, matrix, palette, subjects:[…], …}
@@ -153,9 +169,11 @@ pixel differences that error diffusion then amplified:
 ## Verification
 
 `verify.mjs` drives a real headless browser against a real server, a real EdgeTAM
-run and real ffmpeg. No mocks. It uploads files, drags boxes and clicks points on
-the canvas, switches every algorithm and every tracking quality, samples the preview
-canvas' pixels, exports, and `ffprobe`s the result.
+run and real ffmpeg. No mocks. Five flows: a still through every algorithm, a
+whole-frame clip, two tracked subjects, one subject at a non-default tracking
+quality, and a polygon mask prompt with a frame preview. It uploads files, drags
+boxes, clicks points, traces a 27-point outline on the canvas, switches every
+algorithm, samples the preview canvas' pixels, exports, and `ffprobe`s the result.
 
 ```bash
 ./run.sh &
@@ -173,11 +191,13 @@ Latest run (M4 Pro, 24 GB, macOS 26.1, torch 2.13 / MPS + CoreML), 150-frame
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
 | still: palettes | Game Boy → 4 colours, from-image → 4, pixel-scale 4× → 2 |
 | still: PNG export | 1280×720, 494 KB, downloaded and probed |
-| clip whole-frame | Bayer 8×8 + Game Boy, preview 57.8 fps, render 150 frames in 10.4 s |
-| clip tracked, 2 subjects, best quality | 150/150 frames in 26.9 s (**5.6 fps**) on the CoreML backend |
-| clip tracked, 1 subject, fast quality | 150/150 frames in 11.1 s (**13.6 fps**), tracker at 512 px, masks still 1280×720 |
-| tracked → dots | preview 42.4 fps · 3991 dots, render 3.8 s, ffprobe 150 frames |
-| tracked → Atkinson, 3 palettes | 12 distinct colours, render 12.2 s, ffprobe 150 frames |
+| clip whole-frame | Bayer 8×8 + Game Boy, preview 58.8 fps, render 150 frames in 10.3 s |
+| clip tracked, 2 subjects, default quality | 150/150 frames in 15.6 s (**9.6 fps**) on the CoreML backend at 768 px |
+| clip tracked, 1 subject, fast quality | 150/150 frames in 9.9 s (**15.2 fps**), tracker at 512 px, masks still 1280×720 |
+| frame preview | box prompt **0.13 s**, 27-point polygon **0.11 s**, mask painted on the prompt canvas |
+| clip tracked from a polygon alone | 150/150 frames in 10.0 s, mask-prompt vs box-prompt IoU **0.978 mean / 0.928 worst** over 15 sampled frames |
+| tracked → dots | preview 43.1 fps · 3989 dots, render 3.8 s, ffprobe 150 frames |
+| tracked → Atkinson, 3 palettes | 12 distinct colours, render 12.3 s, ffprobe 150 frames |
 | preview vs exported MP4 | **97.8 %** of pixels within 30 RGB units |
 | console / page errors | **0 / 0** |
 
@@ -293,9 +313,9 @@ resolution whatever you pick.
 
 | tracking quality | square | fps (CoreML) | fps (torch) | IoU vs 1024 fp32 | worst frame |
 |---|---|---|---|---|---|
-| best **(default)** | 1024 | 13.9 | 9.4 | 0.9968 | 0.958 |
-| balanced | 768 | 20.9 | 15.4 | 0.9668 | 0.936 |
-| fast | 512 | 27.0 | 27.1 | 0.9395 | 0.894 |
+| **best · production** | 1024 | 13.9 | 9.4 | 0.9968 | 0.958 |
+| **balanced · default** | 768 | 20.9 | 15.4 | 0.9668 | 0.936 |
+| **fast · prototyping** | 512 | 27.0 | 27.1 | 0.9395 | 0.894 |
 
 (One interleaved session, three rounds, so the 1024 row reads a little slower
 than the backend table above — same code, hotter machine.)
@@ -319,8 +339,13 @@ palette, and writes `bench/res_compare.mp4` (three-up) and
   area is 1.45 % / 1.41 % / 1.48 % at 1024 / 768 / 512. Lower resolution costs
   outline accuracy, not temporal stability.
 
-So the default stays **best (1024)**. 768 is the right pick for a long clip or a
-subject that never gets tangled, and it is nearly 21 fps.
+**The default is balanced (768)** — 20.9 fps, and on everything except a frame
+where limbs touch it is the same picture. Drop to **fast (512)** while you are
+still choosing an algorithm and a palette; go to **best (1024)** for the render
+you keep, where the extra 7 seconds on a 5-second clip buys back the notches
+between limbs. That is a judgement about a dot render, not about masks: by IoU
+alone 768 fails the ≥ 0.98 bar the backends are held to (0.967), which is exactly
+why the setting exists rather than a silently lowered default.
 
 ### What did not work
 
@@ -351,6 +376,10 @@ subject that never gets tangled, and it is nearly 21 fps.
   coremltools still tracks. `DV_DEVICE=cpu` works, far slower. No CUDA extension.
 * **The C library is required for error diffusion and Riemersma.** `setup.sh` builds
   it. The pure-Python fallback is ~500× slower and Riemersma has no fallback at all.
+* **A drawn shape and clicks are exclusive.** Per frame and object EdgeTAM takes
+  a mask prompt or points+box, never both — that is upstream's design, not a
+  shortcut here. Draw the shape *or* click, and use **preview this frame** to
+  find out which you need.
 * **Error diffusion and Riemersma flicker on video.** That is inherent, not a bug —
   the UI marks them. Use dots / blue noise / Bayer / halftone for stable motion.
 * **Short clips.** 720p / 30 fps, 300 frames / 10 s by default.

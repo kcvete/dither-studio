@@ -44,9 +44,18 @@
             <button class="btn" id="bAdd">+ add subject</button>
             <button class="btn" id="bClr">clear</button>
           </div>
-          <div class="note">Click = keep this &middot; shift-click = not this &middot; drag = box.
-            No lasso: the tracker takes points and boxes and re-derives the outline
-            on every frame itself.</div>
+          <div class="lbl"><span>Prompt tool</span><span id="vTool"></span></div>
+          <div class="chips seg" id="ptool">
+            <button class="chip" data-tool="point" aria-pressed="true">point / box</button>
+            <button class="chip" data-tool="lasso" aria-pressed="false">lasso</button>
+            <button class="chip" data-tool="poly" aria-pressed="false">polygon</button>
+          </div>
+          <div class="note" id="toolnote"></div>
+          <div class="row">
+            <button class="btn" id="bPrev">preview this frame</button>
+            <button class="btn" id="bUndo">undo shape</button>
+          </div>
+          <div id="pvinfo" class="stat" hidden></div>
           <div class="lbl"><span>Tracking quality</span><span id="vTQ"></span></div>
           <div class="chips seg" id="tq"></div>
           <div class="note" id="tqnote">Your clip keeps its own resolution &mdash; this
@@ -175,7 +184,7 @@
 
     <div id="pwrap" hidden>
       <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas></div>
-      <div class="hint">click what you want &middot; shift-click what you don't &middot; drag a box</div>
+      <div class="hint" id="phint">click what you want &middot; shift-click what you don't &middot; drag a box</div>
     </div>
 
     <div id="vwrap" hidden>

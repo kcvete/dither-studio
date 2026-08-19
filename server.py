@@ -5,7 +5,9 @@
 
 Everything lives under jobs/<job-id>/. Nothing leaves the machine.
 """
+import base64
 import contextlib
+import io
 import json
 import os
 import shutil
@@ -54,13 +56,14 @@ BACKENDS = ("coreml", "torch-compiled", "torch-half", "torch", "torch-fp32")
 # touched -- masks come back at the source resolution either way. fps is the
 # median of the CoreML backend on the reference clip, 1 subject.
 TRACK_SIZES = [
-    {"size": 512,  "id": "fast",     "label": "fast",     "fps": 27.0},
-    {"size": 768,  "id": "balanced", "label": "balanced", "fps": 20.9},
-    {"size": 1024, "id": "best",     "label": "best",     "fps": 13.9},
+    {"size": 512,  "id": "fast",     "label": "fast · prototyping", "fps": 27.0},
+    {"size": 768,  "id": "balanced", "label": "balanced · default", "fps": 20.9},
+    {"size": 1024, "id": "best",     "label": "best · production", "fps": 13.9},
 ]
-# 1024 by default: 768 is indistinguishable on a typical frame but not on the
-# hard ones -- see the README and bench/res_compare_sheet.png.
-DEFAULT_TRACK_SIZE = 1024
+# 768 by default (user decision 2026-08-19): visually indistinguishable from
+# 1024 in the dithered result at 1.5x the speed -- see bench/res_compare_sheet.png.
+# 512 = quick prototyping, 1024 = production renders.
+DEFAULT_TRACK_SIZE = 768
 BACKEND = os.environ.get("DV_BACKEND", "").strip().lower()
 if not BACKEND:
     BACKEND = "torch-fp32" if os.environ.get("DV_FP32", "0") == "1" else "auto"
@@ -239,6 +242,46 @@ def _sync():
         torch.mps.synchronize()
 
 
+def _decode_mask(data_url, w, h):
+    """data: URL (or bare base64) of a PNG -> HxW bool numpy array."""
+    b64 = data_url.split(",", 1)[-1]
+    try:
+        im = Image.open(io.BytesIO(base64.b64decode(b64)))
+    except Exception as e:                                   # noqa: BLE001
+        raise HTTPException(400, "bad mask image: %s" % e)
+    if im.size != (w, h):
+        im = im.resize((w, h), Image.NEAREST)
+    a = np.array(im.convert("L"))
+    if not a.any():
+        raise HTTPException(400, "mask selection is empty")
+    return a > 127
+
+
+def _apply_prompts(predictor, state, frame_idx, objects, w, h):
+    """Feed one frame's prompts to the predictor. Returns its last output."""
+    out = None
+    for o in objects:
+        if o.mask:
+            out = predictor.add_new_mask(
+                state, frame_idx=frame_idx, obj_id=int(o.id),
+                mask=_decode_mask(o.mask, w, h))
+            continue
+        pts = np.array([[p[0], p[1]] for p in o.points], np.float32) \
+            if o.points else None
+        lbl = np.array([int(p[2]) for p in o.points], np.int32) if o.points else None
+        box = np.array(o.box, np.float32) if o.box else None
+        out = predictor.add_new_points_or_box(
+            state, frame_idx=frame_idx, obj_id=int(o.id),
+            points=pts, labels=lbl, box=box)
+    return out
+
+
+def _soft_png(logits):
+    """model logits -> the same soft 0-255 L PNG the tracker writes to disk"""
+    soft = 1.0 / (1.0 + np.exp(-logits))
+    return Image.fromarray((soft * 255.0).round().clip(0, 255).astype(np.uint8), "L")
+
+
 # -------------------------------------------------------------------- API
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -339,6 +382,12 @@ class TrackObject(BaseModel):
     id: int
     points: list[list[float]] = []      # [[x, y, label], ...]  label 1=fg 0=bg
     box: list[float] | None = None      # [x0, y0, x1, y1]
+    # A lasso/polygon selection, rasterised client-side to a binary PNG at the
+    # clip's own resolution and sent as a data URL. EdgeTAM takes a mask prompt
+    # OR points+box for a given (frame, object) -- `add_new_mask` drops the
+    # frame's point inputs and `add_new_points_or_box` drops its mask input --
+    # so when this is present it is what the tracker sees.
+    mask: str | None = None
 
 
 class TrackReq(BaseModel):
@@ -356,7 +405,7 @@ def track(jid: str, req: TrackReq):
     if len(req.objects) > MAX_OBJECTS:
         raise HTTPException(400, "at most %d objects" % MAX_OBJECTS)
     for o in req.objects:
-        if not o.points and not o.box:
+        if not o.points and not o.box and not o.mask:
             raise HTTPException(400, "object %s has no prompt" % o.id)
     if not (0 <= req.frame_idx < meta["n_frames"]):
         raise HTTPException(400, "frame_idx out of range")
@@ -373,7 +422,10 @@ def track(jid: str, req: TrackReq):
                   objects=[str(o.id) for o in req.objects])
         _jobs[jid] = st
 
-    prompts = [o.model_dump() for o in req.objects]
+    # the rasterised mask is big and reproducible from the paths the client
+    # keeps, so record that it was used rather than storing it in meta.json
+    prompts = [{**o.model_dump(exclude={"mask"}), "mask": bool(o.mask)}
+               for o in req.objects]
     write_meta(jid, {**meta, "prompts": {"frame_idx": req.frame_idx,
                                         "image_size": req.image_size,
                                         "objects": prompts}})
@@ -410,15 +462,9 @@ def _track_worker(jid, d, req):
                 n_frames = state["num_frames"]
                 _set(jid, state="tracking", n_frames=n_frames)
 
-                for o in req.objects:
-                    pts = np.array([[p[0], p[1]] for p in o.points], np.float32) \
-                        if o.points else None
-                    lbl = np.array([int(p[2]) for p in o.points], np.int32) \
-                        if o.points else None
-                    box = np.array(o.box, np.float32) if o.box else None
-                    predictor.add_new_points_or_box(
-                        state, frame_idx=req.frame_idx, obj_id=int(o.id),
-                        points=pts, labels=lbl, box=box)
+                meta = read_meta(jid)
+                _apply_prompts(predictor, state, req.frame_idx, req.objects,
+                               meta["w"], meta["h"])
                 _sync()
 
                 seen = set()
@@ -458,6 +504,71 @@ def _track_worker(jid, d, req):
         import traceback
         traceback.print_exc()
         _set(jid, state="error", error="%s: %s" % (type(e).__name__, e))
+
+
+@app.post("/api/jobs/{jid}/preview")
+def preview(jid: str, req: TrackReq):
+    """Run the first-frame prediction only -- no propagation.
+
+    This is the "is my prompt good enough?" button. It builds a one-frame
+    inference state over a symlink to the prompt frame, so it costs an image
+    encode and the SAM heads rather than decoding the whole clip, and returns
+    the same soft masks the tracker would write for that frame.
+    """
+    import torch
+    d = job_dir(jid)
+    meta = read_meta(jid)
+    if not req.objects:
+        raise HTTPException(400, "no objects")
+    if len(req.objects) > MAX_OBJECTS:
+        raise HTTPException(400, "at most %d objects" % MAX_OBJECTS)
+    for o in req.objects:
+        if not o.points and not o.box and not o.mask:
+            raise HTTPException(400, "object %s has no prompt" % o.id)
+    if not (0 <= req.frame_idx < meta["n_frames"]):
+        raise HTTPException(400, "frame_idx out of range")
+    if req.image_size not in [t["size"] for t in TRACK_SIZES]:
+        raise HTTPException(400, "bad image_size")
+
+    src = os.path.join(d, "frames", "%04d.jpg" % req.frame_idx)
+    one = os.path.join(d, "preview", "%04d" % req.frame_idx)
+    os.makedirs(one, exist_ok=True)
+    link = os.path.join(one, "0000.jpg")
+    if not os.path.exists(link):
+        os.symlink(os.path.relpath(src, one), link)
+
+    t0 = time.perf_counter()
+    if not _gpu_lock.acquire(timeout=0.05 if _predictors else 120):
+        raise HTTPException(409, "busy tracking")
+    try:
+        predictor, backend = get_predictor(req.image_size)
+        cast = (contextlib.nullcontext() if backend == "torch-fp32" or DEVICE != "mps"
+                else torch.autocast(DEVICE, dtype=torch.float16))
+        with torch.inference_mode(), cast:
+            state = predictor.init_state(one, offload_video_to_cpu=True)
+            out = _apply_prompts(predictor, state, 0, req.objects,
+                                 meta["w"], meta["h"])
+            _, obj_ids, masks = out
+            arr = masks.float().cpu().numpy()
+            del state
+    finally:
+        _gpu_lock.release()
+    if DEVICE == "mps":
+        torch.mps.empty_cache()
+
+    objs = []
+    for k, oid in enumerate(obj_ids):
+        buf = io.BytesIO()
+        _soft_png(arr[k, 0]).save(buf, format="PNG")
+        objs.append({"id": str(oid),
+                     "area": int((arr[k, 0] > 0).sum()),
+                     "mask": "data:image/png;base64,"
+                             + base64.b64encode(buf.getvalue()).decode()})
+    el = time.perf_counter() - t0
+    print("[preview] %s: frame %d, %d obj, %.2fs (%s @ %d px)"
+          % (jid, req.frame_idx, len(objs), el, backend, req.image_size), flush=True)
+    return {"job": jid, "frame_idx": req.frame_idx, "elapsed_s": round(el, 3),
+            "backend": backend, "image_size": req.image_size, "objects": objs}
 
 
 class RenderReq(BaseModel):
