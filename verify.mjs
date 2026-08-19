@@ -7,6 +7,7 @@
  *   A  still   -> every algorithm -> client-side PNG download
  *   B  clip    -> whole-frame dither -> MP4
  *   C  clip    -> two tracked subjects -> dots + a pixel mode -> MP4
+ *   D  clip    -> one tracked subject at "fast" tracking quality (512 px)
  * Writes screenshots to docs/ and a JSON report to docs/verify-report.json.
  */
 import { chromium } from 'playwright';
@@ -215,6 +216,12 @@ async function runTracked(page) {
   await page.click('#bAdd');
   await prompt(page, SUBJECT_B);
   r.subjectChips = await page.$$eval('#subs .chip', (n) => n.map((e) => e.textContent));
+
+  // tracking quality: the chips must exist, carry measured fps, and default to best
+  r.qualityChips = await page.$$eval('#tq .chip', (n) => n.map((e) => ({
+    size: +e.dataset.size, text: e.textContent.trim(),
+    on: e.getAttribute('aria-pressed') === 'true' })));
+  r.qualityDefault = (r.qualityChips.find((c) => c.on) || {}).size;
   await page.screenshot({ path: path.join(DOCS, 'c-prompts.png') });
 
   const t0 = Date.now();
@@ -223,6 +230,8 @@ async function runTracked(page) {
   r.trackWallSeconds = +((Date.now() - t0) / 1000).toFixed(1);
   if (/failed/.test(r.trackInfo)) throw new Error(r.trackInfo);
   r.status = await (await page.request.get(`${BASE}/api/jobs/${r.job}/status`)).json();
+  r.backend = r.status.backend;
+  r.trackImageSize = r.status.image_size;
 
   // --- dots look
   await setMode(page, 'dots');
@@ -288,6 +297,49 @@ async function runTracked(page) {
   return r;
 }
 
+/* ------------------------- D: one subject at a non-default tracking quality */
+async function runTrackedFast(page) {
+  const r = {};
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  await page.setInputFiles('#file', CLIP);
+  await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+  r.job = await page.evaluate(() => window.DV.job);
+
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(700);
+  await prompt(page, SUBJECT_A);
+  await page.click('#tq .chip[data-size="512"]');
+  r.selected = await page.evaluate(() => window.DV.trackSize);
+
+  const t0 = Date.now();
+  await page.click('#bTrack');
+  r.trackInfo = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+  r.trackWallSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+  if (/failed/.test(r.trackInfo)) throw new Error(r.trackInfo);
+  const st = await (await page.request.get(`${BASE}/api/jobs/${r.job}/status`)).json();
+  r.imageSize = st.image_size;
+  r.backend = st.backend;
+  r.doneFrames = st.done_frames;
+  r.fps = st.fps;
+  if (st.image_size !== 512) throw new Error('server tracked at ' + st.image_size + ', wanted 512');
+
+  // the masks must still come back at the clip's own resolution
+  const meta = await (await page.request.get(`${BASE}/api/jobs/${r.job}/meta`)).json();
+  const png = await (await page.request.get(`${BASE}/api/jobs/${r.job}/mask/1/10`)).body();
+  r.maskBytes = png.length;
+  r.maskSize = [png.readUInt32BE(16), png.readUInt32BE(20)];   // IHDR w,h
+  r.clipSize = [meta.w, meta.h];
+  if (r.maskSize[0] !== meta.w || r.maskSize[1] !== meta.h) {
+    throw new Error('mask ' + r.maskSize + ' != clip ' + r.clipSize);
+  }
+  await setMode(page, 'dots');
+  await page.evaluate(() => window.DV_draw(20)); await sleep(600);
+  r.dotsPreview = await census(page);
+  await page.screenshot({ path: path.join(DOCS, 'd-fast-quality.png') });
+  return r;
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -305,6 +357,7 @@ try {
   R.runs.still = await runStill(page);
   R.runs.whole = await runWhole(page);
   R.runs.tracked = await runTracked(page);
+  R.runs.trackedFast = await runTrackedFast(page);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
 } finally {

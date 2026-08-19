@@ -47,6 +47,11 @@
           <div class="note">Click = keep this &middot; shift-click = not this &middot; drag = box.
             No lasso: the tracker takes points and boxes and re-derives the outline
             on every frame itself.</div>
+          <div class="lbl"><span>Tracking quality</span><span id="vTQ"></span></div>
+          <div class="chips seg" id="tq"></div>
+          <div class="note" id="tqnote">Your clip keeps its own resolution &mdash; this
+            only changes the square the tracker looks at, and so how fine an outline
+            it can draw.</div>
           <div class="row"><button class="btn go" id="bTrack">Track</button></div>
           <div id="prog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
           <div id="tinfo" class="stat" hidden></div>

@@ -1,24 +1,24 @@
 {
  "base": "http://127.0.0.1:8767",
  "clip": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/clip5s.mp4",
- "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/still.jpg",
+ "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/first_frame.jpg",
  "consoleErrors": [],
  "pageErrors": [],
  "requestFailures": [
   {
-   "url": "http://127.0.0.1:8767/api/jobs/a69583dc0d69/out.mp4?t=1787156106870",
+   "url": "http://127.0.0.1:8767/api/jobs/babdc1744da3/out.mp4?t=1787170648703",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8767/api/jobs/e53c424faa6f/out.mp4?t=1787156166815",
+   "url": "http://127.0.0.1:8767/api/jobs/ca9fab99ffdd/out.mp4?t=1787170686393",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8767/api/jobs/e53c424faa6f/out.mp4?t=1787156185058",
+   "url": "http://127.0.0.1:8767/api/jobs/ca9fab99ffdd/out.mp4?t=1787170704715",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8767/api/jobs/e53c424faa6f/out.mp4?t=1787156185058",
+   "url": "http://127.0.0.1:8767/api/jobs/ca9fab99ffdd/out.mp4?t=1787170704715",
    "why": "net::ERR_ABORTED"
   }
  ],
@@ -184,7 +184,7 @@
   },
   "whole": {
    "source": "150 frames · 1280×720 · 30 fps",
-   "job": "a69583dc0d69",
+   "job": "babdc1744da3",
    "preview": {
     "w": 1280,
     "h": 720,
@@ -208,7 +208,7 @@
      ]
     ]
    },
-   "previewFps": "58.5 fps",
+   "previewFps": "57.8 fps",
    "previewFrame20": {
     "w": 1280,
     "h": 720,
@@ -232,7 +232,7 @@
      ]
     ]
    },
-   "render": "rendered 150 frames in 10.5 s (14.2 fps)",
+   "render": "rendered 150 frames in 10.4 s (14.5 fps)",
    "ffprobe": {
     "width": 1280,
     "height": 720,
@@ -241,22 +241,42 @@
    }
   },
   "tracked": {
-   "job": "e53c424faa6f",
+   "job": "ca9fab99ffdd",
    "subjectChips": [
     "#1 · 1pt+box✕",
     "#2 · 1pt+box✕"
    ],
-   "trackInfo": "tracked 150 frames in 48.2 s (3.1 fps) on MPS fp16 · 2 subjects",
-   "trackWallSeconds": 49.4,
+   "qualityChips": [
+    {
+     "size": 512,
+     "text": "fast · 512 px 27 fps",
+     "on": false
+    },
+    {
+     "size": 768,
+     "text": "balanced · 768 px 21 fps",
+     "on": false
+    },
+    {
+     "size": 1024,
+     "text": "best · 1024 px 14 fps",
+     "on": true
+    }
+   ],
+   "qualityDefault": 1024,
+   "trackInfo": "tracked 150 frames in 26.9 s (5.6 fps) on MPS coreml · 2 subjects",
+   "trackWallSeconds": 27.2,
    "status": {
     "state": "done",
     "done_frames": 150,
     "n_frames": 150,
-    "elapsed_s": 48.19,
-    "fps": 3.11,
+    "elapsed_s": 26.86,
+    "fps": 5.58,
     "error": null,
     "device": "mps",
+    "backend": "coreml",
     "precision": "fp16",
+    "image_size": 1024,
     "objects": [
      "1",
      "2"
@@ -270,6 +290,8 @@
      "error": null
     }
    },
+   "backend": "coreml",
+   "trackImageSize": 1024,
    "dotsPreview": {
     "w": 1280,
     "h": 720,
@@ -277,20 +299,20 @@
     "top": [
      [
       "#c9d4c5",
-      888009
+      887990
      ],
      [
       "#2f4f4a",
-      27059
+      27043
      ],
      [
       "#b0413e",
-      6532
+      6567
      ]
     ]
    },
-   "dotsFps": "37.9 fps · 3989 dots",
-   "dotsRender": "rendered 150 frames in 3.9 s (38.1 fps)",
+   "dotsFps": "42.4 fps · 3991 dots",
+   "dotsRender": "rendered 150 frames in 3.8 s (39.0 fps)",
    "dotsProbe": {
     "width": 1280,
     "height": 720,
@@ -309,11 +331,11 @@
     "top": [
      [
       "#919191",
-      374513
+      374520
      ],
      [
       "#b6b6b6",
-      160287
+      160299
      ],
      [
       "#484848",
@@ -321,7 +343,7 @@
      ],
      [
       "#6d6d6d",
-      106127
+      106129
      ],
      [
       "#242424",
@@ -329,15 +351,15 @@
      ],
      [
       "#001a05",
-      47024
+      47023
      ],
      [
       "#dadada",
-      17902
+      17916
      ],
      [
       "#2dff6a",
-      16261
+      16209
      ]
     ]
    },
@@ -350,8 +372,42 @@
    },
    "previewVsExport": {
     "pixels": 921600,
-    "within30": 900802,
-    "pct": 97.74
+    "within30": 900924,
+    "pct": 97.76
+   }
+  },
+  "trackedFast": {
+   "job": "088523ad3de7",
+   "selected": 512,
+   "trackInfo": "tracked 150 frames in 11.1 s (13.6 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 11.6,
+   "imageSize": 512,
+   "backend": "coreml",
+   "doneFrames": 150,
+   "fps": 13.56,
+   "maskBytes": 7260,
+   "maskSize": [
+    1280,
+    720
+   ],
+   "clipSize": [
+    1280,
+    720
+   ],
+   "dotsPreview": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 2,
+    "top": [
+     [
+      "#c9d4c5",
+      914669
+     ],
+     [
+      "#b0413e",
+      6931
+     ]
+    ]
    }
   }
  }

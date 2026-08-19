@@ -32,6 +32,13 @@ if ! "$VENV/bin/python" -c "import sam2, fastapi, timm, cv2" >/dev/null 2>&1; th
   "$VENV/bin/pip" install --quiet timm fastapi "uvicorn[standard]" python-multipart pillow numpy opencv-python
 fi
 
+# coremltools drives the fastest tracking backend. It is optional: if the wheel
+# or the export below fails, server.py falls back to the torch backends.
+if ! "$VENV/bin/python" -c "import coremltools" >/dev/null 2>&1; then
+  echo "[setup] installing coremltools (optional, powers DV_BACKEND=coreml)"
+  "$VENV/bin/pip" install --quiet coremltools || echo "[setup] coremltools install failed - torch backends still work"
+fi
+
 # EdgeTAM's spatial perceiver does `.expand(B,-1,-1).view(...)`, which throws
 # "view size is not compatible with input tensor's size and stride" as soon as
 # more than one object is tracked (B > 1). reshape() is the documented fix.
@@ -60,6 +67,21 @@ if [ ! -f "$CKPT" ]; then
   else
     echo "[setup] downloading checkpoint"
     curl -fsSL -o "$CKPT" https://huggingface.co/spaces/facebook/EdgeTAM/resolve/main/checkpoints/edgetam.pt
+  fi
+fi
+
+# The three EdgeTAM stages that dominate tracking time, converted to CoreML:
+# image encoder + memory attention + memory encoder, one static-shape graph per
+# object count. ~15 s to build, ~130 MB on disk, and worth 8.3 -> 15.0 fps.
+# Cached: rebuilt only if the checkpoint or the exporter is newer than it.
+CML="$ENVD/coreml/manifest.json"
+if "$VENV/bin/python" -c "import coremltools" >/dev/null 2>&1; then
+  if [ ! -f "$CML" ] || [ "$CKPT" -nt "$CML" ] || [ "$HERE/coreml/export.py" -nt "$CML" ] \
+     || [ "$HERE/coreml/wrappers.py" -nt "$CML" ]; then
+    echo "[setup] exporting CoreML graphs (once, ~15 s)"
+    "$VENV/bin/python" "$HERE/coreml/export.py" --batch 1,2,3 >/dev/null 2>&1 \
+      && echo "[setup] CoreML export ok" \
+      || echo "[setup] CoreML export failed - falling back to the torch backends"
   fi
 fi
 

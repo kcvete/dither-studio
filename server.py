@@ -22,6 +22,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 import dither as DI
+import edgetam_util as EU
 import render as R
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,11 +31,41 @@ STATIC = os.path.join(HERE, "static")
 CKPT = os.path.join(HERE, "env", "EdgeTAM", "checkpoints", "edgetam.pt")
 CFG = "configs/edgetam.yaml"
 DEVICE = os.environ.get("DV_DEVICE", "mps")
-# fp16 autocast on MPS: measured 1.19x faster tracking (7.42 -> 8.80 fps, A/B in one
-# process, order alternated) with global mask IoU 0.9985 vs fp32 over 150 frames,
-# worst frame 0.9609. Set DV_FP32=1 to turn it off.
-FP16 = DEVICE == "mps" and os.environ.get("DV_FP32", "0") != "1"
+COREML_DIR = os.path.join(HERE, "env", "coreml")
 MAX_OBJECTS = 6
+
+# Tracking backends, fastest first. `DV_BACKEND` picks one; the default walks
+# down the list until one builds, so a machine without the CoreML export (or
+# without coremltools) still runs. Measured on the reference clip, 1 subject,
+# 150 frames at 1280x720, M4 Pro -- see bench/results.md and the README.
+#
+#   coreml          15.0 fps   image encoder + memory attention + memory encoder
+#                              as CoreML graphs, the rest on MPS. IoU 0.997 vs
+#                              fp32, worst frame 0.958.
+#   torch-compiled  11.6 fps   torch.compile on the image encoder; the first
+#                              track in a process pays ~20 s of inductor time.
+#   torch-half       9.3 fps   model.half() under autocast.
+#   torch            8.3 fps   fp16 autocast on fp32 weights (the old default).
+#   torch-fp32       8.0 fps   no autocast; this is the mask reference.
+BACKENDS = ("coreml", "torch-compiled", "torch-half", "torch", "torch-fp32")
+
+# The tracker resizes every frame to a square before it sees it; that square is
+# the single biggest speed/quality knob in the model. The clip itself is never
+# touched -- masks come back at the source resolution either way. fps is the
+# median of the CoreML backend on the reference clip, 1 subject.
+TRACK_SIZES = [
+    {"size": 512,  "id": "fast",     "label": "fast",     "fps": 27.0},
+    {"size": 768,  "id": "balanced", "label": "balanced", "fps": 20.9},
+    {"size": 1024, "id": "best",     "label": "best",     "fps": 13.9},
+]
+# 1024 by default: 768 is indistinguishable on a typical frame but not on the
+# hard ones -- see the README and bench/res_compare_sheet.png.
+DEFAULT_TRACK_SIZE = 1024
+BACKEND = os.environ.get("DV_BACKEND", "").strip().lower()
+if not BACKEND:
+    BACKEND = "torch-fp32" if os.environ.get("DV_FP32", "0") == "1" else "auto"
+if DEVICE != "mps" and BACKEND in ("auto", "coreml"):
+    BACKEND = "torch-fp32" if DEVICE == "cpu" else BACKEND
 
 os.makedirs(JOBS, exist_ok=True)
 
@@ -43,7 +74,8 @@ app = FastAPI(title="Dither Video")
 _state_lock = threading.Lock()      # guards the in-memory job table
 _gpu_lock = threading.Lock()        # only one EdgeTAM run at a time
 _model_lock = threading.Lock()
-_predictor = None
+_predictors = {}                    # image_size -> predictor
+_backend = None                     # the backend that actually built
 _jobs = {}                          # job_id -> status dict
 
 
@@ -73,7 +105,9 @@ def new_status(n_frames):
     return {
         "state": "idle", "done_frames": 0, "n_frames": n_frames,
         "elapsed_s": 0.0, "fps": 0.0, "error": None, "device": DEVICE,
-        "precision": "fp16" if FP16 else "fp32",
+        "backend": _resolved_backend(),
+        "precision": _precision(_backend or BACKEND),
+        "image_size": DEFAULT_TRACK_SIZE,
         "objects": [],
         "render": {"state": "idle", "done_frames": 0, "n_frames": n_frames,
                    "elapsed_s": 0.0, "fps": 0.0, "error": None},
@@ -127,20 +161,76 @@ def extract_frames(src, frames_dir, max_seconds, fps, max_frames):
 
 
 # ------------------------------------------------------------------- model
-def get_predictor():
-    global _predictor
+def _resolved_backend():
+    """The backend in use, or None while nothing has been built yet and the
+    choice is still 'whichever of BACKENDS comes up first'."""
+    return _backend or (None if BACKEND == "auto" else BACKEND)
+
+
+def _precision(name):
+    """What the UI shows next to the device. Everything but the reference
+    backend runs the model in fp16."""
+    return "fp32" if name == "torch-fp32" else "fp16"
+
+
+def _build(name, image_size):
+    """Build the predictor for one backend. Raises if that backend can't run."""
+    import torch
+    from sam2.build_sam import build_sam2_video_predictor
+    if not os.path.exists(CKPT):
+        raise RuntimeError("checkpoint missing: run ./setup.sh")
+    p = build_sam2_video_predictor(
+        CFG, CKPT, device=torch.device(DEVICE),
+        hydra_overrides_extra=EU.hydra_overrides(image_size))
+    EU.set_image_size(p, image_size)
+    if name in ("torch-half", "torch-compiled", "coreml"):
+        # half weights under autocast: autocast still fixes up the fp32 tensors
+        # the prompt encoder builds for itself, and the weights stop being cast
+        # on every call. Measured 9.3 vs 8.3 fps against plain autocast.
+        p = p.half()
+    if name == "torch-compiled":
+        p.forward_image = torch.compile(p.forward_image, dynamic=False)
+    if name == "coreml":
+        from coreml import accel
+        d = os.path.join(COREML_DIR, str(image_size))
+        if accel.install(p, directory=d) is None:
+            raise RuntimeError("no CoreML export in %s: run ./setup.sh" % d)
+        p._coreml_accel.warm(range(1, MAX_OBJECTS + 1))
+    return p
+
+
+def get_predictor(image_size=DEFAULT_TRACK_SIZE):
+    """Returns (predictor, backend-name) for one tracking resolution.
+
+    One predictor is cached per resolution -- the model is small and the
+    CoreML graphs are per-size, so switching quality in the UI should not
+    re-pay the build."""
+    global _backend
+    image_size = int(image_size)
     with _model_lock:
-        if _predictor is None:
-            import torch
-            from sam2.build_sam import build_sam2_video_predictor
-            if not os.path.exists(CKPT):
-                raise HTTPException(500, "checkpoint missing: run ./setup.sh")
-            t = time.perf_counter()
-            _predictor = build_sam2_video_predictor(
-                CFG, CKPT, device=torch.device(DEVICE))
-            print("[model] EdgeTAM loaded on %s in %.2fs" % (DEVICE, time.perf_counter() - t),
-                  flush=True)
-        return _predictor
+        if image_size not in _predictors:
+            order = list(BACKENDS) if BACKEND == "auto" else \
+                [BACKEND] + [b for b in BACKENDS if b != BACKEND]
+            if _backend is not None:            # stay on one backend per process
+                order = [_backend] + [b for b in order if b != _backend]
+            errors = []
+            for name in order:
+                t = time.perf_counter()
+                try:
+                    _predictors[image_size] = _build(name, image_size)
+                except Exception as e:                      # noqa: BLE001
+                    errors.append("%s: %s: %s" % (name, type(e).__name__, e))
+                    print("[model] backend %r unavailable at %d px (%s)"
+                          % (name, image_size, e), flush=True)
+                    continue
+                _backend = name
+                print("[model] EdgeTAM loaded on %s at %d px, backend %s, in %.2fs"
+                      % (DEVICE, image_size, name, time.perf_counter() - t), flush=True)
+                break
+            else:
+                raise HTTPException(500, "no tracking backend would build: "
+                                    + " | ".join(errors))
+        return _predictors[image_size], _backend
 
 
 def _sync():
@@ -173,7 +263,11 @@ def palettes():
         "defaults": R.DEFAULTS,
         "subject_colors": R.SUBJECT_COLORS,
         "device": DEVICE,
-        "precision": "fp16" if FP16 else "fp32",
+        "backend": _resolved_backend(),
+        "backends": list(BACKENDS),
+        "track_sizes": TRACK_SIZES,
+        "default_track_size": DEFAULT_TRACK_SIZE,
+        "precision": _precision(_backend or BACKEND),
         "max_objects": MAX_OBJECTS,
     }
 
@@ -250,6 +344,7 @@ class TrackObject(BaseModel):
 class TrackReq(BaseModel):
     frame_idx: int = 0
     objects: list[TrackObject]
+    image_size: int = DEFAULT_TRACK_SIZE    # tracker input square, not the clip
 
 
 @app.post("/api/jobs/{jid}/track")
@@ -265,6 +360,9 @@ def track(jid: str, req: TrackReq):
             raise HTTPException(400, "object %s has no prompt" % o.id)
     if not (0 <= req.frame_idx < meta["n_frames"]):
         raise HTTPException(400, "frame_idx out of range")
+    if req.image_size not in [t["size"] for t in TRACK_SIZES]:
+        raise HTTPException(400, "image_size must be one of %s"
+                            % [t["size"] for t in TRACK_SIZES])
 
     with _state_lock:
         st = _jobs.get(jid) or new_status(meta["n_frames"])
@@ -276,9 +374,12 @@ def track(jid: str, req: TrackReq):
         _jobs[jid] = st
 
     prompts = [o.model_dump() for o in req.objects]
-    write_meta(jid, {**meta, "prompts": {"frame_idx": req.frame_idx, "objects": prompts}})
+    write_meta(jid, {**meta, "prompts": {"frame_idx": req.frame_idx,
+                                        "image_size": req.image_size,
+                                        "objects": prompts}})
     threading.Thread(target=_track_worker, args=(jid, d, req), daemon=True).start()
-    return {"job": jid, "state": "loading", "objects": [str(o.id) for o in req.objects]}
+    return {"job": jid, "state": "loading", "image_size": req.image_size,
+            "objects": [str(o.id) for o in req.objects]}
 
 
 def _set(jid, **kw):
@@ -291,15 +392,18 @@ def _track_worker(jid, d, req):
     t0 = time.perf_counter()
     try:
         with _gpu_lock:
-            predictor = get_predictor()
+            predictor, backend = get_predictor(req.image_size)
+            _set(jid, backend=backend, precision=_precision(backend),
+                 image_size=req.image_size)
             frames_dir = os.path.join(d, "frames")
             mroot = os.path.join(d, "masks")
             shutil.rmtree(mroot, ignore_errors=True)
             for o in req.objects:
                 os.makedirs(os.path.join(mroot, str(o.id)), exist_ok=True)
 
-            cast = (torch.autocast("mps", dtype=torch.float16) if FP16
-                    else contextlib.nullcontext())
+            cast = (contextlib.nullcontext() if backend == "torch-fp32"
+                    or DEVICE != "mps"
+                    else torch.autocast(DEVICE, dtype=torch.float16))
             with torch.inference_mode(), cast:
                 state = predictor.init_state(frames_dir, offload_video_to_cpu=True)
                 _sync()
@@ -347,9 +451,9 @@ def _track_worker(jid, d, req):
         el = time.perf_counter() - t0
         _set(jid, state="done", elapsed_s=round(el, 2),
              fps=round(len(seen) / el, 2) if el > 0 else 0.0)
-        print("[track] %s: %d frames, %d obj, %.1fs (%.2f fps, %s)"
+        print("[track] %s: %d frames, %d obj, %.1fs (%.2f fps, %s @ %d px)"
               % (jid, len(seen), len(req.objects), el, len(seen) / max(el, 1e-6),
-                 "fp16" if FP16 else "fp32"), flush=True)
+                 backend, req.image_size), flush=True)
     except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()

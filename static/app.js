@@ -28,7 +28,7 @@ const S = {
   // clip
   job: null, nFrames: 0, W: 0, H: 0, fps: 30,
   scope: 'whole', subjects: [], active: 0, nextId: 1, promptFrame: 0,
-  tracked: false, playing: false, cur: 0,
+  trackSize: 1024, tracked: false, playing: false, cur: 0,
   // look
   P: {
     mode: 'bluenoise', algo: 'floyd-steinberg', matrix: 4, serpentine: false,
@@ -298,6 +298,37 @@ pov.addEventListener('pointerup', (e) => {
   renderSubjects(); drawOverlay();
 });
 
+/* ---- tracking quality: the square the tracker resizes every frame to ----
+ * The clip is untouched; masks come back at the source resolution whatever
+ * this says. Lower = a coarser outline, and a lot more frames per second. */
+function buildTrackSizes() {
+  const wrap = $('#tq');
+  const sizes = S.meta.track_sizes || [{ size: 1024, id: 'best', label: 'best', fps: 0 }];
+  S.trackSize = S.meta.default_track_size || sizes[sizes.length - 1].size;
+  wrap.innerHTML = '';
+  sizes.forEach((t) => {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.dataset.size = t.size;
+    b.setAttribute('aria-pressed', String(t.size === S.trackSize));
+    b.innerHTML = `${t.label} · ${t.size} px`
+      + (t.fps ? ` <em class="fl">${t.fps.toFixed(0)} fps</em>` : '');
+    b.addEventListener('click', () => {
+      S.trackSize = t.size;
+      $$('#tq .chip').forEach((c) => c.setAttribute('aria-pressed',
+        String(+c.dataset.size === S.trackSize)));
+      paintTrackSize();
+    });
+    wrap.appendChild(b);
+  });
+  paintTrackSize();
+}
+
+function paintTrackSize() {
+  const t = (S.meta.track_sizes || []).find((x) => x.size === S.trackSize);
+  $('#vTQ').textContent = t ? `${t.label} · ${t.size} px` : `${S.trackSize} px`;
+}
+
 $('#bTrack').addEventListener('click', track);
 
 async function track() {
@@ -313,6 +344,7 @@ async function track() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         frame_idx: S.promptFrame,
+        image_size: S.trackSize,
         objects: S.subjects.map((s) => ({ id: s.id, points: s.points, box: s.box })),
       }),
     });
@@ -336,7 +368,7 @@ async function pollTrack() {
       prog.hidden = true; S.tracked = true;
       const box = $('#tinfo'); box.hidden = false; box.classList.remove('err');
       box.textContent = `tracked ${st.done_frames} frames in ${st.elapsed_s.toFixed(1)} s `
-        + `(${st.fps.toFixed(1)} fps) on ${st.device.toUpperCase()} ${st.precision || ''} · `
+        + `(${st.fps.toFixed(1)} fps) on ${st.device.toUpperCase()} ${st.backend || st.precision || ''} · `
         + `${S.subjects.length} subject${S.subjects.length > 1 ? 's' : ''}`;
       $('#s2sum').textContent = `${st.done_frames}f · ${st.fps.toFixed(1)} fps`;
       $('#pwrap').hidden = true; $('#vwrap').hidden = false;
@@ -941,7 +973,10 @@ async function exportMP4() {
     S.meta = { palettes: Dither.PALETTES, modes: Dither.MODES, stable: Dither.STABLE,
                kernels: [], subject_colors: ['#b0413e'], device: '?' };
   }
-  $('#dev').textContent = (S.meta.device || '') + (S.meta.precision ? ' ' + S.meta.precision : '');
+  $('#dev').textContent = (S.meta.device || '')
+    + (S.meta.backend && S.meta.backend !== 'auto' ? ' ' + S.meta.backend
+       : S.meta.precision ? ' ' + S.meta.precision : '');
+  buildTrackSizes();
   const sel = $('#sAlgo');
   (S.meta.kernels.length ? S.meta.kernels
     : Object.entries(Dither.KERNELS).map(([id, v]) => ({ id, name: v.name })))
