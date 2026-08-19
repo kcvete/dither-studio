@@ -1,147 +1,358 @@
 {
-  "base": "http://127.0.0.1:8767",
-  "clip": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/clip5s.mp4",
-  "consoleErrors": [],
-  "pageErrors": [],
-  "requestFailures": [
-    {
-      "url": "http://127.0.0.1:8767/api/jobs/98907cd89efa/out.mp4?t=1787153175689",
-      "why": "net::ERR_ABORTED"
-    },
-    {
-      "url": "http://127.0.0.1:8767/api/jobs/67f551b53b2f/out.mp4?t=1787153258337",
-      "why": "net::ERR_ABORTED"
-    }
-  ],
-  "runs": {
-    "single": {
-      "upload": "150 frames · 1280×720 · 30 fps · job 98907cd89efa",
-      "nFrames": 150,
-      "subjectChips": [
-        "subject 1 · 1pt+box"
-      ],
-      "trackInfo": "tracked 150 frames in 32.1 s (4.7 fps) on MPS · 1 subject",
-      "trackWallSeconds": 32.7,
-      "status": {
-        "state": "done",
-        "done_frames": 150,
-        "n_frames": 150,
-        "elapsed_s": 32.11,
-        "fps": 4.67,
-        "device": "mps"
-      },
-      "dots": [
-        "#b0413e"
-      ],
-      "bg": "#c9d4c5",
-      "previewFrame0": {
-        "w": 1280,
-        "h": 720,
-        "hits": [
-          5969
-        ],
-        "bg": 915631,
-        "other": 0
-      },
-      "previewFps": "76.9 fps · 1029 dots",
-      "previewFrame20": {
-        "w": 1280,
-        "h": 720,
-        "hits": [
-          6550
-        ],
-        "bg": 915050,
-        "other": 0
-      },
-      "wipe": {
-        "split": 0.4200000076413341,
-        "leftColumnColours": 285,
-        "rightColumnColours": 1,
-        "leftColumnColoursWhilePlaying": 220,
-        "frameWhilePlaying": 78
-      },
-      "renderInfo": "rendered 150 frames in 2.8 s (53.8 fps)",
-      "renderWallSeconds": 3.6,
-      "downloadHref": "/api/jobs/98907cd89efa/out.mp4?t=1787153175689",
-      "job": "98907cd89efa",
-      "ffprobe": {
-        "width": 1280,
-        "height": 720,
-        "r_frame_rate": "30/1",
-        "nb_read_frames": "150"
-      },
-      "exportedFrame": "/Users/kevincvetezar/dither-video/docs/single-exported-frame20.png",
-      "exportedNearDot": [
-        6036
-      ],
-      "exportedNearBg": 912357
-    },
-    "dual": {
-      "upload": "150 frames · 1280×720 · 30 fps · job 67f551b53b2f",
-      "nFrames": 150,
-      "subjectChips": [
-        "subject 1 · 1pt+box✕",
-        "subject 2 · 1pt+box✕"
-      ],
-      "trackInfo": "tracked 150 frames in 66.9 s (2.2 fps) on MPS · 2 subjects",
-      "trackWallSeconds": 67.4,
-      "status": {
-        "state": "done",
-        "done_frames": 150,
-        "n_frames": 150,
-        "elapsed_s": 66.94,
-        "fps": 2.24,
-        "device": "mps"
-      },
-      "dots": [
-        "#b0413e",
-        "#2f4f4a"
-      ],
-      "bg": "#c9d4c5",
-      "previewFrame0": {
-        "w": 1280,
-        "h": 720,
-        "hits": [
-          5969,
-          40995
-        ],
-        "bg": 874636,
-        "other": 0
-      },
-      "previewFps": "50.5 fps · 1059 dots",
-      "previewFrame20": {
-        "w": 1280,
-        "h": 720,
-        "hits": [
-          6550,
-          27061
-        ],
-        "bg": 887989,
-        "other": 0
-      },
-      "wipe": {
-        "split": 0.4200000076413341,
-        "leftColumnColours": 285,
-        "rightColumnColours": 2,
-        "leftColumnColoursWhilePlaying": 241,
-        "frameWhilePlaying": 79
-      },
-      "renderInfo": "rendered 150 frames in 4.1 s (36.7 fps)",
-      "renderWallSeconds": 4.6,
-      "downloadHref": "/api/jobs/67f551b53b2f/out.mp4?t=1787153258337",
-      "job": "67f551b53b2f",
-      "ffprobe": {
-        "width": 1280,
-        "height": 720,
-        "r_frame_rate": "30/1",
-        "nb_read_frames": "150"
-      },
-      "exportedFrame": "/Users/kevincvetezar/dither-video/docs/dual-exported-frame20.png",
-      "exportedNearDot": [
-        6043,
-        27109
-      ],
-      "exportedNearBg": 885306
-    }
+ "base": "http://127.0.0.1:8767",
+ "clip": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/clip5s.mp4",
+ "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/still.jpg",
+ "consoleErrors": [],
+ "pageErrors": [],
+ "requestFailures": [
+  {
+   "url": "http://127.0.0.1:8767/api/jobs/a69583dc0d69/out.mp4?t=1787156106870",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8767/api/jobs/e53c424faa6f/out.mp4?t=1787156166815",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8767/api/jobs/e53c424faa6f/out.mp4?t=1787156185058",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8767/api/jobs/e53c424faa6f/out.mp4?t=1787156185058",
+   "why": "net::ERR_ABORTED"
   }
+ ],
+ "runs": {
+  "still": {
+   "source": "1280 × 720 · 103 KB · stays in this tab",
+   "modes": {
+    "bluenoise": {
+     "colours": 2,
+     "w": 1280,
+     "h": 720
+    },
+    "ordered": {
+     "colours": 2,
+     "w": 1280,
+     "h": 720
+    },
+    "halftone": {
+     "colours": 2,
+     "w": 1280,
+     "h": 720
+    },
+    "whitenoise": {
+     "colours": 2,
+     "w": 1280,
+     "h": 720
+    },
+    "errordiff": {
+     "colours": 2,
+     "w": 1280,
+     "h": 720
+    },
+    "riemersma": {
+     "colours": 2,
+     "w": 1280,
+     "h": 720
+    }
+   },
+   "kernels": {
+    "floyd-steinberg": {
+     "on": 432092,
+     "h": 294818692
+    },
+    "false-fs": {
+     "on": 432129,
+     "h": 4237185364
+    },
+    "jarvis": {
+     "on": 431807,
+     "h": 2573227072
+    },
+    "stucki": {
+     "on": 431867,
+     "h": 2435430304
+    },
+    "atkinson": {
+     "on": 424032,
+     "h": 2114102612
+    },
+    "burkes": {
+     "on": 431972,
+     "h": 4152255156
+    },
+    "sierra3": {
+     "on": 431828,
+     "h": 3756035744
+    },
+    "sierra2": {
+     "on": 431967,
+     "h": 1867664200
+    },
+    "sierra-lite": {
+     "on": 432132,
+     "h": 1486816932
+    },
+    "fan93": {
+     "on": 432093,
+     "h": 2085584388
+    },
+    "shiau-fan": {
+     "on": 432088,
+     "h": 1365911784
+    },
+    "shiau-fan2": {
+     "on": 432097,
+     "h": 1856323748
+    },
+    "stevenson-arce": {
+     "on": 431633,
+     "h": 2379908968
+    },
+    "simple-2d": {
+     "on": 432211,
+     "h": 527446624
+    }
+   },
+   "kernelsDistinct": 14,
+   "kernelCount": 14,
+   "gameboy": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 4,
+    "top": [
+     [
+      "#306230",
+      512970
+     ],
+     [
+      "#9bbc0f",
+      291913
+     ],
+     [
+      "#0f380f",
+      83896
+     ],
+     [
+      "#8bac0f",
+      32821
+     ]
+    ]
+   },
+   "fromImage": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 4,
+    "top": [
+     [
+      "#7798bb",
+      252967
+     ],
+     [
+      "#6a6a56",
+      233354
+     ],
+     [
+      "#373c32",
+      230341
+     ],
+     [
+      "#a7b1ad",
+      204938
+     ]
+    ]
+   },
+   "pixel4": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 2,
+    "top": [
+     [
+      "#000000",
+      497552
+     ],
+     [
+      "#ffffff",
+      424048
+     ]
+    ]
+   },
+   "export": "1280×720 PNG · 494 KB",
+   "exportedBytes": 505404,
+   "exportedProbe": "1280,720"
+  },
+  "whole": {
+   "source": "150 frames · 1280×720 · 30 fps",
+   "job": "a69583dc0d69",
+   "preview": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 4,
+    "top": [
+     [
+      "#306230",
+      469485
+     ],
+     [
+      "#9bbc0f",
+      186222
+     ],
+     [
+      "#8bac0f",
+      159373
+     ],
+     [
+      "#0f380f",
+      106520
+     ]
+    ]
+   },
+   "previewFps": "58.5 fps",
+   "previewFrame20": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 4,
+    "top": [
+     [
+      "#306230",
+      455649
+     ],
+     [
+      "#9bbc0f",
+      199775
+     ],
+     [
+      "#8bac0f",
+      181548
+     ],
+     [
+      "#0f380f",
+      84628
+     ]
+    ]
+   },
+   "render": "rendered 150 frames in 10.5 s (14.2 fps)",
+   "ffprobe": {
+    "width": 1280,
+    "height": 720,
+    "r_frame_rate": "30/1",
+    "nb_read_frames": "150"
+   }
+  },
+  "tracked": {
+   "job": "e53c424faa6f",
+   "subjectChips": [
+    "#1 · 1pt+box✕",
+    "#2 · 1pt+box✕"
+   ],
+   "trackInfo": "tracked 150 frames in 48.2 s (3.1 fps) on MPS fp16 · 2 subjects",
+   "trackWallSeconds": 49.4,
+   "status": {
+    "state": "done",
+    "done_frames": 150,
+    "n_frames": 150,
+    "elapsed_s": 48.19,
+    "fps": 3.11,
+    "error": null,
+    "device": "mps",
+    "precision": "fp16",
+    "objects": [
+     "1",
+     "2"
+    ],
+    "render": {
+     "state": "idle",
+     "done_frames": 0,
+     "n_frames": 150,
+     "elapsed_s": 0,
+     "fps": 0,
+     "error": null
+    }
+   },
+   "dotsPreview": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 3,
+    "top": [
+     [
+      "#c9d4c5",
+      888009
+     ],
+     [
+      "#2f4f4a",
+      27059
+     ],
+     [
+      "#b0413e",
+      6532
+     ]
+    ]
+   },
+   "dotsFps": "37.9 fps · 3989 dots",
+   "dotsRender": "rendered 150 frames in 3.9 s (38.1 fps)",
+   "dotsProbe": {
+    "width": 1280,
+    "height": 720,
+    "r_frame_rate": "30/1",
+    "nb_read_frames": "150"
+   },
+   "paletteTargets": [
+    "background",
+    "#1",
+    "#2"
+   ],
+   "mixedPreview": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 12,
+    "top": [
+     [
+      "#919191",
+      374513
+     ],
+     [
+      "#b6b6b6",
+      160287
+     ],
+     [
+      "#484848",
+      137495
+     ],
+     [
+      "#6d6d6d",
+      106127
+     ],
+     [
+      "#242424",
+      47482
+     ],
+     [
+      "#001a05",
+      47024
+     ],
+     [
+      "#dadada",
+      17902
+     ],
+     [
+      "#2dff6a",
+      16261
+     ]
+    ]
+   },
+   "mixedRender": "rendered 150 frames in 12.2 s (12.3 fps)",
+   "mixedProbe": {
+    "width": 1280,
+    "height": 720,
+    "r_frame_rate": "30/1",
+    "nb_read_frames": "150"
+   },
+   "previewVsExport": {
+    "pixels": 921600,
+    "within30": 900802,
+    "pct": 97.74
+   }
+  }
+ }
 }

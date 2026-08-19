@@ -63,4 +63,14 @@ if [ ! -f "$CKPT" ]; then
   fi
 fi
 
+# the serial dither modes (error diffusion, Riemersma) run a per-pixel loop that
+# would take minutes per frame in Python; this is that loop in C.
+LIB="$ENVD/libcdither.dylib"
+if [ ! -f "$LIB" ] || [ "$HERE/cdither.c" -nt "$LIB" ]; then
+  echo "[setup] building libcdither"
+  # -ffp-contract=off keeps clang from fusing multiply-add, which would round once
+  # where JavaScript rounds twice and break pixel parity with static/dither.js
+  cc -O3 -ffp-contract=off -shared -fPIC -o "$LIB" "$HERE/cdither.c"
+fi
+
 echo "[setup] ok"

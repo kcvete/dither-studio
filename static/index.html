@@ -1,5 +1,5 @@
 <!doctype html>
-<title>Dither Video</title>
+<title>Dither Studio</title>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230f1f18'/%3E%3Cg fill='%23b0413e'%3E%3Crect x='3' y='3' width='2' height='2'/%3E%3Crect x='7' y='5' width='2' height='2'/%3E%3Crect x='11' y='3' width='2' height='2'/%3E%3Crect x='5' y='9' width='2' height='2'/%3E%3Crect x='9' y='11' width='2' height='2'/%3E%3C/g%3E%3C/svg%3E">
@@ -7,111 +7,188 @@
 
 <div id="app">
   <aside id="panel">
-    <div class="hd"><b>Dither Video</b><span id="dev" class="tag">mps</span></div>
+    <div class="hd"><b>Dither Studio</b><span id="dev" class="tag">mps</span></div>
 
     <!-- ---------------------------------------------------------- step 1 -->
     <section class="step" id="st1" data-open="1">
-      <div class="sh"><i>1</i><span>Source clip</span><em id="s1sum"></em></div>
+      <div class="sh"><i>1</i><span>Source</span><em id="s1sum"></em></div>
       <div class="sb">
-        <div id="drop">drop an mp4 / mov here &middot; or click to pick</div>
-        <input type="file" id="file" accept="video/mp4,video/quicktime,.mp4,.mov" hidden>
-        <div class="lbl"><span>Max length</span><span id="vSec">10 s</span></div>
-        <input type="range" id="sSec" min="1" max="10" step="1" value="10">
-        <div class="note">Extracted at 720p / 30 fps, capped at 300 frames.</div>
+        <div id="drop">
+          <b>drop an image or a clip</b>
+          <span>png · jpg · webp · mp4 · mov &nbsp;·&nbsp; or click, or paste</span>
+        </div>
+        <input type="file" id="file" accept="image/*,video/mp4,video/quicktime,.mp4,.mov" hidden>
+        <div id="vidopts" hidden>
+          <div class="lbl"><span>Max length</span><span id="vSec">10 s</span></div>
+          <input type="range" id="sSec" min="1" max="10" step="1" value="10">
+          <div class="note">Clips are decoded to 720p / 30 fps, capped at 300 frames.</div>
+        </div>
         <div id="upstat" class="stat" hidden></div>
       </div>
     </section>
 
     <!-- ---------------------------------------------------------- step 2 -->
-    <section class="step" id="st2" data-open="0">
-      <div class="sh"><i>2</i><span>Select subjects</span><em id="s2sum"></em></div>
+    <section class="step" id="st2" data-open="0" hidden>
+      <div class="sh"><i>2</i><span>Subjects</span><em id="s2sum"></em></div>
       <div class="sb">
-        <div class="lbl"><span>Prompt frame</span><span id="vPF">0</span></div>
-        <input type="range" id="sPF" min="0" max="0" step="1" value="0">
-        <div class="lbl"><span>Subjects</span><span id="vSubs">1 / 6</span></div>
-        <div class="chips" id="subs"></div>
-        <div class="row">
-          <button class="btn" id="bAdd">+ add subject</button>
-          <button class="btn" id="bClr">clear prompts</button>
+        <div class="chips seg" id="scope">
+          <button class="chip" data-scope="whole" aria-pressed="true">whole clip</button>
+          <button class="chip" data-scope="track" aria-pressed="false">track subjects</button>
         </div>
-        <div class="note">Click = positive point &middot; shift/alt-click = negative &middot;
-          drag = box. Lasso isn't offered here: the video tracker only accepts
-          points and boxes, and it derives the outline itself on every frame.</div>
-        <div class="row"><button class="btn go" id="bTrack">Track</button></div>
-        <div id="prog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
-        <div id="tinfo" class="stat" hidden></div>
+        <div id="trackui" hidden>
+          <div class="lbl"><span>Prompt frame</span><span id="vPF">0</span></div>
+          <input type="range" id="sPF" min="0" max="0" step="1" value="0">
+          <div class="lbl"><span>Subjects</span><span id="vSubs">1 / 6</span></div>
+          <div class="chips" id="subs"></div>
+          <div class="row">
+            <button class="btn" id="bAdd">+ add subject</button>
+            <button class="btn" id="bClr">clear</button>
+          </div>
+          <div class="note">Click = keep this &middot; shift-click = not this &middot; drag = box.
+            No lasso: the tracker takes points and boxes and re-derives the outline
+            on every frame itself.</div>
+          <div class="row"><button class="btn go" id="bTrack">Track</button></div>
+          <div id="prog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
+          <div id="tinfo" class="stat" hidden></div>
+        </div>
+        <div id="wholenote" class="note">Every pixel of every frame gets dithered.
+          Switch to <b>track subjects</b> to dither only what you point at.</div>
       </div>
     </section>
 
     <!-- ---------------------------------------------------------- step 3 -->
-    <section class="step" id="st3" data-open="0">
-      <div class="sh"><i>3</i><span>Style &amp; preview</span><em id="s3sum"></em></div>
+    <section class="step" id="st3" data-open="0" hidden>
+      <div class="sh"><i>3</i><span>Look</span><em id="s3sum"></em></div>
       <div class="sb">
-        <div class="lbl"><span>Palette</span></div>
-        <div class="chips" id="pals"></div>
-        <div class="lbl"><span>Dot colours</span></div>
-        <div class="chips" id="dotcols"></div>
-        <div class="lbl"><span>Mode</span></div>
-        <div class="chips">
-          <button class="chip" data-mode="cutout" aria-pressed="true">cutout</button>
-          <button class="chip" data-mode="overlay" aria-pressed="false">overlay</button>
+
+        <div class="lbl"><span>Algorithm</span></div>
+        <div class="chips" id="modes"></div>
+        <div id="modenote" class="note"></div>
+
+        <div id="edui" hidden>
+          <div class="lbl"><span>Kernel</span></div>
+          <select id="sAlgo"></select>
+          <div class="chips" style="margin-top:7px">
+            <button class="chip" id="tSerp" aria-pressed="false">serpentine</button>
+          </div>
         </div>
-        <div class="lbl"><span>Dots</span><span id="vN">8000</span></div>
-        <input type="range" id="sN" min="500" max="30000" step="500" value="8000">
-        <div class="lbl"><span>Cell</span><span id="vCell">4 px</span></div>
-        <input type="range" id="sCell" min="2" max="12" step="1" value="4">
-        <div class="lbl"><span>Dot size</span><span id="vDot">3 px</span></div>
-        <input type="range" id="sDot" min="1" max="8" step="1" value="3">
-        <div class="lbl"><span>Gamma</span><span id="vGam">1.00</span></div>
-        <input type="range" id="sGam" min="0.4" max="3" step="0.05" value="1">
-        <div class="lbl"><span>Fill cap</span><span id="vFill">0.70</span></div>
-        <input type="range" id="sFill" min="0.1" max="1" step="0.05" value="0.7">
-        <div class="lbl"><span>Stray</span><span id="vStray">0.02</span></div>
-        <input type="range" id="sStray" min="0" max="0.2" step="0.005" value="0.02">
-        <div class="lbl"><span>Halo band</span><span id="vBand">9</span></div>
-        <input type="range" id="sBand" min="0" max="30" step="1" value="9">
-        <div class="chips" style="margin-top:9px">
-          <button class="chip" id="tInv" aria-pressed="false">invert tone</button>
+
+        <div id="mxui" hidden>
+          <div class="lbl"><span>Matrix</span></div>
+          <div class="chips seg" id="matrix">
+            <button class="chip" data-mx="2">2×2</button>
+            <button class="chip" data-mx="4" aria-pressed="true">4×4</button>
+            <button class="chip" data-mx="8">8×8</button>
+            <button class="chip" data-mx="16">16×16</button>
+          </div>
+        </div>
+
+        <div id="dotsui" hidden>
+          <div class="lbl"><span>Dots</span><span id="vN">8000</span></div>
+          <input type="range" id="sN" min="500" max="30000" step="500" value="8000">
+          <div class="lbl"><span>Cell</span><span id="vCell">4 px</span></div>
+          <input type="range" id="sCell" min="2" max="12" step="1" value="4">
+          <div class="lbl"><span>Dot size</span><span id="vDot">3 px</span></div>
+          <input type="range" id="sDot" min="1" max="8" step="1" value="3">
+          <div class="lbl"><span>Fill cap</span><span id="vFill">0.70</span></div>
+          <input type="range" id="sFill" min="0.1" max="1" step="0.05" value="0.7">
+          <div class="lbl"><span>Stray</span><span id="vStray">0.020</span></div>
+          <input type="range" id="sStray" min="0" max="0.2" step="0.005" value="0.02">
+          <div class="lbl"><span>Halo band</span><span id="vBand">9</span></div>
+          <input type="range" id="sBand" min="0" max="30" step="1" value="9">
+        </div>
+
+        <div id="pxui">
+          <div class="lbl"><span>Dither strength</span><span id="vStr">1.00</span></div>
+          <input type="range" id="sStr" min="0" max="2" step="0.05" value="1">
+          <div class="lbl"><span>Pixel size</span><span id="vPx">1×</span></div>
+          <input type="range" id="sPx" min="1" max="12" step="1" value="1">
+        </div>
+
+        <div class="lbl"><span>Tone</span><button class="lnk" id="bTone">reset</button></div>
+        <div class="mini"><span>bright</span><input type="range" id="sBri" min="-0.5" max="0.5" step="0.01" value="0"><b id="vBri">0.00</b></div>
+        <div class="mini"><span>contrast</span><input type="range" id="sCon" min="0.2" max="3" step="0.05" value="1"><b id="vCon">1.00</b></div>
+        <div class="mini"><span>gamma</span><input type="range" id="sGam" min="0.3" max="3" step="0.05" value="1"><b id="vGam">1.00</b></div>
+        <div class="chips" style="margin-top:8px">
+          <button class="chip" id="tInv" aria-pressed="false">invert</button>
+          <button class="chip" id="bSeed">reseed</button>
+        </div>
+
+        <div id="composeui" hidden>
+          <div class="lbl"><span>Background</span></div>
+          <div class="chips seg" id="compose">
+            <button class="chip" data-compose="cutout" aria-pressed="true">flat</button>
+            <button class="chip" data-compose="overlay" aria-pressed="false">keep scene</button>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- ---------------------------------------------------------- step 4 -->
-    <section class="step" id="st4" data-open="0">
-      <div class="sh"><i>4</i><span>Export MP4</span><em id="s4sum"></em></div>
+    <section class="step" id="st4" data-open="0" hidden>
+      <div class="sh"><i>4</i><span>Palette</span><em id="s4sum"></em></div>
       <div class="sb">
-        <div class="row"><button class="btn go" id="bRender">Render MP4</button></div>
+        <div class="chips" id="target"></div>
+        <div class="lbl"><span>Presets</span></div>
+        <div class="chips" id="pals"></div>
+        <div class="row">
+          <button class="btn" id="bFromImg">from image</button>
+          <button class="btn" id="bAddCol">+ colour</button>
+        </div>
+        <div class="lbl"><span>Colours</span><span id="vNc"></span></div>
+        <div class="chips" id="swatches"></div>
+        <div id="bgui" hidden>
+          <div class="lbl"><span>Flat background</span></div>
+          <div class="chips"><label class="chip"><input type="color" id="cBg" value="#c9d4c5"><span>bg</span></label></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- step 5 -->
+    <section class="step" id="st5" data-open="0" hidden>
+      <div class="sh"><i>5</i><span>Export</span><em id="s5sum"></em></div>
+      <div class="sb">
+        <div class="row"><button class="btn go" id="bExport">Export</button></div>
         <div id="rprog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
         <div id="rinfo" class="stat" hidden></div>
-        <a id="dl" class="btn dl" hidden download>download mp4</a>
+        <a id="dl" class="btn dl" hidden download>download</a>
         <video id="outvid" hidden controls loop playsinline></video>
       </div>
     </section>
   </aside>
 
   <main id="stage">
-    <div id="empty">drop a clip to begin</div>
-
-    <!-- prompt stage -->
-    <div id="pwrap" hidden>
-      <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas></div>
+    <div id="empty">
+      <div class="hero">
+        <h1>Dither Studio</h1>
+        <p>Drop a <b>still</b> to dither it, a <b>clip</b> to dither every frame, or a clip
+           plus a click on whatever you want isolated — the tracker follows it and only
+           that gets dithered.</p>
+        <button class="btn go" id="bPick">choose a file</button>
+      </div>
     </div>
 
-    <!-- preview stage -->
+    <div id="pwrap" hidden>
+      <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas></div>
+      <div class="hint">click what you want &middot; shift-click what you don't &middot; drag a box</div>
+    </div>
+
     <div id="vwrap" hidden>
       <div id="vstage">
         <canvas id="vcv"></canvas>
         <div id="wipe" hidden><i></i><b></b><em>before</em><s>after</s></div>
       </div>
       <div id="transport">
-        <button class="chip" id="bPlay" aria-pressed="false">play</button>
-        <input type="range" id="sFrame" min="0" max="0" step="1" value="0">
-        <span class="mono" id="fcount">0 / 0</span>
-        <span class="mono" id="fps">– fps</span>
-        <button class="chip" id="bCmp" aria-pressed="false" title="drag the divider on the video">compare</button>
+        <button class="chip" id="bPlay" aria-pressed="false" hidden>play</button>
+        <input type="range" id="sFrame" min="0" max="0" step="1" value="0" hidden>
+        <span class="mono" id="fcount" hidden>0 / 0</span>
+        <span class="mono" id="fps">–</span>
+        <button class="chip" id="bCmp" aria-pressed="false">compare</button>
       </div>
     </div>
     <div id="toast" hidden></div>
+    <div id="busy" hidden><i></i></div>
   </main>
 </div>
+<script src="/static/dither.js"></script>
 <script src="/static/app.js"></script>

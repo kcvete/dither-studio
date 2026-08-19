@@ -5,7 +5,7 @@
 
 Everything lives under jobs/<job-id>/. Nothing leaves the machine.
 """
-import io
+import contextlib
 import json
 import os
 import shutil
@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
+import dither as DI
 import render as R
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +30,10 @@ STATIC = os.path.join(HERE, "static")
 CKPT = os.path.join(HERE, "env", "EdgeTAM", "checkpoints", "edgetam.pt")
 CFG = "configs/edgetam.yaml"
 DEVICE = os.environ.get("DV_DEVICE", "mps")
+# fp16 autocast on MPS: measured 1.19x faster tracking (7.42 -> 8.80 fps, A/B in one
+# process, order alternated) with global mask IoU 0.9985 vs fp32 over 150 frames,
+# worst frame 0.9609. Set DV_FP32=1 to turn it off.
+FP16 = DEVICE == "mps" and os.environ.get("DV_FP32", "0") != "1"
 MAX_OBJECTS = 6
 
 os.makedirs(JOBS, exist_ok=True)
@@ -68,6 +73,7 @@ def new_status(n_frames):
     return {
         "state": "idle", "done_frames": 0, "n_frames": n_frames,
         "elapsed_s": 0.0, "fps": 0.0, "error": None, "device": DEVICE,
+        "precision": "fp16" if FP16 else "fp32",
         "objects": [],
         "render": {"state": "idle", "done_frames": 0, "n_frames": n_frames,
                    "elapsed_s": 0.0, "fps": 0.0, "error": None},
@@ -158,8 +164,18 @@ def bluenoise(n: int = 64, seed: int = 7):
 
 @app.get("/api/palettes")
 def palettes():
-    return {"palettes": R.PALETTES, "defaults": R.DEFAULTS, "device": DEVICE,
-            "max_objects": MAX_OBJECTS}
+    """Everything the client needs to build its controls."""
+    return {
+        "palettes": DI.PALETTES,
+        "modes": DI.MODES,
+        "kernels": [{"id": k, "name": v["name"]} for k, v in DI.KERNELS.items()],
+        "stable": DI.STABLE,
+        "defaults": R.DEFAULTS,
+        "subject_colors": R.SUBJECT_COLORS,
+        "device": DEVICE,
+        "precision": "fp16" if FP16 else "fp32",
+        "max_objects": MAX_OBJECTS,
+    }
 
 
 @app.post("/api/upload")
@@ -282,7 +298,9 @@ def _track_worker(jid, d, req):
             for o in req.objects:
                 os.makedirs(os.path.join(mroot, str(o.id)), exist_ok=True)
 
-            with torch.inference_mode():
+            cast = (torch.autocast("mps", dtype=torch.float16) if FP16
+                    else contextlib.nullcontext())
+            with torch.inference_mode(), cast:
                 state = predictor.init_state(frames_dir, offload_video_to_cpu=True)
                 _sync()
                 n_frames = state["num_frames"]
@@ -329,8 +347,9 @@ def _track_worker(jid, d, req):
         el = time.perf_counter() - t0
         _set(jid, state="done", elapsed_s=round(el, 2),
              fps=round(len(seen) / el, 2) if el > 0 else 0.0)
-        print("[track] %s: %d frames, %d obj, %.1fs (%.2f fps)"
-              % (jid, len(seen), len(req.objects), el, len(seen) / max(el, 1e-6)), flush=True)
+        print("[track] %s: %d frames, %d obj, %.1fs (%.2f fps, %s)"
+              % (jid, len(seen), len(req.objects), el, len(seen) / max(el, 1e-6),
+                 "fp16" if FP16 else "fp32"), flush=True)
     except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
@@ -338,17 +357,30 @@ def _track_worker(jid, d, req):
 
 
 class RenderReq(BaseModel):
-    subjects: list[dict] = []      # [{id, dot}]
-    mode: str = "cutout"
+    subjects: list[dict] = []          # [{id, palette:[hex,...]}] — [] = whole frame
+    # look
+    mode: str = "dots"                 # dots|bluenoise|ordered|halftone|whitenoise|errordiff|riemersma
+    algo: str = "floyd-steinberg"      # errordiff kernel
+    matrix: int = 4                    # ordered / halftone matrix size
+    serpentine: bool = False
+    strength: float = 1.0
+    palette: list[str] | None = None   # background / whole-frame palette
+    # tone
+    brightness: float = 0.0
+    contrast: float = 1.0
+    gamma: float = 1.0
+    invert: bool = False
+    pixel: int = 1
+    # composition
+    compose: str = "cutout"            # cutout|overlay
     bg: str = "#c9d4c5"
+    # dots-only
     n: int = 8000
     cell: int = 4
     dotpx: int = 3
-    gamma: float = 1.0
     fill: float = 0.7
     stray: float = 0.02
     band: int = 9
-    invert: bool = False
     seed: int = 7
     fps: int | None = None
 
@@ -358,17 +390,17 @@ def start_render(jid: str, req: RenderReq):
     d = job_dir(jid)
     meta = read_meta(jid)
     mroot = os.path.join(d, "masks")
-    if not os.path.isdir(mroot):
-        raise HTTPException(400, "no masks yet - track first")
-    subs = req.subjects or [{"id": o, "dot": R.PALETTES[0]["dots"][i]}
-                            for i, o in enumerate(sorted(os.listdir(mroot)))]
     resolved = []
-    for i, s in enumerate(subs):
+    for i, s in enumerate(req.subjects):
         oid = str(s.get("id"))
         md = os.path.join(mroot, oid)
         if not os.path.isdir(md):
-            raise HTTPException(400, "no masks for subject %s" % oid)
-        resolved.append({"masks": md, "dot": s.get("dot") or R.PALETTES[0]["dots"][i % 6]})
+            raise HTTPException(400, "no masks for subject %s - track first" % oid)
+        resolved.append({"masks": md,
+                         "palette": s.get("palette"),
+                         "dot": s.get("dot") or R.SUBJECT_COLORS[i % 6]})
+    if req.mode == "dots" and not resolved:
+        raise HTTPException(400, "the dots look needs at least one tracked subject")
 
     with _state_lock:
         st = _jobs.get(jid) or new_status(meta["n_frames"])

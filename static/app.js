@@ -1,46 +1,62 @@
 /* ---------------------------------------------------------------------------
-   DITHER VIDEO — track subjects through a clip, then dither them into dots.
+   DITHER STUDIO — one flow for three jobs.
 
-   The browser preview reimplements render.py's blue-noise threshold dither
-   1:1 (same 64x64 tile fetched from /api/bluenoise, same portable per-cell
-   hash for jitter/stray, same gain search, same cell ownership rule), so what
-   plays here is what the MP4 export writes.
+     still           drop an image, dither it, download a PNG (never leaves the tab)
+     clip            drop a video, every frame gets dithered, export an MP4
+     clip + subject  point at something, EdgeTAM tracks it through the clip, and
+                     only that gets dithered
+
+   The preview is not an approximation: it runs static/dither.js, which dither.py
+   mirrors pixel for pixel (parity.py is the gate). What plays here is what the
+   MP4 contains.
 --------------------------------------------------------------------------- */
 'use strict';
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* ---------------------------------------------------------------- state */
+const PREVIEW_MAX = 1600;      // longest edge used for the live still preview
+const MAX_SUBJECTS = 6;
+const CACHE_MAX = 40;
+
 const S = {
-  job: null, meta: null, nFrames: 0, W: 0, H: 0, fps: 30,
-  subjects: [], active: 0, nextId: 1,
-  promptFrame: 0,
-  tracked: false, trackInfo: null,
-  playing: false, cur: 0,
-  tile: null, seed: 7,
+  kind: 'none',                // none | image | video
+  // still
+  bitmap: null, natW: 0, natH: 0, fileName: '',
+  // clip
+  job: null, nFrames: 0, W: 0, H: 0, fps: 30,
+  scope: 'whole', subjects: [], active: 0, nextId: 1, promptFrame: 0,
+  tracked: false, playing: false, cur: 0,
+  // look
+  P: {
+    mode: 'bluenoise', algo: 'floyd-steinberg', matrix: 4, serpentine: false,
+    strength: 1, brightness: 0, contrast: 1, gamma: 1, invert: false, pixel: 1,
+    compose: 'cutout', seed: 7,
+    n: 8000, cell: 4, dotpx: 3, fill: 0.7, stray: 0.02, band: 9,
+  },
+  palette: ['#000000', '#ffffff'],   // background / whole-frame palette
+  bg: '#c9d4c5',
+  target: 'bg',                      // which palette the editor is editing: 'bg' | subject id
+  meta: null,
   compare: false, split: 0.5,
-  P: { mode: 'cutout', bg: '#c9d4c5', n: 8000, cell: 4, dotpx: 3, gamma: 1.0,
-       fill: 0.7, stray: 0.02, band: 9, invert: false },
-  palettes: [], pal: 0,
 };
 
-const DOTS_FALLBACK = ['#b0413e', '#2f4f4a', '#7a6a4f', '#3c5a7a', '#8a5a8a', '#4a7a4a'];
-const MAX_SUBJECTS = 6;
-
+/* ------------------------------------------------------------------ chrome */
 function toast(msg, err) {
   const t = $('#toast');
   t.textContent = msg; t.hidden = false; t.classList.toggle('err', !!err);
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => { t.hidden = true; }, err ? 8000 : 3500);
+  toast._t = setTimeout(() => { t.hidden = true; }, err ? 7000 : 3000);
 }
+const busy = (on) => { $('#busy').hidden = !on; };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
     let d = r.statusText;
-    try { d = (await r.json()).detail || d; } catch (e) { /* non-json body */ }
+    try { d = (await r.json()).detail || d; } catch (e) { /* not json */ }
     throw new Error(d);
   }
   return r.json();
@@ -54,73 +70,145 @@ $$('.step .sh').forEach((h) => h.addEventListener('click', () => {
   st.setAttribute('data-open', st.getAttribute('data-open') === '1' ? '0' : '1');
 }));
 
-/* =========================================================== step 1: upload */
-const drop = $('#drop'), fileIn = $('#file');
-drop.addEventListener('click', () => fileIn.click());
-fileIn.addEventListener('change', () => { if (fileIn.files[0]) upload(fileIn.files[0]); });
+/* ======================================================== step 1: source */
+$('#drop').addEventListener('click', () => $('#file').click());
+$('#bPick').addEventListener('click', () => $('#file').click());
+$('#file').addEventListener('change', (e) => { if (e.target.files[0]) take(e.target.files[0]); });
 ['dragenter', 'dragover'].forEach((e) => document.addEventListener(e, (ev) => {
   ev.preventDefault(); document.body.classList.add('dragging');
 }));
 ['dragleave', 'drop'].forEach((e) => document.addEventListener(e, (ev) => {
   ev.preventDefault();
-  if (e === 'drop' && ev.dataTransfer.files[0]) upload(ev.dataTransfer.files[0]);
+  if (e === 'drop' && ev.dataTransfer.files[0]) take(ev.dataTransfer.files[0]);
   document.body.classList.remove('dragging');
 }));
+document.addEventListener('paste', (e) => {
+  const it = Array.from(e.clipboardData.files)[0];
+  if (it) take(it);
+});
 $('#sSec').addEventListener('input', (e) => { $('#vSec').textContent = e.target.value + ' s'; });
 
-async function upload(f) {
-  const box = $('#upstat');
-  box.hidden = false; box.classList.remove('err'); box.textContent = 'uploading ' + f.name + '…';
+function take(f) {
+  const isVid = /^video\//.test(f.type) || /\.(mp4|mov|m4v)$/i.test(f.name);
+  $('#vidopts').hidden = !isVid;
+  return isVid ? uploadClip(f) : loadStill(f);
+}
+
+function showSteps(kind) {
+  $('#st2').hidden = kind !== 'video';
+  $('#st3').hidden = $('#st4').hidden = $('#st5').hidden = kind === 'none';
+  $('#empty').hidden = kind !== 'none';
+  $$('.step .sh i').forEach((el, i) => { el.textContent = i + 1; });
+  // renumber visible steps so the rail always reads 1,2,3…
+  let n = 0;
+  $$('.step').forEach((st) => { if (!st.hidden) $('.sh i', st).textContent = ++n; });
+}
+
+async function loadStill(f) {
+  const box = $('#upstat'); box.hidden = false; box.classList.remove('err');
+  box.textContent = 'reading ' + f.name + '…';
+  try {
+    const bmp = await createImageBitmap(f);
+    S.kind = 'image'; S.bitmap = bmp; S.natW = bmp.width; S.natH = bmp.height;
+    S.fileName = f.name.replace(/\.[^.]+$/, '');
+    S.tracked = false; S.subjects = []; S.scope = 'whole';
+    if (S.P.mode === 'dots') setMode('bluenoise');
+    box.textContent = `${bmp.width} × ${bmp.height} · ${(f.size / 1024).toFixed(0)} KB · stays in this tab`;
+    $('#s1sum').textContent = `${bmp.width}×${bmp.height}`;
+    showSteps('image');
+    $('#pwrap').hidden = true; $('#vwrap').hidden = false;
+    $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = true;
+    $('#composeui').hidden = true; $('#bgui').hidden = true;
+    $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
+    $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
+    buildTargets(); renderModes(); openStep(3);
+    await draw();
+  } catch (err) {
+    box.classList.add('err'); box.textContent = 'could not read that image: ' + err.message;
+  }
+}
+
+async function uploadClip(f) {
+  const box = $('#upstat'); box.hidden = false; box.classList.remove('err');
+  box.textContent = 'uploading ' + f.name + '…';
+  busy(true);
   const fd = new FormData();
   fd.append('file', f);
   fd.append('max_seconds', $('#sSec').value);
   try {
     const j = await api('/api/upload', { method: 'POST', body: fd });
-    S.job = j.job; S.nFrames = j.n_frames; S.W = j.w; S.H = j.h; S.fps = j.fps;
-    S.tracked = false; S.trackInfo = null; S.subjects = []; S.nextId = 1; S.cur = 0;
-    S.promptFrame = 0;
-    addSubject();
-    box.textContent = `${j.n_frames} frames · ${j.w}×${j.h} · ${j.fps} fps · job ${j.job}`;
+    S.kind = 'video'; S.job = j.job; S.nFrames = j.n_frames; S.W = j.w; S.H = j.h; S.fps = j.fps;
+    S.fileName = f.name.replace(/\.[^.]+$/, '');
+    S.tracked = false; S.subjects = []; S.nextId = 1; S.cur = 0; S.promptFrame = 0;
+    S.scope = 'whole';
+    dropCache();
+    box.textContent = `${j.n_frames} frames · ${j.w}×${j.h} · ${j.fps} fps`;
     $('#s1sum').textContent = `${j.n_frames}f`;
     $('#sPF').max = j.n_frames - 1; $('#sPF').value = 0; $('#vPF').textContent = '0';
     $('#sFrame').max = j.n_frames - 1;
-    $('#empty').hidden = true; $('#pwrap').hidden = false; $('#vwrap').hidden = true;
+    $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = false;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
-    $('#tinfo').hidden = true;
-    showPromptFrame(0);
-    openStep(2);
+    $('#tinfo').hidden = true; $('#s5sum').textContent = '';
+    $('#bExport').textContent = 'Render MP4';
+    if (S.P.mode === 'dots') setMode('bluenoise');
+    showSteps('video'); setScope('whole');
+    buildTargets(); renderModes(); openStep(2);
+    await draw();
   } catch (err) {
     box.classList.add('err'); box.textContent = 'upload failed: ' + err.message;
   }
+  busy(false);
 }
 
-/* ================================================== step 2: prompt / track */
-const pimg = $('#pimg'), pov = $('#pov'), pctx = pov.getContext('2d');
+/* ==================================================== step 2: subjects */
+$$('[data-scope]').forEach((b) => b.addEventListener('click', () => setScope(b.dataset.scope)));
 
-function palDots() {
-  return (S.palettes[S.pal] && S.palettes[S.pal].dots) || DOTS_FALLBACK;
+function setScope(v) {
+  S.scope = v;
+  $$('[data-scope]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scope === v)));
+  $('#trackui').hidden = v !== 'track';
+  $('#wholenote').hidden = v === 'track';
+  $('#composeui').hidden = !(v === 'track' && S.tracked);
+  $('#bgui').hidden = !(v === 'track' && S.tracked && S.P.compose === 'cutout');
+  if (v === 'track') {
+    if (!S.subjects.length) addSubject();
+    $('#pwrap').hidden = S.tracked; $('#vwrap').hidden = !S.tracked;
+    if (!S.tracked) showPromptFrame(S.promptFrame);
+  } else {
+    $('#pwrap').hidden = true; $('#vwrap').hidden = false;
+    draw();
+  }
+  buildTargets(); renderModes();
+  $('#s2sum').textContent = v === 'track'
+    ? (S.tracked ? `${S.subjects.length} tracked` : `${S.subjects.length} subj`) : 'whole clip';
 }
+
+function subjectColor(i) { return (S.meta.subject_colors || ['#b0413e'])[i % 6]; }
 
 function addSubject() {
   if (S.subjects.length >= MAX_SUBJECTS) return;
   const i = S.subjects.length;
-  S.subjects.push({ id: S.nextId++, dot: palDots()[i % 6], points: [], box: null });
+  S.subjects.push({ id: S.nextId++, palette: [S.bg, subjectColor(i)], points: [], box: null });
   S.active = S.subjects.length - 1;
-  renderSubjects();
+  renderSubjects(); buildTargets();
 }
+$('#bAdd').addEventListener('click', addSubject);
+$('#bClr').addEventListener('click', () => {
+  S.subjects.forEach((s) => { s.points = []; s.box = null; });
+  renderSubjects(); drawOverlay();
+});
 
 function renderSubjects() {
-  const wrap = $('#subs');
-  wrap.textContent = '';
+  const wrap = $('#subs'); wrap.textContent = '';
   S.subjects.forEach((s, i) => {
     const b = document.createElement('button');
     b.className = 'chip sub';
-    b.setAttribute('aria-pressed', i === S.active ? 'true' : 'false');
+    b.setAttribute('aria-pressed', String(i === S.active));
     const sw = document.createElement('span');
-    sw.className = 'sw'; sw.style.background = s.dot;
+    sw.className = 'sw'; sw.style.background = s.palette[s.palette.length - 1];
     const nm = document.createElement('span');
-    const np = s.points.length, hasBox = s.box ? 1 : 0;
-    nm.textContent = `subject ${s.id}` + (np || hasBox ? ` · ${np}pt${hasBox ? '+box' : ''}` : '');
+    const np = s.points.length;
+    nm.textContent = `#${s.id}` + (np || s.box ? ` · ${np}pt${s.box ? '+box' : ''}` : '');
     b.append(sw, nm);
     b.addEventListener('click', () => { S.active = i; renderSubjects(); drawOverlay(); });
     if (S.subjects.length > 1) {
@@ -130,22 +218,16 @@ function renderSubjects() {
         e.stopPropagation();
         S.subjects.splice(i, 1);
         S.active = Math.min(S.active, S.subjects.length - 1);
-        renderSubjects(); drawOverlay(); renderDotCols();
+        renderSubjects(); drawOverlay(); buildTargets();
       });
       b.append(x);
     }
     wrap.append(b);
   });
   $('#vSubs').textContent = `${S.subjects.length} / ${MAX_SUBJECTS}`;
-  $('#s2sum').textContent = S.tracked ? 'tracked' : `${S.subjects.length} subj`;
-  renderDotCols();
 }
 
-$('#bAdd').addEventListener('click', addSubject);
-$('#bClr').addEventListener('click', () => {
-  S.subjects.forEach((s) => { s.points = []; s.box = null; });
-  renderSubjects(); drawOverlay();
-});
+const pimg = $('#pimg'), pov = $('#pov'), pctx = pov.getContext('2d');
 
 function showPromptFrame(n) {
   S.promptFrame = n;
@@ -154,34 +236,32 @@ function showPromptFrame(n) {
   drawOverlay();
 }
 $('#sPF').addEventListener('input', (e) => {
-  $('#vPF').textContent = e.target.value;
-  showPromptFrame(+e.target.value);
+  $('#vPF').textContent = e.target.value; showPromptFrame(+e.target.value);
 });
 
 function drawOverlay() {
-  if (!S.W) return;
+  if (!S.W || S.kind !== 'video') return;
   pov.width = S.W; pov.height = S.H;
   pctx.clearRect(0, 0, S.W, S.H);
   S.subjects.forEach((s, i) => {
-    const on = i === S.active;
-    pctx.globalAlpha = on ? 1 : 0.45;
+    const col = s.palette[s.palette.length - 1], on = i === S.active;
+    pctx.globalAlpha = on ? 1 : 0.4;
     if (s.box) {
-      pctx.strokeStyle = s.dot; pctx.lineWidth = on ? 3 : 2;
+      pctx.strokeStyle = col; pctx.lineWidth = on ? 3 : 2;
       pctx.setLineDash(on ? [] : [7, 5]);
       pctx.strokeRect(s.box[0], s.box[1], s.box[2] - s.box[0], s.box[3] - s.box[1]);
       pctx.setLineDash([]);
     }
     s.points.forEach((p) => {
       pctx.beginPath(); pctx.arc(p[0], p[1], 7, 0, Math.PI * 2);
-      pctx.fillStyle = p[2] ? s.dot : '#0f1f18';
-      pctx.fill();
-      pctx.lineWidth = 2.5; pctx.strokeStyle = p[2] ? '#ffffffcc' : s.dot; pctx.stroke();
+      pctx.fillStyle = p[2] ? col : '#0f1f18'; pctx.fill();
+      pctx.lineWidth = 2.5; pctx.strokeStyle = p[2] ? '#ffffffcc' : col; pctx.stroke();
     });
     pctx.globalAlpha = 1;
   });
-  if (S.dragBox) {
-    const b = S.dragBox;
-    pctx.strokeStyle = S.subjects[S.active].dot; pctx.lineWidth = 2;
+  if (S.dragBox && S.subjects[S.active]) {
+    const b = S.dragBox, s = S.subjects[S.active];
+    pctx.strokeStyle = s.palette[s.palette.length - 1]; pctx.lineWidth = 2;
     pctx.setLineDash([6, 4]);
     pctx.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
     pctx.setLineDash([]);
@@ -193,7 +273,6 @@ function povXY(e) {
   return [clamp((e.clientX - r.left) / r.width * S.W, 0, S.W - 1),
           clamp((e.clientY - r.top) / r.height * S.H, 0, S.H - 1)];
 }
-
 let down = null;
 pov.addEventListener('pointerdown', (e) => {
   if (!S.subjects.length) return;
@@ -213,7 +292,7 @@ pov.addEventListener('pointermove', (e) => {
 pov.addEventListener('pointerup', (e) => {
   if (!down) return;
   const p = povXY(e), s = S.subjects[S.active];
-  if (down.moved && S.dragBox) s.box = S.dragBox.map((v) => Math.round(v));
+  if (down.moved && S.dragBox) s.box = S.dragBox.map(Math.round);
   else s.points.push([Math.round(p[0]), Math.round(p[1]), down.neg ? 0 : 1]);
   down = null; S.dragBox = null;
   renderSubjects(); drawOverlay();
@@ -223,9 +302,9 @@ $('#bTrack').addEventListener('click', track);
 
 async function track() {
   const bad = S.subjects.filter((s) => !s.points.length && !s.box);
-  if (bad.length) { toast('subject ' + bad[0].id + ' has no prompt yet', true); return; }
+  if (bad.length) { toast('subject #' + bad[0].id + ' has no prompt yet', true); return; }
   const btn = $('#bTrack'); btn.disabled = true;
-  $('#tinfo').hidden = true;
+  $('#tinfo').hidden = true; $('#tinfo').textContent = '';
   const prog = $('#prog'); prog.hidden = false;
   $('.bar i', prog).style.width = '0%';
   $('span', prog).textContent = 'loading model…';
@@ -250,19 +329,21 @@ async function pollTrack() {
   const prog = $('#prog'), bar = $('.bar i', prog), lab = $('span', prog);
   for (;;) {
     const st = await api(`/api/jobs/${S.job}/status`);
-    const pct = st.n_frames ? (st.done_frames / st.n_frames) * 100 : 0;
-    bar.style.width = pct.toFixed(1) + '%';
-    if (st.state === 'loading') lab.textContent = 'loading frames…';
-    else lab.textContent = `${st.done_frames}/${st.n_frames} · ${st.fps.toFixed(1)} fps`;
+    bar.style.width = (st.n_frames ? (st.done_frames / st.n_frames) * 100 : 0).toFixed(1) + '%';
+    lab.textContent = st.state === 'loading' ? 'loading frames…'
+      : `${st.done_frames}/${st.n_frames} · ${st.fps.toFixed(1)} fps`;
     if (st.state === 'done') {
-      prog.hidden = true;
-      S.tracked = true; S.trackInfo = st;
+      prog.hidden = true; S.tracked = true;
       const box = $('#tinfo'); box.hidden = false; box.classList.remove('err');
       box.textContent = `tracked ${st.done_frames} frames in ${st.elapsed_s.toFixed(1)} s `
-        + `(${st.fps.toFixed(1)} fps) on ${st.device.toUpperCase()} · `
+        + `(${st.fps.toFixed(1)} fps) on ${st.device.toUpperCase()} ${st.precision || ''} · `
         + `${S.subjects.length} subject${S.subjects.length > 1 ? 's' : ''}`;
       $('#s2sum').textContent = `${st.done_frames}f · ${st.fps.toFixed(1)} fps`;
-      await startPreview();
+      $('#pwrap').hidden = true; $('#vwrap').hidden = false;
+      $('#composeui').hidden = false;
+      $('#bgui').hidden = S.P.compose !== 'cutout';
+      dropCache(); buildTargets(); renderModes(); openStep(3);
+      await draw();
       return;
     }
     if (st.state === 'error') {
@@ -271,70 +352,92 @@ async function pollTrack() {
       box.textContent = 'track failed: ' + st.error;
       return;
     }
-    await new Promise((r) => setTimeout(r, 350));
+    await sleep(350);
   }
 }
 
-/* ============================================ portable per-cell hash (= py) */
-function hash01(i, j, salt, seed) {
-  let x = ((Math.imul(i, 73856093) >>> 0) ^ (Math.imul(j, 19349663) >>> 0)
-        ^ (Math.imul(salt, 83492791) >>> 0) ^ (Math.imul(seed, 0x9E3779B1) >>> 0)) >>> 0;
-  x = (x ^ (x >>> 16)) >>> 0;
-  x = Math.imul(x, 0x7feb352d) >>> 0;
-  x = (x ^ (x >>> 15)) >>> 0;
-  x = Math.imul(x, 0x846ca68b) >>> 0;
-  x = (x ^ (x >>> 16)) >>> 0;
-  return x / 4294967296;
+/* ===================================================== frames + masks cache */
+const CACHE = new Map();
+
+async function frameAt(i) {
+  const hit = CACHE.get(i);
+  if (hit) { CACHE.delete(i); CACHE.set(i, hit); return hit; }
+  const ids = usingSubjects() ? S.subjects.map((s) => s.id) : [];
+  const [frame, ...masks] = await Promise.all([
+    fetch(`/api/jobs/${S.job}/frame/${i}`).then((r) => r.blob()).then(createImageBitmap),
+    ...ids.map((id) => fetch(`/api/jobs/${S.job}/mask/${id}/${i}`)
+      .then((r) => r.blob()).then(createImageBitmap)),
+  ]);
+  const rec = { frame, masks };
+  CACHE.set(i, rec);
+  while (CACHE.size > CACHE_MAX) {
+    const k = CACHE.keys().next().value, v = CACHE.get(k);
+    CACHE.delete(k); v.frame.close(); v.masks.forEach((m) => m.close());
+  }
+  return rec;
+}
+function dropCache() {
+  CACHE.forEach((v) => { v.frame.close(); v.masks.forEach((m) => m.close()); });
+  CACHE.clear();
+}
+const usingSubjects = () => S.kind === 'video' && S.scope === 'track' && S.tracked
+  && S.subjects.length > 0;
+
+/* ------------------------------------------------------ offscreen contexts */
+const CTX = {};
+function ctx2d(w, h, slot) {
+  let c = CTX[slot];
+  if (!c || c.canvas.width !== w || c.canvas.height !== h) {
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    c = CTX[slot] = cv.getContext('2d', { willReadFrequently: true });
+  }
+  return c;
+}
+function bitmapAlpha(bmp, w, h, slot) {
+  const c = ctx2d(w, h, slot);
+  c.clearRect(0, 0, w, h);
+  c.drawImage(bmp, 0, 0, w, h);
+  const d = c.getImageData(0, 0, w, h).data;
+  const out = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < out.length; i++, p += 4) out[i] = d[p] / 255;
+  return out;
 }
 
-/* ============================================================ dither engine */
-const E = {
-  fkey: null, F: null,          // cell-grid fields
-  fc: null, mc: null,           // offscreen contexts
-  out: null, outKey: null,
-};
-
-function fields(W, H, cell, seed) {
+/* =============================================== the "dots" particle look */
+const DOTS = { key: null, F: null };
+function dotFields(W, H, cell, seed, tile) {
   const key = [W, H, cell, seed].join('|');
-  if (E.fkey === key) return E.F;
+  if (DOTS.key === key) return DOTS.F;
   const gw = (W / cell) | 0, gh = (H / cell) | 0, N = gw * gh;
   const thr = new Float32Array(N), cx = new Float32Array(N), cy = new Float32Array(N),
         strayR = new Float32Array(N);
-  for (let i = 0; i < gh; i++) {
-    for (let j = 0; j < gw; j++) {
-      const q = i * gw + j;
-      thr[q] = S.tile[(i % 64) * 64 + (j % 64)];
-      cx[q] = j * cell + cell / 2 + (hash01(i, j, 1, seed) - 0.5) * cell * 0.8;
-      cy[q] = i * cell + cell / 2 + (hash01(i, j, 2, seed) - 0.5) * cell * 0.8;
-      strayR[q] = hash01(i, j, 3, seed);
-    }
+  for (let i = 0; i < gh; i++) for (let j = 0; j < gw; j++) {
+    const q = i * gw + j;
+    thr[q] = tile[(i % 64) * 64 + (j % 64)];
+    cx[q] = j * cell + cell / 2 + (Dither.hash01(i, j, 1, seed) - 0.5) * cell * 0.8;
+    cy[q] = i * cell + cell / 2 + (Dither.hash01(i, j, 2, seed) - 0.5) * cell * 0.8;
+    strayR[q] = Dither.hash01(i, j, 3, seed);
   }
-  E.fkey = key;
-  E.F = { gw, gh, N, thr, cx, cy, strayR, cell };
-  return E.F;
+  DOTS.key = key; DOTS.F = { gw, gh, N, thr, cx, cy, strayR, cell };
+  return DOTS.F;
 }
-
-/* cross-shaped max dilation, edges clamp (mirrors render.py's dilate) */
 function dilateCross(a, gh, gw, r) {
   let out = Float32Array.from(a);
   for (let d = 1; d <= r; d++) {
     const nx = Float32Array.from(out);
-    for (let i = 0; i < gh; i++) {
-      for (let j = 0; j < gw; j++) {
-        const q = i * gw + j;
-        let v = nx[q];
-        if (i - d >= 0 && a[(i - d) * gw + j] > v) v = a[(i - d) * gw + j];
-        if (i + d < gh && a[(i + d) * gw + j] > v) v = a[(i + d) * gw + j];
-        if (j - d >= 0 && a[i * gw + (j - d)] > v) v = a[i * gw + (j - d)];
-        if (j + d < gw && a[i * gw + (j + d)] > v) v = a[i * gw + (j + d)];
-        nx[q] = v;
-      }
+    for (let i = 0; i < gh; i++) for (let j = 0; j < gw; j++) {
+      const q = i * gw + j; let v = nx[q];
+      if (i - d >= 0 && a[(i - d) * gw + j] > v) v = a[(i - d) * gw + j];
+      if (i + d < gh && a[(i + d) * gw + j] > v) v = a[(i + d) * gw + j];
+      if (j - d >= 0 && a[i * gw + (j - d)] > v) v = a[i * gw + (j - d)];
+      if (j + d < gw && a[i * gw + (j + d)] > v) v = a[i * gw + (j + d)];
+      nx[q] = v;
     }
     out = nx;
   }
   return out;
 }
-
 function gainForCount(w, thr, target, N) {
   let lo = 1e-3, hi = 1e3;
   for (let it = 0; it < 24; it++) {
@@ -346,86 +449,48 @@ function gainForCount(w, thr, target, N) {
   return Math.sqrt(lo * hi);
 }
 
-function ctx2d(w, h, slot) {
-  let c = E[slot];
-  if (!c || c.canvas.width !== w || c.canvas.height !== h) {
-    const cv = document.createElement('canvas');
-    cv.width = w; cv.height = h;
-    c = E[slot] = cv.getContext('2d', { willReadFrequently: true });
-  }
-  return c;
-}
-
-const hexRGB = (s) => {
-  const h = s.replace('#', '');
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-};
-
-/* Draw one dithered frame into `vcv`. bmp = {frame, masks:[ImageBitmap,...]}. */
-function ditherFrame(bmp, dots) {
-  const P = S.P, W = S.W, H = S.H, cell = P.cell | 0;
-  const F = fields(W, H, cell, S.seed);
+function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
+  const cell = P.cell | 0;
+  const F = dotFields(W, H, cell, P.seed, tile);
   const { gw, gh, N, thr, cx, cy, strayR } = F;
-  const K = bmp.masks.length;
-
-  const fc = ctx2d(W, H, 'fc');
-  fc.drawImage(bmp.frame, 0, 0);
-  const fd = fc.getImageData(0, 0, W, H).data;
-
-  const mc = ctx2d(W, H, 'mc');
-  const md = [];
-  for (let k = 0; k < K; k++) {
-    mc.clearRect(0, 0, W, H);
-    mc.drawImage(bmp.masks[k], 0, 0);
-    md.push(mc.getImageData(0, 0, W, H).data);
-  }
-
-
+  const K = masks.length;
   const wgt = [], mg = [];
   for (let k = 0; k < K; k++) { wgt.push(new Float32Array(N)); mg.push(new Float32Array(N)); }
   const useH = gh * cell, useW = gw * cell, inv = P.invert, g1 = P.gamma === 1;
   for (let y = 0; y < useH; y++) {
-    const row = (y / cell | 0) * gw, base = y * W * 4;
+    const row = ((y / cell) | 0) * gw, base = y * W * 4;
     for (let x = 0; x < useW; x++) {
       const p = base + x * 4;
-      const lum = (0.2126 * fd[p] + 0.7152 * fd[p + 1] + 0.0722 * fd[p + 2]) / 255;
+      const lum = (0.2126 * srcData[p] + 0.7152 * srcData[p + 1] + 0.0722 * srcData[p + 2]) / 255;
       const t = inv ? lum : 1 - lum;
-      const tone = g1 ? t : Math.pow(t < 0 ? 0 : t > 1 ? 1 : t, P.gamma);
-      const q = row + (x / cell | 0);
+      const tone = g1 ? t : Math.pow(clamp(t, 0, 1), P.gamma);
+      const q = row + ((x / cell) | 0);
       for (let k = 0; k < K; k++) {
-        const m = md[k][p] / 255;
+        const m = masks[k][y * W + x];
         if (m > 0) { wgt[k][q] += m * tone; mg[k][q] += m; }
       }
     }
   }
   const cc = cell * cell;
-  for (let k = 0; k < K; k++) {
-    for (let q = 0; q < N; q++) { wgt[k][q] /= cc; mg[k][q] /= cc; }
-  }
+  for (let k = 0; k < K; k++) for (let q = 0; q < N; q++) { wgt[k][q] /= cc; mg[k][q] /= cc; }
 
-  // one cell belongs to exactly one subject (the one covering it most)
   const owner = new Int8Array(N), anyMg = new Float32Array(N);
   for (let q = 0; q < N; q++) {
     let best = -1, bv = -1;
     for (let k = 0; k < K; k++) if (mg[k][q] > bv) { bv = mg[k][q]; best = k; }
-    owner[q] = bv > 0 ? best : -1;
-    anyMg[q] = bv;
+    owner[q] = bv > 0 ? best : -1; anyMg[q] = bv;
   }
 
-  // ---- canvas
-  if (!E.out || E.outKey !== W + 'x' + H) {
-    E.out = new ImageData(W, H); E.outKey = W + 'x' + H;
-  }
-  const o = E.out.data, bg = hexRGB(P.bg);
-  if (P.mode === 'overlay') {
+  const out = new Uint8ClampedArray(W * H * 4), bgc = Dither.hexRGB(bg);
+  if (P.compose === 'overlay') {
     for (let p = 0, n = W * H * 4; p < n; p += 4) {
-      const lum = (0.2126 * fd[p] + 0.7152 * fd[p + 1] + 0.0722 * fd[p + 2]) / 255;
+      const lum = (0.2126 * srcData[p] + 0.7152 * srcData[p + 1] + 0.0722 * srcData[p + 2]) / 255;
       const g = (lum * 0.55 + 0.22) * 1.15;
-      o[p] = g * bg[0]; o[p + 1] = g * bg[1]; o[p + 2] = g * bg[2]; o[p + 3] = 255;
+      out[p] = g * bgc[0]; out[p + 1] = g * bgc[1]; out[p + 2] = g * bgc[2]; out[p + 3] = 255;
     }
   } else {
     for (let p = 0, n = W * H * 4; p < n; p += 4) {
-      o[p] = bg[0]; o[p + 1] = bg[1]; o[p + 2] = bg[2]; o[p + 3] = 255;
+      out[p] = bgc[0]; out[p + 1] = bgc[1]; out[p + 2] = bgc[2]; out[p + 3] = 255;
     }
   }
 
@@ -434,9 +499,7 @@ function ditherFrame(bmp, dots) {
   for (let k = 0; k < K; k++) {
     const w = new Float32Array(N);
     let cover = 0;
-    for (let q = 0; q < N; q++) {
-      if (owner[q] === k) { w[q] = wgt[k][q]; if (w[q] > 0) cover++; }
-    }
+    for (let q = 0; q < N; q++) if (owner[q] === k) { w[q] = wgt[k][q]; if (w[q] > 0) cover++; }
     if (P.n) {
       const tgt = Math.min(P.n, Math.max(1, (P.fill * cover) | 0));
       const g = gainForCount(w, thr, tgt, N);
@@ -456,7 +519,8 @@ function ditherFrame(bmp, dots) {
         }
       }
     }
-    const col = hexRGB(dots[k] || DOTS_FALLBACK[k % 6]);
+    const pal = palettes[k + 1] || palettes[0];
+    const col = Dither.hexRGB(pal[pal.length - 1]);
     for (let q = 0; q < N; q++) {
       if (!on[q]) continue;
       lit++;
@@ -466,100 +530,98 @@ function ditherFrame(bmp, dots) {
         for (let dx = 0; dx < dp; dx++) {
           const xx = clamp(xc + dx - half, 0, W - 1);
           const p = (yy * W + xx) * 4;
-          o[p] = col[0]; o[p + 1] = col[1]; o[p + 2] = col[2]; o[p + 3] = 255;
+          out[p] = col[0]; out[p + 1] = col[1]; out[p + 2] = col[2]; out[p + 3] = 255;
         }
       }
     }
   }
+  return { out, lit };
+}
 
-  const cv = $('#vcv');
+/* ========================================================== the main draw */
+let BLUE = null;
+let drawSeq = 0;
+
+function palettesForRender() {
+  return [S.palette].concat(S.subjects.map((s) => s.palette));
+}
+
+/* fit the source into the preview budget; stills only, clips are already 720p */
+function previewSize() {
+  if (S.kind !== 'image') return [S.W, S.H];
+  const m = Math.max(S.natW, S.natH);
+  if (m <= PREVIEW_MAX) return [S.natW, S.natH];
+  const k = PREVIEW_MAX / m;
+  return [Math.max(1, Math.round(S.natW * k)), Math.max(1, Math.round(S.natH * k))];
+}
+
+/* Render one image/frame into `cv`. Returns {lit, ms}. */
+function paint(cv, srcData, W, H, masks, opts) {
+  const t0 = performance.now();
+  const pal = palettesForRender();
+  let out, lit = 0;
+  if (S.P.mode === 'dots' && masks.length) {
+    const r = renderDots(srcData, W, H, masks, S.P, pal, S.bg, BLUE);
+    out = r.out; lit = r.lit;
+  } else {
+    out = Dither.composeFrame(srcData, W, H, masks, S.P, pal, S.bg);
+  }
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
   const g = cv.getContext('2d');
-  g.putImageData(E.out, 0, 0);
-  if (S.compare) {
-    // reveal the untouched frame to the left of the divider; export is unaffected
+  g.putImageData(new ImageData(out, W, H), 0, 0);
+  if (S.compare && opts && opts.original) {
     const x = Math.round(clamp(S.split, 0, 1) * W);
     if (x > 0) {
-      g.save();
-      g.beginPath(); g.rect(0, 0, x, H); g.clip();
-      g.drawImage(bmp.frame, 0, 0);
-      g.restore();
+      g.save(); g.beginPath(); g.rect(0, 0, x, H); g.clip();
+      g.drawImage(opts.original, 0, 0, W, H); g.restore();
     }
   }
-  return lit;
+  return { lit, ms: performance.now() - t0 };
 }
 
-/* ---------------------------------------------------- frame / mask bitmaps */
-const CACHE = new Map();
-const CACHE_MAX = 48;
-
-async function bitmapAt(i) {
-  const hit = CACHE.get(i);
-  if (hit) { CACHE.delete(i); CACHE.set(i, hit); return hit; }
-  const ids = S.subjects.map((s) => s.id);
-  const [frame, ...masks] = await Promise.all([
-    fetch(`/api/jobs/${S.job}/frame/${i}`).then((r) => r.blob()).then(createImageBitmap),
-    ...ids.map((id) => fetch(`/api/jobs/${S.job}/mask/${id}/${i}`)
-      .then((r) => r.blob()).then(createImageBitmap)),
-  ]);
-  const rec = { frame, masks };
-  CACHE.set(i, rec);
-  while (CACHE.size > CACHE_MAX) {
-    const k = CACHE.keys().next().value;
-    const v = CACHE.get(k); CACHE.delete(k);
-    v.frame.close(); v.masks.forEach((m) => m.close());
-  }
-  return rec;
-}
-
-function dropCache() {
-  CACHE.forEach((v) => { v.frame.close(); v.masks.forEach((m) => m.close()); });
-  CACHE.clear();
-}
-
-let drawSeq = 0;
-async function drawAt(i) {
+async function draw(i) {
   const seq = ++drawSeq;
-  const bmp = await bitmapAt(i);
-  if (seq !== drawSeq) return 0;
-  const t0 = performance.now();
-  const lit = ditherFrame(bmp, S.subjects.map((s) => s.dot));
-  const ms = performance.now() - t0;
-  S.cur = i;
-  $('#fcount').textContent = `${i} / ${S.nFrames - 1}`;
-  $('#sFrame').value = i;
-  $('#fps').textContent = `${(1000 / Math.max(ms, 0.01)).toFixed(1)} fps · ${lit} dots`;
-  return lit;
+  if (S.kind === 'image') {
+    const [w, h] = previewSize();
+    const c = ctx2d(w, h, 'src');
+    c.drawImage(S.bitmap, 0, 0, w, h);
+    const src = c.getImageData(0, 0, w, h).data;
+    if (seq !== drawSeq) return;
+    const r = paint($('#vcv'), src, w, h, [], { original: S.bitmap });
+    $('#fps').textContent = `${w}×${h} · ${r.ms.toFixed(0)} ms`;
+    return;
+  }
+  if (S.kind !== 'video') return;
+  const idx = i === undefined ? S.cur : i;
+  const bmp = await frameAt(idx);
+  if (seq !== drawSeq) return;
+  const c = ctx2d(S.W, S.H, 'src');
+  c.drawImage(bmp.frame, 0, 0);
+  const src = c.getImageData(0, 0, S.W, S.H).data;
+  const masks = usingSubjects()
+    ? bmp.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, 'm' + k)) : [];
+  const r = paint($('#vcv'), src, S.W, S.H, masks, { original: bmp.frame });
+  S.cur = idx;
+  $('#fcount').textContent = `${idx} / ${S.nFrames - 1}`;
+  $('#sFrame').value = idx;
+  $('#fps').textContent = `${(1000 / Math.max(r.ms, 0.01)).toFixed(1)} fps`
+    + (S.P.mode === 'dots' ? ` · ${r.lit} dots` : '');
+  return r.lit;
 }
 
-async function startPreview() {
-  if (!S.tile) S.tile = Float32Array.from((await api('/api/bluenoise?n=64&seed=7')).tile);
-  dropCache();
-  $('#pwrap').hidden = true; $('#vwrap').hidden = false;
-  $('#sFrame').max = S.nFrames - 1;
-  openStep(3);
-  await drawAt(0);
-  $('#s3sum').textContent = S.P.mode;
-}
-
-/* --------------------------------------------------------------- transport */
+/* ------------------------------------------------------------- transport */
 const wipe = $('#wipe');
-
 function setSplit(v) {
   S.split = clamp(v, 0, 1);
   wipe.style.setProperty('--x', (S.split * 100).toFixed(2) + '%');
-  if (S.tracked && !S.playing) drawAt(S.cur);   // while playing the loop repaints
+  if (!S.playing) draw();
 }
-
 function setCompare(on) {
-  S.compare = on;
-  wipe.hidden = !on;
+  S.compare = on; wipe.hidden = !on;
   $('#bCmp').setAttribute('aria-pressed', String(on));
-  if (on) setSplit(S.split);
-  else if (S.tracked && !S.playing) drawAt(S.cur);
+  if (on) setSplit(S.split); else draw();
 }
 $('#bCmp').addEventListener('click', () => setCompare(!S.compare));
-
 let wiping = false;
 const wipeAt = (e) => {
   const r = wipe.getBoundingClientRect();
@@ -573,133 +635,286 @@ wipe.addEventListener('pointerup', () => { wiping = false; });
 wipe.addEventListener('pointercancel', () => { wiping = false; });
 setSplit(0.5);
 
-$('#bPlay').addEventListener('click', () => { S.playing ? stop() : play(); });
-$('#sFrame').addEventListener('input', (e) => { stop(); drawAt(+e.target.value); });
-
+$('#bPlay').addEventListener('click', () => (S.playing ? stop() : play()));
+$('#sFrame').addEventListener('input', (e) => { stop(); draw(+e.target.value); });
 function stop() {
   S.playing = false;
-  $('#bPlay').setAttribute('aria-pressed', 'false');
-  $('#bPlay').textContent = 'play';
+  $('#bPlay').setAttribute('aria-pressed', 'false'); $('#bPlay').textContent = 'play';
 }
 function play() {
-  if (!S.tracked) return;
+  if (S.kind !== 'video') return;
   S.playing = true;
-  $('#bPlay').setAttribute('aria-pressed', 'true');
-  $('#bPlay').textContent = 'pause';
+  $('#bPlay').setAttribute('aria-pressed', 'true'); $('#bPlay').textContent = 'pause';
   loop();
 }
 async function loop() {
   while (S.playing) {
     const t0 = performance.now();
     const next = (S.cur + 1) % S.nFrames;
-    // keep a few frames warm ahead of playback
-    for (let k = 1; k <= 4; k++) bitmapAt((next + k) % S.nFrames);
-    await drawAt(next);
-    const wait = Math.max(0, 1000 / S.fps - (performance.now() - t0));
-    await new Promise((r) => setTimeout(r, wait));
+    for (let k = 1; k <= 3; k++) frameAt((next + k) % S.nFrames);
+    await draw(next);
+    await sleep(Math.max(0, 1000 / S.fps - (performance.now() - t0)));
   }
 }
 
-/* ------------------------------------------------------------ style panel */
-function bindSlider(id, out, key, fmt, int) {
-  const el = $(id);
-  el.addEventListener('input', () => {
-    const v = int ? parseInt(el.value, 10) : parseFloat(el.value);
-    S.P[key] = v;
-    $(out).textContent = fmt(v);
-    if (S.tracked) drawAt(S.cur);
-  });
+/* ========================================================= step 3: look */
+function setMode(id) {
+  S.P.mode = id;
+  const ed = id === 'errordiff';
+  $('#edui').hidden = !ed;
+  $('#mxui').hidden = !(id === 'ordered' || id === 'halftone');
+  $('#dotsui').hidden = id !== 'dots';
+  $('#pxui').hidden = id === 'dots';
+  const m = (S.meta.modes || []).find((x) => x.id === id);
+  const risky = S.kind === 'video' && S.meta.stable && S.meta.stable[id] === false;
+  $('#modenote').textContent = m ? m.note : '';
+  $('#modenote').classList.toggle('warn', !!risky);
+  $('#s3sum').textContent = m ? m.name : id;
+  renderModes();
 }
-bindSlider('#sN', '#vN', 'n', (v) => String(v), true);
-bindSlider('#sCell', '#vCell', 'cell', (v) => v + ' px', true);
-bindSlider('#sDot', '#vDot', 'dotpx', (v) => v + ' px', true);
-bindSlider('#sGam', '#vGam', 'gamma', (v) => v.toFixed(2));
-bindSlider('#sFill', '#vFill', 'fill', (v) => v.toFixed(2));
-bindSlider('#sStray', '#vStray', 'stray', (v) => v.toFixed(3));
-bindSlider('#sBand', '#vBand', 'band', (v) => String(v), true);
 
-$$('[data-mode]').forEach((b) => b.addEventListener('click', () => {
-  S.P.mode = b.dataset.mode;
-  $$('[data-mode]').forEach((o) => o.setAttribute('aria-pressed', o === b ? 'true' : 'false'));
-  $('#s3sum').textContent = S.P.mode;
-  if (S.tracked) drawAt(S.cur);
-}));
-$('#tInv').addEventListener('click', () => {
-  S.P.invert = !S.P.invert;
-  $('#tInv').setAttribute('aria-pressed', String(S.P.invert));
-  if (S.tracked) drawAt(S.cur);
-});
-
-function renderPalettes() {
-  const wrap = $('#pals'); wrap.textContent = '';
-  S.palettes.forEach((p, i) => {
+function renderModes() {
+  const wrap = $('#modes'); if (!S.meta) return;
+  wrap.textContent = '';
+  S.meta.modes.forEach((m) => {
     const b = document.createElement('button');
-    b.className = 'chip pal';
-    b.setAttribute('aria-pressed', i === S.pal ? 'true' : 'false');
-    const pv = document.createElement('span'); pv.className = 'pv';
-    [p.bg, p.dots[0], p.dots[1]].forEach((c) => {
-      const s = document.createElement('b'); s.style.background = c; pv.append(s);
-    });
-    const nm = document.createElement('span'); nm.textContent = p.name;
-    b.append(pv, nm);
+    b.className = 'chip';
+    b.dataset.mode = m.id;
+    b.setAttribute('aria-pressed', String(S.P.mode === m.id));
+    b.textContent = m.name;
+    const needsSubjects = m.id === 'dots';
+    const ok = !needsSubjects || usingSubjects();
+    if (!ok) { b.classList.add('off'); b.title = 'track a subject first'; }
+    if (S.kind === 'video' && S.meta.stable[m.id] === false) {
+      const w = document.createElement('i'); w.className = 'fl'; w.textContent = '≈';
+      w.title = 'flickers frame to frame'; b.append(w);
+    }
     b.addEventListener('click', () => {
-      S.pal = i; S.P.bg = p.bg;
-      S.subjects.forEach((s, k) => { s.dot = p.dots[k % p.dots.length]; });
-      renderPalettes(); renderSubjects();
-      if (S.tracked) drawAt(S.cur);
+      if (!ok) { toast('the dots look needs a tracked subject', true); return; }
+      setMode(m.id); draw();
     });
     wrap.append(b);
   });
 }
 
-function renderDotCols() {
-  const wrap = $('#dotcols'); if (!wrap) return;
+function bindSlider(id, out, key, fmt, int) {
+  const el = $(id);
+  el.addEventListener('input', () => {
+    S.P[key] = int ? parseInt(el.value, 10) : parseFloat(el.value);
+    $(out).textContent = fmt(S.P[key]);
+    draw();
+  });
+}
+bindSlider('#sN', '#vN', 'n', String, true);
+bindSlider('#sCell', '#vCell', 'cell', (v) => v + ' px', true);
+bindSlider('#sDot', '#vDot', 'dotpx', (v) => v + ' px', true);
+bindSlider('#sFill', '#vFill', 'fill', (v) => v.toFixed(2));
+bindSlider('#sStray', '#vStray', 'stray', (v) => v.toFixed(3));
+bindSlider('#sBand', '#vBand', 'band', String, true);
+bindSlider('#sStr', '#vStr', 'strength', (v) => v.toFixed(2));
+bindSlider('#sPx', '#vPx', 'pixel', (v) => v + '×', true);
+bindSlider('#sBri', '#vBri', 'brightness', (v) => v.toFixed(2));
+bindSlider('#sCon', '#vCon', 'contrast', (v) => v.toFixed(2));
+bindSlider('#sGam', '#vGam', 'gamma', (v) => v.toFixed(2));
+
+$('#bTone').addEventListener('click', () => {
+  S.P.brightness = 0; S.P.contrast = 1; S.P.gamma = 1;
+  $('#sBri').value = 0; $('#vBri').textContent = '0.00';
+  $('#sCon').value = 1; $('#vCon').textContent = '1.00';
+  $('#sGam').value = 1; $('#vGam').textContent = '1.00';
+  draw();
+});
+$('#tInv').addEventListener('click', () => {
+  S.P.invert = !S.P.invert;
+  $('#tInv').setAttribute('aria-pressed', String(S.P.invert));
+  draw();
+});
+$('#tSerp').addEventListener('click', () => {
+  S.P.serpentine = !S.P.serpentine;
+  $('#tSerp').setAttribute('aria-pressed', String(S.P.serpentine));
+  draw();
+});
+$('#sAlgo').addEventListener('change', (e) => { S.P.algo = e.target.value; draw(); });
+$$('[data-mx]').forEach((b) => b.addEventListener('click', () => {
+  S.P.matrix = +b.dataset.mx;
+  $$('[data-mx]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+  draw();
+}));
+$$('[data-compose]').forEach((b) => b.addEventListener('click', () => {
+  S.P.compose = b.dataset.compose;
+  $$('[data-compose]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+  $('#bgui').hidden = S.P.compose !== 'cutout';
+  draw();
+}));
+$('#bSeed').addEventListener('click', async () => {
+  S.P.seed = 1 + Math.floor(Math.random() * 100000);
+  BLUE = Float32Array.from((await api('/api/bluenoise?n=64&seed=' + S.P.seed)).tile);
+  Dither.setBlueNoise(BLUE);
+  DOTS.key = null;
+  draw();
+});
+
+/* ====================================================== step 4: palette */
+function currentPalette() {
+  if (S.target === 'bg') return S.palette;
+  const s = S.subjects.find((x) => String(x.id) === String(S.target));
+  return s ? s.palette : S.palette;
+}
+function setPalette(list) {
+  if (S.target === 'bg') S.palette = list;
+  else {
+    const s = S.subjects.find((x) => String(x.id) === String(S.target));
+    if (s) s.palette = list;
+  }
+  renderSwatches(); renderSubjects(); drawOverlay(); draw();
+}
+
+function buildTargets() {
+  const wrap = $('#target'); if (!wrap) return;
   wrap.textContent = '';
-  S.subjects.forEach((s) => {
-    const l = document.createElement('label');
-    l.className = 'chip'; l.style.cursor = 'pointer';
-    const inp = document.createElement('input');
-    inp.type = 'color'; inp.value = s.dot;
-    inp.addEventListener('input', () => {
-      s.dot = inp.value; renderSubjects(); drawOverlay();
-      if (S.tracked) drawAt(S.cur);
+  const withSubs = usingSubjects();
+  if (!withSubs) { S.target = 'bg'; wrap.hidden = true; renderSwatches(); return; }
+  wrap.hidden = false;
+  const mk = (id, label) => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = label;
+    b.setAttribute('aria-pressed', String(String(S.target) === String(id)));
+    b.addEventListener('click', () => { S.target = id; buildTargets(); });
+    wrap.append(b);
+  };
+  mk('bg', S.P.compose === 'overlay' ? 'scene' : 'background');
+  S.subjects.forEach((s) => mk(s.id, '#' + s.id));
+  renderSwatches();
+}
+
+function renderPalettes() {
+  const wrap = $('#pals'); wrap.textContent = '';
+  S.meta.palettes.forEach((p) => {
+    const b = document.createElement('button');
+    b.className = 'chip pal';
+    const pv = document.createElement('span'); pv.className = 'pv';
+    p.colors.slice(0, 5).forEach((c) => {
+      const s = document.createElement('b'); s.style.background = c; pv.append(s);
     });
-    const t = document.createElement('span'); t.textContent = ' #' + s.id;
-    l.append(inp, t);
-    wrap.append(l);
+    const nm = document.createElement('span'); nm.textContent = p.name;
+    b.append(pv, nm);
+    b.addEventListener('click', () => setPalette(p.colors.slice()));
+    wrap.append(b);
   });
 }
 
-/* ============================================================= step 4: mp4 */
-$('#bRender').addEventListener('click', doRender);
+function renderSwatches() {
+  const wrap = $('#swatches'); wrap.textContent = '';
+  const list = currentPalette();
+  $('#vNc').textContent = list.length + ' colours';
+  $('#s4sum').textContent = list.length + 'c';
+  list.forEach((c, i) => {
+    const l = document.createElement('label');
+    l.className = 'chip sw1';
+    const inp = document.createElement('input');
+    inp.type = 'color'; inp.value = c;
+    inp.addEventListener('input', () => {
+      const l2 = currentPalette().slice(); l2[i] = inp.value; setPalette(l2);
+    });
+    l.append(inp);
+    if (list.length > 2) {
+      const x = document.createElement('span');
+      x.className = 'x'; x.textContent = '✕';
+      x.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const l2 = currentPalette().slice(); l2.splice(i, 1); setPalette(l2);
+      });
+      l.append(x);
+    }
+    wrap.append(l);
+  });
+}
+$('#bAddCol').addEventListener('click', () => {
+  const l = currentPalette().slice();
+  if (l.length >= 32) return;
+  l.push('#888888'); setPalette(l);
+});
+$('#bFromImg').addEventListener('click', async () => {
+  const n = currentPalette().length;
+  let data, w, h;
+  if (S.kind === 'image') {
+    [w, h] = previewSize();
+    const c = ctx2d(w, h, 'src'); c.drawImage(S.bitmap, 0, 0, w, h);
+    data = c.getImageData(0, 0, w, h).data;
+  } else if (S.kind === 'video') {
+    const bmp = await frameAt(S.cur);
+    w = S.W; h = S.H;
+    const c = ctx2d(w, h, 'src'); c.drawImage(bmp.frame, 0, 0);
+    data = c.getImageData(0, 0, w, h).data;
+  } else return;
+  setPalette(Dither.extractPalette(data, w, h, Math.max(2, n)));
+  toast(`palette pulled from the ${S.kind === 'image' ? 'image' : 'current frame'}`);
+});
+$('#cBg').addEventListener('input', (e) => { S.bg = e.target.value; draw(); });
 
-async function doRender() {
-  if (!S.tracked) { toast('track first', true); return; }
-  const btn = $('#bRender'); btn.disabled = true;
-  $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
+/* ======================================================= step 5: export */
+$('#bExport').addEventListener('click', () => (S.kind === 'image' ? exportPNG() : exportMP4()));
+
+async function exportPNG() {
+  const info = $('#rinfo'); info.hidden = true; info.textContent = '';
+  busy(true);
+  await sleep(16);
+  try {
+    // re-render at the source's native resolution, not the preview's
+    const c = ctx2d(S.natW, S.natH, 'exp');
+    c.drawImage(S.bitmap, 0, 0, S.natW, S.natH);
+    const src = c.getImageData(0, 0, S.natW, S.natH).data;
+    const out = Dither.composeFrame(src, S.natW, S.natH, [], S.P, palettesForRender(), S.bg);
+    const cv = document.createElement('canvas');
+    cv.width = S.natW; cv.height = S.natH;
+    cv.getContext('2d').putImageData(new ImageData(out, S.natW, S.natH), 0, 0);
+    const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+    const dl = $('#dl');
+    if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
+    const url = URL.createObjectURL(blob);
+    dl.dataset.url = url; dl.href = url;
+    dl.download = `${S.fileName || 'dither'}-${S.P.mode}.png`;
+    dl.hidden = false;
+    const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
+    box.textContent = `${S.natW}×${S.natH} PNG · ${(blob.size / 1024).toFixed(0)} KB`;
+    $('#s5sum').textContent = 'ready';
+  } catch (err) {
+    const box = $('#rinfo'); box.hidden = false; box.classList.add('err');
+    box.textContent = 'export failed: ' + err.message;
+  }
+  busy(false);
+}
+
+async function exportMP4() {
+  const btn = $('#bExport'); btn.disabled = true;
+  $('#dl').hidden = true; $('#outvid').hidden = true;
+  const info = $('#rinfo'); info.hidden = true; info.textContent = '';
   const prog = $('#rprog'); prog.hidden = false;
   $('.bar i', prog).style.width = '0%'; $('span', prog).textContent = 'starting…';
   try {
+    const body = Object.assign({}, S.P, {
+      bg: S.bg, palette: S.palette,
+      subjects: usingSubjects() ? S.subjects.map((s) => ({ id: s.id, palette: s.palette })) : [],
+    });
     await api(`/api/jobs/${S.job}/render`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({}, S.P, {
-        subjects: S.subjects.map((s) => ({ id: s.id, dot: s.dot })), seed: S.seed,
-      })),
+      body: JSON.stringify(body),
     });
     for (;;) {
       const st = (await api(`/api/jobs/${S.job}/status`)).render;
-      const pct = st.n_frames ? (st.done_frames / st.n_frames) * 100 : 0;
-      $('.bar i', prog).style.width = pct.toFixed(1) + '%';
+      $('.bar i', prog).style.width =
+        (st.n_frames ? (st.done_frames / st.n_frames) * 100 : 0).toFixed(1) + '%';
       $('span', prog).textContent = `${st.done_frames}/${st.n_frames}`;
       if (st.state === 'done') {
         prog.hidden = true;
         const url = `/api/jobs/${S.job}/out.mp4?t=${Date.now()}`;
-        const dl = $('#dl'); dl.href = url; dl.hidden = false;
+        const dl = $('#dl');
+        dl.href = url; dl.download = `${S.fileName || 'dither'}-${S.P.mode}.mp4`; dl.hidden = false;
         const v = $('#outvid'); v.src = url; v.hidden = false;
         const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
         box.textContent = `rendered ${st.done_frames} frames in ${st.elapsed_s.toFixed(1)} s `
           + `(${st.fps.toFixed(1)} fps)`;
-        $('#s4sum').textContent = 'ready';
+        $('#s5sum').textContent = 'ready';
         break;
       }
       if (st.state === 'error') {
@@ -708,7 +923,7 @@ async function doRender() {
         box.textContent = 'render failed: ' + st.error;
         break;
       }
-      await new Promise((r) => setTimeout(r, 300));
+      await sleep(300);
     }
   } catch (err) {
     prog.hidden = true;
@@ -721,17 +936,31 @@ async function doRender() {
 /* ------------------------------------------------------------------ boot */
 (async function boot() {
   try {
-    const j = await api('/api/palettes');
-    S.palettes = j.palettes;
-    S.P.bg = j.palettes[0].bg;
-    $('#dev').textContent = j.device;
-    renderPalettes();
+    S.meta = await api('/api/palettes');
   } catch (e) {
-    S.palettes = [{ name: 'sage', bg: '#c9d4c5', dots: DOTS_FALLBACK }];
-    renderPalettes();
+    S.meta = { palettes: Dither.PALETTES, modes: Dither.MODES, stable: Dither.STABLE,
+               kernels: [], subject_colors: ['#b0413e'], device: '?' };
   }
-  api('/api/bluenoise?n=64&seed=7').then((b) => { S.tile = Float32Array.from(b.tile); })
-    .catch(() => {});
-  window.DV = S;          // handy for the playwright checks
-  window.DV_draw = drawAt;
+  $('#dev').textContent = (S.meta.device || '') + (S.meta.precision ? ' ' + S.meta.precision : '');
+  const sel = $('#sAlgo');
+  (S.meta.kernels.length ? S.meta.kernels
+    : Object.entries(Dither.KERNELS).map(([id, v]) => ({ id, name: v.name })))
+    .forEach((k) => {
+      const o = document.createElement('option');
+      o.value = k.id; o.textContent = k.name; sel.append(o);
+    });
+  sel.value = S.P.algo;
+  renderPalettes();
+  try {
+    BLUE = Float32Array.from((await api('/api/bluenoise?n=64&seed=7')).tile);
+  } catch (e) {
+    BLUE = new Float32Array(4096).map((_, i) => Dither.hash01(i >> 6, i & 63, 5, 7));
+  }
+  Dither.setBlueNoise(BLUE);
+  setMode(S.P.mode);
+  buildTargets();
+  showSteps('none');
+  window.DV = S;
+  window.DV_draw = draw;
+  window.DV_ready = true;
 })();
