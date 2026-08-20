@@ -560,6 +560,56 @@ is the opaque file minus its background. Measured on the parkour clip, frame 10:
 its ProRes. Alpha in a lossy codec is a lossy plane — the dots' edges come back a
 few values off 255 in WebM, and clean in ProRes.
 
+**Also save the original (matched cut)** is a checkbox under the format select —
+video only, off by default, remembered for the session. Tick it and an export
+writes a *second* file beside the render, `<name>.original.<ext>`, with its own
+download button: the same frames, undithered. That is what makes the pair usable
+side by side in an edit — same trim, same frame count, same rate, same size, so
+frame *n* of one is frame *n* of the other.
+
+![the export step with the checkbox on: one render, two files](docs/o-original.png)
+
+Neither engine re-reads your source file to make it, because the source file is
+not what was rendered. The server encodes `jobs/<id>/frames/*.jpg` — the
+trimmed, fps-normalised, 720p-or-native frames the dither itself consumed, in
+`_list_frames()` order — straight to H.264, and reads ffmpeg's own frame counter
+back to prove it wrote every one of them. The tab hands its recorder the same
+decoded frame bitmaps the dither was drawn from, through the same
+`MediaRecorder`. The count is an assertion on both sides: the page refuses a
+file that does not match the render's frame count, and the server refuses the
+request (409) before writing one.
+
+Containers pair where pairing means something. MP4 with MP4, WebM with WebM;
+**GIF, WebM + alpha and ProRes pair with an MP4** — a GIF of the original would
+be decimated to `gif_fps` and pairing a GIF with a GIF is pointless, and an
+alpha container has nothing to key out of footage nobody dithered. The tab has
+no H.264 encoder at all (see the formats table), so the browser engine always
+pairs with WebM.
+
+Measured, server engine, a 2 s window of the parkour clip
+(`docs/verify-report.json`): both files 60 frames, 1280×720, `30/1`; frames 0,
+30 and 59 of the original decoded and compared against `jobs/<id>/frames/`
+`0000.jpg`, `0030.jpg` and `0059.jpg` — mean absolute difference **0.69 / 1.11 /
+0.90** out of 255. In the tab (`docs/verify-web-report.json`): both files 150
+frames, 1280×720, frames 0, 75 and 149 within **3.09 / 2.24 / 2.27** of
+the exact `ImageData` the recorder was handed — VP9 is a lossier round trip than
+H.264. The tab's rate is the recorder's wall clock rather than a number either
+file was told to carry, so the pair's frame *count* is exact and its frame
+*rate* lands within about a percent (measured **1.1 %**, 29.75 against 29.42).
+
+Three things it is honest about. The original is a re-encode of the decoded
+frames, not a copy of your file: it carries the extraction's 720p normalisation
+and one generation of H.264 or VP9. Its MP4 comes out full-range (`yuvj420p`)
+where the dithered MP4 is `yuv420p`, both correctly flagged, because squeezing
+the source into limited range to match would cost more than it buys (measured:
+mean absolute difference 1.91 instead of 0.69). And in the tab both files are
+paced by the recorder's wall clock, so when a heavy look renders slower than
+real time the original is handed over at that same slower pace rather than at
+the clip's own — the pair keeps one duration between them.
+
+Sequences have no original — there is no single clip behind a strip of morphs —
+so the checkbox is not offered in that view.
+
 **Compare** (in the transport bar) drags a before/after divider across the frame,
 and it keeps working while the clip plays.
 
@@ -1149,9 +1199,15 @@ node verify-web.mjs http://127.0.0.1:8765 clip.mp4 docs/entry-clip.mp4 still.jpg
 still dotted whole-image down to a one-frame `.dots.gz`, a still with a clicked
 subject segmented in one frame and exported as a transparent PNG, a whole-frame
 clip, two tracked subjects, one subject at a non-default tracking quality, a
-polygon mask prompt with a frame preview, **mask polish** — the motion gate
-as numbers, the tab's polished mask against the server's own byte for byte, the
-before/after wipe, and preview against the exported MP4 — and the **jobs/
+polygon mask prompt with a frame preview, the **matched cut** — a 2 s window
+exported with *also save the original* on, both files through ffprobe (60
+frames, 1280×720, `30/1`, identical), three of the original's frames compared
+against the very JPEGs in `jobs/<id>/frames/` the render read, the second
+download saved and named, a deliberately wrong frame count refused with a 409,
+a GIF export pairing with an MP4, and the checkbox remembered across a reload
+and withheld from a still — and **mask polish**: the motion gate as numbers,
+the tab's polished mask against the server's own byte for byte, the before/after
+wipe, and preview against the exported MP4 — and the **jobs/
 janitor**: fabricated job directories with backdated mtimes (a stale one, a
 fresh one, a `camera-` recording, a `photo-`, a `seq-*`) swept through the live
 `POST /api/gc/run`, then a sweep every 1.5 s through a real track → render to
@@ -1168,7 +1224,13 @@ auto probe and the manual switch, a still, whole-image dots on a still, a still
 subject **on both engines**, a whole-frame clip, a tracked subject (exported with
 the mask polish on), a polygon through the `heads_mask` graph, two subjects
 prompted on two different frames — and the same two-frame test on the server
-engine, so the feature is checked on both. Its flagship run is the **sequence
+engine, so the feature is checked on both. It exports a **pair** in the tab too:
+a dithered WebM and the matched cut beside it, both 150 frames at 1280×720 at
+the same rate to within about a percent, three frames of the second one
+checked against the exact `ImageData` the recorder was handed, and the checkbox
+confirmed absent from the sequence view.
+
+Its flagship run is the **sequence
 view**: four items added through the UI the way a person would — a subject
 tracked in one clip, a subject tracked in a second clip, a subject cut out of a
 photograph, and a ring — trimmed, coloured, joined by a morph, a scatter and a
@@ -1611,6 +1673,14 @@ why the setting exists rather than a silently lowered default.
   60 s. Frames, masks and renders are all O(frames) — a 10-minute clip is
   18,000 frames, ~900 MB of JPEGs and roughly 17 minutes of tracking per
   subject at 512 px. That is allowed; it is just not free.
+* **The matched cut is a re-encode, not your file.** *Also save the original*
+  writes the frames the render actually read — 720p-normalised, cut to the trim,
+  one generation of H.264 or VP9 — not a copy of the file you dropped. That is
+  what makes it line up frame for frame with the dither; the untouched original
+  is the file you already have. Its MP4 is full-range (`yuvj420p`) where the
+  dithered MP4 is `yuv420p`, both flagged. A sequence has no original at all —
+  there is no single clip behind a strip of morphs — so the checkbox is not
+  offered there.
 * **`.dots.gz` tops out at 65,535 frames.** The container carries `n_frames` as
   a `uint16` — 36 minutes at 30 fps. Both encoders raise rather than silently
   wrapping. Video export has no such limit.

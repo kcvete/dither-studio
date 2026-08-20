@@ -19,6 +19,7 @@ is the gate that keeps the two honest.
 """
 import os
 import subprocess
+import threading
 
 import numpy as np
 from PIL import Image
@@ -67,12 +68,19 @@ FORMATS = {
 }
 
 
-def ffmpeg_cmd(fmt, W, H, fps, out_path, gif_fps=None):
-    """The encoder invocation for one format, reading raw frames on stdin."""
+def ffmpeg_cmd(fmt, W, H, fps, out_path, gif_fps=None, input_args=None):
+    """The encoder invocation for one format, reading raw frames on stdin.
+
+    `input_args` replaces the stdin input for a caller that has a better one --
+    the original cut hands ffmpeg the JPEGs themselves rather than decoding
+    them in Python only to hand them straight back. Everything downstream of
+    the input, which is the part that decides what the file IS, is the same.
+    """
     f = FORMATS[fmt]
     pix = "rgba" if f["alpha"] else "rgb24"
-    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", pix,
-           "-s", "%dx%d" % (W, H), "-r", str(int(fps)), "-i", "-"]
+    cmd = ["ffmpeg", "-v", "error", "-y"] + (list(input_args) if input_args else
+          ["-f", "rawvideo", "-pix_fmt", pix,
+           "-s", "%dx%d" % (W, H), "-r", str(int(fps)), "-i", "-"])
     if fmt == "mp4":
         cmd += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart"]
@@ -474,6 +482,142 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
     return {'out': out_path, 'frames': total, 'w': W, 'h': H, 'format': fmt,
             'bytes': os.path.getsize(out_path)}
 
+
+# ------------------------------------------------------- the original cut
+# The dithered render and the untouched clip, frame for frame.
+#
+# Both read the SAME jobs/<id>/frames/*.jpg -- the trimmed, fps-normalised,
+# 720p-or-native ground truth that the tracker and the dither already agreed
+# on -- through the same _list_frames() ordering and the same encoder call. So
+# the pair lands in an edit with identical frame counts, rate and size, and
+# frame N of one IS frame N of the other. Nothing here re-reads the source
+# file, because the source file is not what was rendered.
+#
+# Not every container makes sense for a copy of the clip: pairing a GIF with a
+# GIF is pointless (and the GIF is decimated to gif_fps anyway), and an alpha
+# format has nothing to key out of footage that was never dithered. Those fall
+# back to H.264.
+ORIGINAL_FORMAT = {"mp4": "mp4", "webm": "webm", "gif": "mp4",
+                   "webm-alpha": "mp4", "prores": "mp4"}
+
+
+def original_format(fmt):
+    """The container the matched cut is written in for a given render format."""
+    return ORIGINAL_FORMAT.get(str(fmt or "mp4"), "mp4")
+
+
+def original_file(fmt):
+    """out.mp4 -> out.original.mp4. Beside the render, never over it."""
+    return FORMATS[original_format(fmt)]["file"].replace("out.", "out.original.", 1)
+
+
+def count_frames(frames_dir):
+    """How many frames render() would consume from this directory."""
+    return len(_list_frames(frames_dir))
+
+
+def _numbered_run(frames_dir, files):
+    """ffmpeg -i arguments for a contiguous run of numbered frames, or None.
+
+    The frames are written `%04d.jpg` from 0 (server.extract_frames), so the
+    whole directory is normally one image2 pattern -- which means ffmpeg reads
+    the JPEGs with its own decoder and nothing is re-encoded through a second
+    one on the way. A directory with a hole in the numbering is not that, and
+    gets the frame-by-frame path instead, because a pattern would silently stop
+    at the hole.
+    """
+    stems = [os.path.splitext(f)[0] for f in files]
+    pad = len(stems[0])
+    if not all(x.isdigit() and len(x) == pad for x in stems):
+        return None
+    start = int(stems[0])
+    if [int(x) for x in stems] != list(range(start, start + len(stems))):
+        return None
+    ext = os.path.splitext(files[0])[1]
+    return ["-f", "image2", "-start_number", str(start),
+            "-i", os.path.join(frames_dir, "%%0%dd%s" % (pad, ext))]
+
+
+def _run_counting(cmd, total, progress=None):
+    """Run ffmpeg with -progress on stdout; return the frames it actually wrote.
+
+    The count is the point. A file that is one frame short of the render is
+    worse than no file at all, so this reads ffmpeg's own counter rather than
+    trusting that the input it was pointed at was the input we meant.
+    """
+    cmd = list(cmd)
+    cmd[4:4] = ["-progress", "pipe:1", "-nostats"]
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True)
+    err = []
+    # stderr on its own thread: a chatty failure would otherwise deadlock
+    # against the -progress pipe being read here (same shape as extract_frames)
+    t = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
+    t.start()
+    done = 0
+    for line in p.stdout:
+        if line.startswith("frame="):
+            try:
+                done = int(line.split("=", 1)[1].strip() or 0)
+            except ValueError:
+                pass
+            if progress:
+                progress(min(done, total), total)
+    p.wait()
+    t.join(timeout=5)
+    if p.returncode != 0:
+        raise RuntimeError('ffmpeg failed: ' + ("".join(err))[-800:])
+    return done
+
+
+def render_original(frames_dir, out_path, params=None, progress=None):
+    """The same frames, re-encoded and otherwise untouched.
+
+    The frame list is render()'s own -- _list_frames(), same directory, same
+    order -- so there is no second notion of "the range" that could drift from
+    the one the dither used. What differs is only that these frames go to the
+    encoder as they are.
+    """
+    a = _params(params)
+    files = _list_frames(frames_dir)
+    if not files:
+        raise RuntimeError('no frames in ' + frames_dir)
+    fmt = original_format(a.get('format'))
+    fps = int(a['fps'])
+    H, W = np.asarray(Image.open(os.path.join(frames_dir, files[0]))
+                      .convert('RGB')).shape[:2]
+    total = len(files)
+
+    run = _numbered_run(frames_dir, files)
+    if run:
+        cmd = ffmpeg_cmd(fmt, W, H, fps, out_path,
+                         input_args=["-framerate", str(fps)] + run)
+        wrote = _run_counting(cmd, total, progress)
+        if wrote != total:
+            raise RuntimeError('the original cut got %d frames, the render had %d'
+                               % (wrote, total))
+    else:
+        # holes in the numbering: hand the frames over one at a time, in the
+        # order render() would have read them
+        p = subprocess.Popen(ffmpeg_cmd(fmt, W, H, fps, out_path),
+                             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            for i, fn in enumerate(files):
+                rgb = np.asarray(Image.open(os.path.join(frames_dir, fn))
+                                 .convert('RGB'))
+                p.stdin.write(np.ascontiguousarray(rgb, np.uint8).tobytes())
+                if progress:
+                    progress(i + 1, total)
+        finally:
+            try:
+                p.stdin.close()
+            except Exception:
+                pass
+        err = p.stderr.read().decode('utf-8', 'replace')
+        if p.wait() != 0:
+            raise RuntimeError('ffmpeg failed: ' + err[-800:])
+    return {'out': out_path, 'frames': total, 'w': W, 'h': H, 'format': fmt,
+            'bytes': os.path.getsize(out_path)}
 
 # ---------------------------------------------------------- dots as data
 def render_dots(frames_dir, subjects, params=None, progress=None):

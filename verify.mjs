@@ -13,6 +13,8 @@
  *   C  clip    -> two tracked subjects -> dots + a pixel mode -> MP4
  *   D  clip    -> one tracked subject at "fast" tracking quality (512 px)
  *   E  clip    -> frame-0 preview, then a polygon mask prompt -> tracked
+ *   O  clip    -> a dithered render AND the original cut to the same frames,
+ *                 compared frame for frame against jobs/<id>/frames/
  *   P  clip    -> a tracked subject with MASK POLISH on: the motion gate, the
  *                 tab's polished mask against the server's byte for byte, the
  *                 wipe, and preview-vs-export
@@ -731,6 +733,126 @@ async function runFormats(page) {
   return r;
 }
 
+/* ---------- O: the matched cut ---------------------------------------------
+ * "Also save the original" is only worth anything if the second file is frame
+ * for frame the first one. So: the same trim (a 2 s window out of a 5 s clip,
+ * not the whole file), the same count, rate and size out of ffprobe, and three
+ * sampled frames decoded and compared against the very JPEGs the render read.
+ * Plus the two things that keep it honest -- the server refuses a frame count
+ * that does not match, and a GIF export pairs with an MP4 rather than a
+ * pointless second GIF.
+ */
+async function runOriginal(page) {
+  const r = {};
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  await page.evaluate(() => window.DV_limit(2));      // 2 s of a 5 s clip
+  await page.setInputFiles('#file', CLIP);
+  await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+  r.job = await page.evaluate(() => window.DV.job);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  if (r.nFrames !== 60) throw new Error('the 2 s window gave ' + r.nFrames + ' frames');
+
+  await setMode(page, 'ordered');
+  await openStep(page, 'st5');
+  await page.evaluate((x) => window.DV_setFormat(x), 'mp4');
+  r.checkboxOffered = !(await page.locator('#origui').isHidden());
+  if (!r.checkboxOffered) throw new Error('no "also save the original" checkbox');
+  await page.check('#cOrig');
+  await page.click('#bExport');
+  r.info = await waitText(page, '#rinfo', /original cut|failed/, 300000);
+  if (/failed/.test(r.info)) throw new Error(r.info);
+  await sleep(600);
+  // both links in the frame: the screenshot IS the "two files" claim
+  await page.locator('#dlorig').scrollIntoViewIfNeeded();
+  await sleep(300);
+  await page.screenshot({ path: path.join(DOCS, 'o-original.png') });
+
+  const dith = path.join(HERE, 'jobs', r.job, 'out.mp4');
+  const orig = path.join(HERE, 'jobs', r.job, 'out.original.mp4');
+  r.dithered = ffprobeFull(dith);
+  r.original = ffprobeFull(orig);
+  for (const k of ['nb_read_frames', 'width', 'height', 'r_frame_rate']) {
+    if (String(r.dithered[k]) !== String(r.original[k])) {
+      throw new Error(`the pair disagrees on ${k}: ${r.dithered[k]} vs ${r.original[k]}`);
+    }
+  }
+  if (+r.original.nb_read_frames !== r.nFrames) {
+    throw new Error(`the original cut has ${r.original.nb_read_frames} frames, `
+      + `the clip has ${r.nFrames}`);
+  }
+
+  /* frame N of the original IS jobs/<id>/frames/<N>.jpg -- the fps-normalised,
+   * trimmed ground truth both files were made from. h264 is lossy, so this is
+   * a mean absolute difference and not equality. */
+  const rawRGB = (args) => execFileSync('ffmpeg', ['-v', 'error'].concat(args),
+                                        { maxBuffer: 1 << 28 });
+  const meanAbs = (a, b) => {
+    if (a.length !== b.length) throw new Error('frame sizes differ: ' + a.length + ' vs ' + b.length);
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return +(d / a.length).toFixed(3);
+  };
+  r.frameMeanAbsDiff = {};
+  for (const n of [0, r.nFrames >> 1, r.nFrames - 1]) {
+    const fromFile = rawRGB(['-i', orig, '-vf', `select=eq(n\\,${n})`, '-vframes', '1',
+                             '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']);
+    const fromDisk = rawRGB(['-i', frameFile(r.job, n), '-pix_fmt', 'rgb24',
+                             '-f', 'rawvideo', '-']);
+    const d = meanAbs(fromFile, fromDisk);
+    r.frameMeanAbsDiff[n] = d;
+    if (d >= 2) {
+      throw new Error(`original frame ${n} is not the clip's frame ${n} (mean abs diff ${d})`);
+    }
+  }
+
+  // two links, two files: the second one downloads and is named for the pair
+  const [d1] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }),
+    page.click('#dlorig'),
+  ]);
+  r.downloadName = d1.suggestedFilename();
+  const saved = path.join(DOCS, 'o-original-cut.mp4');
+  await d1.saveAs(saved);
+  r.downloadBytes = fs.statSync(saved).size;
+  if (!/\.original\.mp4$/.test(r.downloadName)) {
+    throw new Error('the second download is called ' + r.downloadName);
+  }
+
+  // the server refuses a count that would not line up
+  const bad = await page.request.post(`${BASE}/api/jobs/${r.job}/original`,
+    { data: { format: 'mp4', expect_frames: r.nFrames - 1 }, timeout: 60000 });
+  r.mismatchStatus = bad.status();
+  if (bad.status() !== 409) throw new Error('a wrong frame count got ' + bad.status());
+
+  // a GIF pairs with an MP4: a GIF of the original would be decimated to
+  // gif_fps, and pairing a GIF with a GIF is pointless
+  await page.evaluate((x) => window.DV_setFormat(x), 'gif');
+  await page.click('#bExport');
+  r.gifInfo = await waitText(page, '#rinfo', /original cut|failed/, 300000);
+  if (/failed/.test(r.gifInfo)) throw new Error(r.gifInfo);
+  r.gifPairName = await page.getAttribute('#dlorig', 'download');
+  if (!/\.original\.mp4$/.test(r.gifPairName)) {
+    throw new Error('the GIF paired with ' + r.gifPairName);
+  }
+  r.gifOriginal = ffprobeFull(orig);
+  if (+r.gifOriginal.nb_read_frames !== r.nFrames) {
+    throw new Error('the GIF pair lost frames: ' + r.gifOriginal.nb_read_frames);
+  }
+
+  // the checkbox is remembered for the session, and it is a video-only question
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  r.rememberedAcrossReload = await page.evaluate(() => window.DV.saveOriginal);
+  if (!r.rememberedAcrossReload) throw new Error('the checkbox forgot itself');
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 30000 });
+  await openStep(page, 'st5');
+  r.hiddenForStills = await page.locator('#origui').isHidden();
+  if (!r.hiddenForStills) throw new Error('a still was offered a matched cut');
+  return r;
+}
+
 /* ---------- T: trim and length, at the API level ---------------------------
  * The UI half of this is verify-web.mjs's camera run (record, drag the handles,
  * re-open). This is the server's own arithmetic, and the thing that replaced
@@ -1248,6 +1370,10 @@ try {
   await run('formats', runFormats);
   await run('trim', runTrim);
   await run('dots', runDotsServer);
+  // Everything above this line shares one page: runFormats and runDotsServer
+  // read the job the PAGE still has open, so a run that navigates -- this one,
+  // and the three below it -- has to come after them.
+  await run('original', runOriginal);
   await run('lasso', runLasso);
   await run('polish', runPolish);
   await run('gc', runGC);

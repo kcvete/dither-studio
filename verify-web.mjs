@@ -16,6 +16,8 @@
  *   W1b browser + server · a still, a clicked subject segmented in ONE frame
  *       (no propagation) -> cutout PNG with a transparent background
  *   W2  browser · a clip, whole frame -> WebM
+ *   W2b browser · a clip exported as a PAIR: the dithered WebM and the same
+ *       frames undithered, checked against the frames the tab drew
  *   W3  browser · a clip, one tracked subject, frame-0 preview -> dots -> WebM,
  *       with the mask polish on for the export and off again afterwards
  *   W4  browser · a polygon mask prompt (the heads_mask graph) -> tracked
@@ -553,6 +555,109 @@ async function runWhole() {
         +r.probe.nb_read_frames === r.nFrames,
         `${r.probe.nb_read_frames} != ${r.nFrames}`);
   check('the WebM keeps the clip resolution', r.probe.width === 1280);
+  await ctx.close();
+  return r;
+}
+
+/* ================ W2b: the matched cut, in the tab =========================
+ * The pair the browser engine writes: a dithered WebM and the SAME frames
+ * undithered, out of the same MediaRecorder, at the same size and rate. There
+ * is no jobs/<id>/frames/ here to compare against -- the frames only ever
+ * existed in the tab -- so the ground truth is the tab itself: DV_originalAt(n)
+ * is the ImageData that was handed to the recorder, and the exported file's
+ * frame n has to still be it, VP9 loss aside.
+ */
+async function runOriginalBrowser() {
+  const r = {};
+  const { ctx, page } = await newPage(browserPref());
+  await loadClip(page, CLIP, BR.seconds);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+
+  await setMode(page, 'ordered');
+  await openStep(page, 'st5');
+  r.checkboxOffered = !(await page.locator('#origui').isHidden());
+  check('the tab offers the matched cut', r.checkboxOffered);
+  await page.check('#cOrig');
+  r.note = (await page.textContent('#orignote')).trim();
+  const t0 = Date.now();
+  await page.click('#bExport');
+  r.info = await waitText(page, '#rinfo', /original cut|failed/, 900000);
+  check('the pair exports in the tab', !/failed/.test(r.info), r.info);
+  r.seconds = +((Date.now() - t0) / 1000).toFixed(1);
+  await page.locator('#dlorig').scrollIntoViewIfNeeded();
+  await sleep(300);
+  await page.screenshot({ path: path.join(DOCS, 'w-original.png') });
+
+  // two links, two files
+  const dith = path.join(DOCS, 'w-original-dithered.webm');
+  const orig = path.join(DOCS, 'w-original-cut.webm');
+  r.ditheredBytes = await saveDownload(page, dith);
+  const [d2] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }),
+    page.click('#dlorig'),
+  ]);
+  r.originalName = d2.suggestedFilename();
+  await d2.saveAs(orig);
+  r.originalBytes = fs.statSync(orig).size;
+  check('the second file is named for the pair',
+        /\.original\.webm$/.test(r.originalName), r.originalName);
+
+  r.dithered = probe(dith);
+  r.original = probe(orig);
+  for (const k of ['nb_read_frames', 'width', 'height']) {
+    check(`the pair agrees on ${k}`, String(r.dithered[k]) === String(r.original[k]),
+          `${r.dithered[k]} vs ${r.original[k]}`);
+  }
+  /* The rate is the recorder's wall clock, not a number either file was told
+   * to carry -- `MediaRecorder` timestamps each frame as it is handed over, so
+   * two passes over the same 150 frames land a fraction of a percent apart.
+   * The frame COUNT above is the exact one; this is the duration agreeing. */
+  const rate = (p) => {
+    const [a, b] = String(p.r_frame_rate).split('/').map(Number);
+    return a / (b || 1);
+  };
+  r.rates = [+rate(r.dithered).toFixed(3), +rate(r.original).toFixed(3)];
+  r.rateDriftPct = +(100 * Math.abs(r.rates[0] - r.rates[1]) / r.rates[0]).toFixed(2);
+  check('the pair shares a frame rate', r.rateDriftPct < 3,
+        `${r.dithered.r_frame_rate} vs ${r.original.r_frame_rate} `
+        + `(${r.rateDriftPct}% apart)`);
+  check('the original cut has every frame',
+        +r.original.nb_read_frames === r.nFrames,
+        `${r.original.nb_read_frames} != ${r.nFrames}`);
+
+  /* frame n of the file against frame n as the tab drew it */
+  const rawRGB = (args) => execFileSync('ffmpeg', ['-v', 'error'].concat(args),
+                                        { maxBuffer: 1 << 28 });
+  const meanAbs = (a, b) => {
+    if (a.length !== b.length) throw new Error('frame sizes differ');
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return +(d / a.length).toFixed(3);
+  };
+  r.frameMeanAbsDiff = {};
+  for (const n of [0, r.nFrames >> 1, r.nFrames - 1]) {
+    const b64 = await page.evaluate(async (i) => {
+      const img = await window.DV_originalAt(i);
+      const cv = document.createElement('canvas');
+      cv.width = img.width; cv.height = img.height;
+      cv.getContext('2d').putImageData(img, 0, 0);
+      return cv.toDataURL('image/png').split(',')[1];
+    }, n);
+    const ref = path.join(DOCS, `w-original-ref-${n}.png`);
+    fs.writeFileSync(ref, Buffer.from(b64, 'base64'));
+    const d = meanAbs(
+      rawRGB(['-i', orig, '-vf', `select=eq(n\\,${n})`, '-vframes', '1',
+              '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']),
+      rawRGB(['-i', ref, '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']));
+    r.frameMeanAbsDiff[n] = d;
+    check(`original frame ${n} is the tab's frame ${n}`, d < 4, 'mean abs diff ' + d);
+  }
+
+  // and the question is never asked of a sequence, which has no original
+  await page.click('#viewbar .chip[data-view="sequence"]');
+  await sleep(500);
+  r.hiddenInSequence = await page.locator('#origui').isHidden();
+  check('the sequence view does not offer a matched cut', r.hiddenInSequence);
   await ctx.close();
   return r;
 }
@@ -1902,6 +2007,7 @@ try {
   await run('stillSubjectBrowser', runStillSubject, 'browser');
   await run('stillSubjectRemote', runStillSubject, 'remote');
   await run('whole', runWhole);
+  await run('original', runOriginalBrowser);
   await run('tracked', runTracked);
   await run('lasso', runLasso);
   await run('cameraRemote', runCamera, 'remote', true);

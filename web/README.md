@@ -162,6 +162,7 @@ in the tab. The chip in the header names the winner and switches it by hand:
 | tracker resolutions | 768 only — one exported set | 512 / 768 / 1024 |
 | multiple subjects | one pass each, so N subjects cost N x | one batched propagate pass |
 | video export | WebM (VP9) via MediaRecorder | H.264 MP4 via ffmpeg |
+| the matched cut | the decoded frames back through the same recorder, WebM | `jobs/<id>/frames/*.jpg` re-encoded, MP4 (WebM beside a WebM render) |
 | frames | never leave the tab | uploaded, decoded to JPEG under `jobs/` |
 | still export | PNG (RGBA when you ask for a transparent background), in the tab | the same, in the tab |
 | subject in a still | one frame through `encoder` + `heads_prompt`, nothing uploaded | `POST /api/upload_image`, then one `/preview` per click |
@@ -175,7 +176,9 @@ plays everywhere except older Safari; if you need MP4, the local server is one
 The export is also paced in real time, because MediaRecorder timestamps each
 frame when the page hands it over. If a frame takes longer to dither than the
 clip's own frame interval, the result plays slow, and the export line says so
-rather than letting you find out in QuickTime.
+rather than letting you find out in QuickTime. *Also save the original* is
+handed over at whatever pace the dithered pass actually managed, so the pair
+keeps one duration between them even when that happens.
 
 ## Hacking on it
 

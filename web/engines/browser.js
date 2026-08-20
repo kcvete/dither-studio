@@ -286,6 +286,7 @@ export class BrowserEngine {
       reextract: true,              // reopen(): the File handle is still here
       extractProgress: true,        // decode reports frame by frame
       uncapped: true,               // whole clip, however long it is
+      original: true,               // the matched cut, straight off the decoded frames
       formats: browserFormats(),
     };
   }
@@ -726,6 +727,25 @@ export class BrowserEngine {
     return this.exportWebM(params, onProgress, renderFrame, fmt === 'webm-alpha');
   }
 
+  /* ------------------------------------------------------- original cut
+   * The clip as it came in, cut to exactly the frames the render just used.
+   *
+   * Same recorder, same canvas, same loop, same `this.clip` frame count — the
+   * only difference is that `renderFrame` hands back the decoded frame instead
+   * of a dithered one. WebM whatever the render's container was: this tab has
+   * no H.264 encoder (see exportWebM), and the format the pair has to agree on
+   * is the frame grid, not the codec.
+   */
+  async exportOriginal(params, onProgress, renderFrame) {
+    const r = await this.exportWebM(Object.assign({}, params, { format: 'webm' }),
+                                    onProgress, renderFrame, false);
+    const { w, h, nFrames, fps } = params.source || this.clip;
+    return Object.assign(r, {
+      w, h, fps, format: 'webm', matched: (params.format || 'webm') === 'webm',
+      note: `${nFrames} frames, undithered — the tab writes WebM only`,
+    });
+  }
+
   /** Frames -> palette indices -> one GIF. The whole animation has to be in
    *  memory at once (one byte per pixel per frame: ~0.9 MB a frame at 720p),
    *  which is the reason for the size note in the UI. */
@@ -801,7 +821,12 @@ export class BrowserEngine {
     const stopped = new Promise((ok) => { rec.onstop = ok; });
     const t0 = performance.now();
     rec.start();
-    const dt = 1000 / fps;
+    // `pace_ms` is the matched cut asking to be handed over at the rate the
+    // DITHERED pass actually managed. A recorder timestamps a frame when it
+    // gets it, so a render that ran slower than real time writes a file whose
+    // rate is that slower one; an original paced to 1/fps beside it would be a
+    // shorter clip with the same frames in it. Same pacing, same duration.
+    const dt = Math.max(1, +params.pace_ms || 1000 / fps);
     for (let i = 0; i < nFrames; i++) {
       const fs = performance.now();
       const img = await renderFrame(i, w, h);     // ImageData from app.js

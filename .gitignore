@@ -26,6 +26,12 @@ web/ort/
 
 # verify-web.mjs re-exports these on every run; the screenshots are the evidence
 docs/w-*-export.*
+# the matched-cut runs write both halves of the pair and the frames they were
+# checked against. Regenerable, and the numbers live in the reports.
+docs/o-original-cut.mp4
+docs/w-original-cut.webm
+docs/w-original-dithered.webm
+docs/w-original-ref-*.png
 docs/seq-item-look-*.dots.gz
 docs/seq-item-look.mp4
 docs/seq-particle.dots.gz

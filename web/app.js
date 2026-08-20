@@ -75,9 +75,12 @@ const S = {
   compare: false, split: 0.5,
   // engine
   engine: null, enginePref: null, modelsMissing: null,
-  exportURL: null, frameURL: null,
+  exportURL: null, frameURL: null, exportOrigURL: null,
   // export
   format: '', gifFps: 15,
+  // "also save the original (matched cut)": the render's own frames, undithered.
+  // Remembered for the session, off in a fresh tab.
+  saveOriginal: false,
   // sequence. `library` is the session's pool of captured dot clouds and
   // survives loading another clip on purpose — a morph from one clip into
   // another needs both, and only one can be open at a time. `strip` is the
@@ -548,6 +551,7 @@ async function loadStill(f) {
     $('#outimg').hidden = true; $('#pvinfo').hidden = true; $('#tinfo').hidden = true;
     $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
     $('#fmtui').hidden = true; $('#trimui').hidden = true;
+    $('#origui').hidden = true; $('#dlorig').hidden = true;
     $('#offframe').hidden = true;
     setScope('whole');
     buildTargets(); renderModes(); paintCompose(); paintAlphaUI(); openStep(2);
@@ -606,7 +610,7 @@ async function uploadClip(f, trim, opts = {}) {
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = false;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
     $('#tinfo').hidden = true; $('#s5sum').textContent = '';
-    $('#outimg').hidden = true;
+    $('#outimg').hidden = true; $('#dlorig').hidden = true;
     buildFormats();
     if (S.P.mode === 'dots') setMode('bluenoise');
     showSteps('video'); setScope('whole');
@@ -2254,6 +2258,18 @@ async function composeAt(i, opts) {
   return new ImageData(out, S.W, S.H);
 }
 
+/** The clip's own frame `i`, at the render's size and nothing else done to it.
+ *  Deliberately composeAt() with the dither taken out: the same frameAt cache,
+ *  the same canvas, the same S.W x S.H — so frame i of the original cut is the
+ *  picture frame i of the dithered render was made from. */
+async function originalAt(i) {
+  const rec = await frameAt(i);
+  const c = ctx2d(S.W, S.H, 'exp');
+  c.clearRect(0, 0, S.W, S.H);
+  c.drawImage(rec.frame, 0, 0);
+  return c.getImageData(0, 0, S.W, S.H);
+}
+
 /* Whether "transparent background" is a question worth asking: only where the
  * picture has a flat background to remove. A whole-image dither covers every
  * pixel, so there is nothing to key out and the checkbox stays away. */
@@ -2292,6 +2308,7 @@ function composeStill(w, h, opts) {
 
 async function exportPNG() {
   const info = $('#rinfo'); info.hidden = true; info.textContent = '';
+  $('#dlorig').hidden = true;               // a still has no matched cut
   busy(true);
   await sleep(16);
   try {
@@ -2361,7 +2378,60 @@ function paintFormat() {
   $('#giffps').hidden = f.id !== 'gif';
   $('#bExport').textContent = S.kind === 'image' ? 'Download PNG'
     : 'Render ' + (f.ext || '').toUpperCase();
+  paintOriginalUI();
 }
+
+/* ---- the original cut ------------------------------------------------
+ * An export that is meant for an edit is a PAIR: the dithered render and the
+ * clip it was made from, cut to exactly the same frames. Video only — a still
+ * already has its source on disk — and only where the engine can write it (an
+ * older server has no /original route).
+ *
+ * Containers: the tab has no H.264 encoder, so the browser engine always pairs
+ * with WebM. The server follows the render's format where that means anything
+ * and falls back to MP4 where it does not: a GIF of the original would be
+ * decimated to gif_fps, and an alpha format has nothing to key out of footage
+ * nobody dithered.
+ */
+const ORIG_KEY = 'dither-studio.saveOriginal';
+const ORIGINAL_EXT = { mp4: 'mp4', webm: 'webm', gif: 'mp4',
+                       'webm-alpha': 'mp4', prores: 'mp4' };
+const originalOffered = () => S.kind === 'video'
+  && !!(E() && E().supports && E().supports.original);
+
+function originalExt() {
+  return E() && E().id === 'browser'
+    ? 'webm' : (ORIGINAL_EXT[currentFormat().id] || 'mp4');
+}
+
+function paintOriginalUI() {
+  const box = $('#origui');
+  if (!box) return;
+  box.hidden = !originalOffered();
+  $('#cOrig').checked = S.saveOriginal;
+  if (box.hidden) return;
+  const ext = originalExt(), f = currentFormat();
+  const reason = E().id === 'browser'
+    ? 'the tab has no other encoder.'
+    : (f.id === 'gif'
+      ? "a GIF of the original would be decimated to the GIF's frame rate, and "
+        + 'pairing a GIF with a GIF is pointless.'
+      : 'an alpha container has nothing to key out of footage nobody dithered.');
+  const swapped = ext !== f.ext
+    ? ` The ${(f.ext || '').toUpperCase()} pairs with an ${ext.toUpperCase()}: ${reason}`
+    : '';
+  $('#orignote').textContent =
+    `A second file beside the render — same trim, same frames, same size, same `
+    + `rate, no dither — so the two lay on top of each other in an edit.${swapped}`;
+}
+
+$('#cOrig').addEventListener('change', (e) => {
+  S.saveOriginal = e.target.checked;
+  try { sessionStorage.setItem(ORIG_KEY, S.saveOriginal ? '1' : '0'); } catch (err) { /* blocked */ }
+  paintOriginalUI();
+});
+try { S.saveOriginal = sessionStorage.getItem(ORIG_KEY) === '1'; } catch (e) { /* blocked */ }
+
 $('#sFmt').addEventListener('change', (e) => { S.format = e.target.value; paintFormat(); });
 $$('[data-gfps]').forEach((b) => b.addEventListener('click', () => {
   S.gifFps = +b.dataset.gfps;
@@ -2370,7 +2440,9 @@ $$('[data-gfps]').forEach((b) => b.addEventListener('click', () => {
 
 async function exportClip() {
   const btn = $('#bExport'); btn.disabled = true;
-  $('#dl').hidden = true; $('#outvid').hidden = true; $('#outimg').hidden = true;
+  $('#dl').hidden = true; $('#dlorig').hidden = true;
+  $('#dl').textContent = 'download';
+  $('#outvid').hidden = true; $('#outimg').hidden = true;
   const info = $('#rinfo'); info.hidden = true; info.textContent = '';
   const prog = $('#rprog'); prog.hidden = false;
   const bar = $('.bar i', prog), lab = $('span', prog);
@@ -2404,12 +2476,65 @@ async function exportClip() {
       + (r.bytes ? ` · ${(r.bytes / 1e6).toFixed(1)} MB` : '')
       + (r.note ? ` · ${r.note}` : '');
     $('#s5sum').textContent = 'ready';
+    if (S.saveOriginal && originalOffered()) {
+      box.textContent += ' · ' + await exportOriginalCut(params, r, prog, bar, lab);
+    }
   } catch (err) {
     prog.hidden = true;
     const box = $('#rinfo'); box.hidden = false; box.classList.add('err');
     box.textContent = 'render failed: ' + why(err);
   }
   btn.disabled = false;
+}
+
+/** The second file: the render's own frames, undithered.
+ *
+ *  Runs after the render, never instead of it — if this fails the dithered
+ *  export is still on the page and still downloadable, and the stat line says
+ *  what went wrong. The count is the assertion: the pair is only useful if it
+ *  is frame for frame, so a mismatch is an error rather than a note. The
+ *  server is told the same number and refuses on its side too.
+ */
+async function exportOriginalCut(params, r, prog, bar, lab) {
+  const want = S.nFrames;                 // the frames the render consumed
+  /* If the dither ran slower than real time the tab's recorder wrote a file at
+   * that slower rate (exportWebM says so in its note). The pair is only usable
+   * if both files carry the same rate, so the original is handed over at the
+   * pace the render actually achieved rather than at the clip's own — but only
+   * where the two files are the same kind of thing, since a GIF render is
+   * decimated to gif_fps and pairs with a full-rate video. The server engine
+   * encodes at a fixed -r and never needs any of this. */
+  const paced = r.frames === want && r.elapsedS ? (r.elapsedS * 1000) / r.frames : 0;
+  const realMs = 1000 / Math.max(1, S.fps);
+  try {
+    prog.hidden = false;
+    bar.style.width = '0%'; lab.textContent = 'the original cut…';
+    const o = await E().exportOriginal(
+      Object.assign({}, params, { expect_frames: want,
+                                  pace_ms: paced > realMs * 1.05 ? paced : 0 }),
+      (p) => {
+        bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
+        lab.textContent = 'original · ' + p.text;
+      },
+      originalAt);
+    prog.hidden = true;
+    if (o.frames !== want) {
+      throw new Error(`${o.frames} frames against the clip's ${want} — `
+        + 'the cut would not line up');
+    }
+    if (S.exportOrigURL) URL.revokeObjectURL(S.exportOrigURL);
+    S.exportOrigURL = o.url.startsWith('blob:') ? o.url : null;
+    const a = $('#dlorig');
+    a.href = o.url;
+    a.download = `${S.fileName || 'dither'}-${S.P.mode}.original.${o.ext}`;
+    a.hidden = false;
+    $('#dl').textContent = 'download the dithered';
+    return `original cut: ${o.frames} frames, ${o.ext.toUpperCase()}`
+      + (o.bytes ? `, ${(o.bytes / 1e6).toFixed(1)} MB` : '');
+  } catch (err) {
+    prog.hidden = true;
+    return 'the original cut failed: ' + why(err);
+  }
 }
 
 /* ================================================ dot data + sequences ===
@@ -4090,6 +4215,10 @@ async function checkModels() {
                               tried: S.engineTried });
   window.DV_switchEngine = switchEngine;
   window.DV_composeAt = composeAt;
+  /* the undithered frame the matched cut is made of — the verifiers compare
+     the exported original against this, which is the only ground truth the
+     browser engine has (the server has jobs/<id>/frames/ on disk) */
+  window.DV_originalAt = originalAt;
   window.DV_still = {
     segment: segmentStill, use: useStillSelection, doc: dotsDocStill,
     masks: () => Array.from(S.stillMasks.keys()),

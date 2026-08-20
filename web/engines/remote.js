@@ -43,6 +43,10 @@ export class RemoteEngine {
       // no 10 s / 300 frame ceiling. An old server still has one; the page
       // says so rather than pretending the estimate applies.
       uncapped: false,
+      // POST /api/jobs/<id>/original: the render's own frames, re-encoded
+      // without the dither. Older servers say nothing and the page hides the
+      // checkbox rather than offering a button that 404s.
+      original: false,
       // filled in from /api/palettes; this is what a server too old to
       // advertise formats can be assumed to do
       formats: [{ id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', mime: 'video/mp4',
@@ -82,6 +86,7 @@ export class RemoteEngine {
     this.supports.reextract = !!this.probe.reextract;
     this.supports.extractProgress = !!this.probe.extract_progress;
     this.supports.uncapped = !!this.probe.uncapped;
+    this.supports.original = !!this.probe.original;
     return this;
   }
 
@@ -90,6 +95,7 @@ export class RemoteEngine {
     this.supports.stillSubjects = !!m.segment_image;
     if (m.reextract !== undefined) this.supports.reextract = !!m.reextract;
     if (m.uncapped !== undefined) this.supports.uncapped = !!m.uncapped;
+    if (m.original !== undefined) this.supports.original = !!m.original;
     if (m.extract_progress !== undefined) {
       this.supports.extractProgress = !!m.extract_progress;
     }
@@ -335,6 +341,31 @@ export class RemoteEngine {
       if (st.state === 'error') throw new Error(st.error);
       await sleep(300);
     }
+  }
+
+  /* ------------------------------------------------------- original cut
+   * The same frames the render just consumed, re-encoded without the dither.
+   * The server has them on disk under the job id, so this ships no pixels
+   * either way — one POST, one file, and a frame count it refuses to fudge.
+   */
+  async exportOriginal(params, onProgress) {
+    if (onProgress) {
+      onProgress({ done: 0, total: 1, text: 'encoding the original cut…' });
+    }
+    const r = await this.api(this.jobPath('/original'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format: params.format || 'mp4',
+                             fps: params.fps || null,
+                             expect_frames: params.expect_frames || null }),
+    });
+    const path = this.jobPath('/original/' + r.format);
+    let url = this.url(path) + '?t=' + Date.now();
+    if (this.apiKey) url = URL.createObjectURL(await this.blob(path));
+    if (onProgress) onProgress({ done: r.frames, total: r.frames, text: 'done' });
+    return { url, ext: r.ext, mime: (this.supports.formats.find((f) => f.id === r.format)
+                                     || {}).mime || 'video/mp4',
+             frames: r.frames, bytes: r.bytes, elapsedS: r.elapsed_s,
+             w: r.w, h: r.h, fps: r.fps, format: r.format, matched: !!r.matched };
   }
 
   /* --------------------------------------------------------- dot data */

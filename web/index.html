@@ -264,6 +264,14 @@
           </div>
           <div class="note" id="alphanote"></div>
         </div>
+        <div id="origui" hidden>
+          <div class="lbl"><span>The original</span></div>
+          <div class="chips">
+            <label class="chip cbx"><input type="checkbox" id="cOrig">
+              <span>also save the original (matched cut)</span></label>
+          </div>
+          <div class="note" id="orignote"></div>
+        </div>
         <div class="row"><button class="btn go" id="bExport">Export</button></div>
         <div id="dotsexp" hidden>
           <div class="lbl"><span>Dot data</span></div>
@@ -278,6 +286,7 @@
         <div id="rprog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
         <div id="rinfo" class="stat" hidden></div>
         <a id="dl" class="btn dl" hidden download>download</a>
+        <a id="dlorig" class="btn dl" hidden download>download the original cut</a>
         <video id="outvid" hidden controls loop playsinline></video>
         <img id="outimg" hidden alt="exported GIF">
       </div>

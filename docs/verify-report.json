@@ -1,96 +1,128 @@
 {
- "base": "http://127.0.0.1:8899",
+ "base": "http://127.0.0.1:8791",
  "clip": "/Users/kevincvetezar/dither-video/sample.mp4",
  "still": "/Users/kevincvetezar/dither-video/sample.jpg",
  "consoleErrors": [],
  "pageErrors": [],
  "requestFailures": [
   {
-   "url": "blob:http://127.0.0.1:8899/733530e3-d8e8-4544-adb2-f389f25767f4",
+   "url": "blob:http://127.0.0.1:8791/0f6ad98a-c3b0-4e7b-a956-23255692867d",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/b9d806d4d5af/output/mp4?t=1787241669658",
+   "url": "http://127.0.0.1:8791/api/jobs/9ee1d9826fcc/output/mp4?t=1787248694745",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/34c745fc-5aa5-4daa-b5d5-6f190835fde2",
+   "url": "blob:http://127.0.0.1:8791/0adf246d-8f32-48af-9671-ec45e49f7f0d",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/a5841fc2-1572-4da2-833d-2a750a819db1",
+   "url": "http://127.0.0.1:8791/api/jobs/29fb67385a9c/output/mp4?t=1787248719747",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/34c745fc-5aa5-4daa-b5d5-6f190835fde2",
+   "url": "http://127.0.0.1:8791/api/jobs/29fb67385a9c/output/mp4?t=1787248738507",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/046821b682fd/output/mp4?t=1787241693199",
+   "url": "http://127.0.0.1:8791/api/jobs/29fb67385a9c/output/mp4?t=1787248738507",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/046821b682fd/output/mp4?t=1787241711730",
+   "url": "blob:http://127.0.0.1:8791/0e15a0fc-ae37-4867-afd5-b8dd674782c9",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/046821b682fd/output/mp4?t=1787241711730",
+   "url": "blob:http://127.0.0.1:8791/7b4c3efd-d921-416f-9dc4-d481084fa631",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/fd08b68b-ec19-40ad-a219-bbb3cac51788",
+   "url": "blob:http://127.0.0.1:8791/7b4c3efd-d921-416f-9dc4-d481084fa631",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/5093fff30763/output/mp4?t=1787241748957",
+   "url": "http://127.0.0.1:8791/api/jobs/3f4420eb603f/output/mp4?t=1787248768193",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/5093fff30763/output/webm?t=1787241752557",
+   "url": "http://127.0.0.1:8791/api/jobs/3f4420eb603f/output/webm?t=1787248772216",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/5093fff30763/output/webm-alpha?t=1787241760788",
+   "url": "http://127.0.0.1:8791/api/jobs/3f4420eb603f/output/webm-alpha?t=1787248780136",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/e8602700-cd24-442c-8a5b-82cc7520a82a",
+   "url": "blob:http://127.0.0.1:8791/e63ed602-b834-4698-ab8e-a423560c729c",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/e8602700-cd24-442c-8a5b-82cc7520a82a",
+   "url": "blob:http://127.0.0.1:8791/909c2331-db4c-4553-ba2b-0ba193afbb7b",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/ceac1142-0577-4283-87a5-8007601c092d",
+   "url": "http://127.0.0.1:8791/api/jobs/5f863ea23911/output/mp4?t=1787248796908",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/ceac1142-0577-4283-87a5-8007601c092d",
+   "url": "http://127.0.0.1:8791/api/jobs/5f863ea23911/output/mp4?t=1787248796908",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/2ee8ae4f8f56/output/mp4?t=1787241913114",
+   "url": "blob:http://127.0.0.1:8791/7d665630-8d6b-400e-85b0-f736e9100f2a",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/70c0b055-a490-489a-b1ab-48aa8aaf8454",
+   "url": "blob:http://127.0.0.1:8791/a9333b5c-eec5-45c7-b383-989235793cc4",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/256abe6b-ab7f-4e0c-aa0a-e5ff2ca6de01",
+   "url": "blob:http://127.0.0.1:8791/a9333b5c-eec5-45c7-b383-989235793cc4",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8899/256abe6b-ab7f-4e0c-aa0a-e5ff2ca6de01",
+   "url": "blob:http://127.0.0.1:8791/7d665630-8d6b-400e-85b0-f736e9100f2a",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/89358f3bb301/output/mp4?t=1787241946573",
+   "url": "blob:http://127.0.0.1:8791/84e739c9-53f5-4fa1-8e1d-76969664e828",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8899/api/jobs/89358f3bb301/output/mp4?t=1787241946573",
+   "url": "blob:http://127.0.0.1:8791/d4beefcc-1c1d-434b-8ec8-ccac286d207b",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "blob:http://127.0.0.1:8791/d4beefcc-1c1d-434b-8ec8-ccac286d207b",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8791/api/jobs/751552cf4b16/output/mp4?t=1787248930836",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "blob:http://127.0.0.1:8791/69344e77-5304-4b33-b8cb-13514bc0b956",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "blob:http://127.0.0.1:8791/63592dd8-b2d3-451d-8938-e8588ddadb47",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "blob:http://127.0.0.1:8791/63592dd8-b2d3-451d-8938-e8588ddadb47",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8791/api/jobs/acb3b7618ef4/output/mp4?t=1787248963955",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8791/api/jobs/acb3b7618ef4/output/mp4?t=1787248963955",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8791/api/jobs/acb3b7618ef4/output/mp4?t=1787248963955",
    "why": "net::ERR_ABORTED"
   }
  ],
@@ -255,7 +287,7 @@
    "exportedProbe": "1280,720"
   },
   "stillDots": {
-   "fps": "1280×720 · 38 ms · 31500 dots",
+   "fps": "1280×720 · 36 ms · 31500 dots",
    "dots": 31500,
    "census": {
     "w": 1280,
@@ -296,9 +328,9 @@
    ],
    "promptFrameHidden": true,
    "trackButton": "Use this selection",
-   "info": "1 subject in 0.07 s (768 px) · #1 12750 px",
-   "liveSeconds": 0.6,
-   "segmentSeconds": 0.07,
+   "info": "1 subject in 0.08 s (768 px) · #1 12750 px",
+   "liveSeconds": 5.1,
+   "segmentSeconds": 0.08,
    "areas": {
     "1": 12750
    },
@@ -344,7 +376,7 @@
      ]
     ]
    },
-   "dotsFps": "1280×720 · 36 ms · 712 dots",
+   "dotsFps": "1280×720 · 30 ms · 712 dots",
    "subjectDots": 712,
    "alphaUiShown": true,
    "export": "1280×720 PNG · 27 KB · 712 dots · 1 subject, cutout · transparent background",
@@ -358,7 +390,7 @@
   },
   "whole": {
    "source": "150 frames · 1280×720 · 30 fps · 5.0 s",
-   "job": "b9d806d4d5af",
+   "job": "9ee1d9826fcc",
    "preview": {
     "w": 1280,
     "h": 720,
@@ -382,7 +414,7 @@
      ]
     ]
    },
-   "previewFps": "56.2 fps",
+   "previewFps": "56.5 fps",
    "previewFrame20": {
     "w": 1280,
     "h": 720,
@@ -415,7 +447,7 @@
    }
   },
   "tracked": {
-   "job": "046821b682fd",
+   "job": "29fb67385a9c",
    "subjectChips": [
     "#1 · 1pt+box @ 0✕",
     "#2 · 1pt+box @ 0✕"
@@ -438,14 +470,14 @@
     }
    ],
    "qualityDefault": 768,
-   "trackInfo": "tracked 150 frames in 12.4 s (12.1 fps) on MPS coreml · 2 subjects",
-   "trackWallSeconds": 12.6,
+   "trackInfo": "tracked 150 frames in 13.4 s (11.2 fps) on MPS coreml · 2 subjects",
+   "trackWallSeconds": 14.1,
    "status": {
     "state": "done",
     "done_frames": 150,
     "n_frames": 150,
-    "elapsed_s": 12.44,
-    "fps": 12.06,
+    "elapsed_s": 13.42,
+    "fps": 11.18,
     "error": null,
     "device": "mps",
     "backend": "coreml",
@@ -489,8 +521,8 @@
      ]
     ]
    },
-   "dotsFps": "40.3 fps · 3989 dots",
-   "dotsRender": "rendered 150 frames in 4.0 s (37.4 fps) · 0.6 MB",
+   "dotsFps": "38.5 fps · 3989 dots",
+   "dotsRender": "rendered 150 frames in 4.1 s (36.9 fps) · 0.6 MB",
    "dotsProbe": {
     "width": 1280,
     "height": 720,
@@ -541,7 +573,7 @@
      ]
     ]
    },
-   "mixedRender": "rendered 150 frames in 12.3 s (12.3 fps) · 27.5 MB",
+   "mixedRender": "rendered 150 frames in 12.5 s (12.0 fps) · 27.5 MB",
    "mixedProbe": {
     "width": 1280,
     "height": 720,
@@ -555,14 +587,14 @@
    }
   },
   "trackedFast": {
-   "job": "5093fff30763",
+   "job": "3f4420eb603f",
    "selected": 512,
-   "trackInfo": "tracked 150 frames in 14.7 s (10.2 fps) on MPS coreml · 1 subject",
-   "trackWallSeconds": 15.1,
+   "trackInfo": "tracked 150 frames in 9.6 s (15.6 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 10.1,
    "imageSize": 512,
    "backend": "coreml",
    "doneFrames": 150,
-   "fps": 10.2,
+   "fps": 15.57,
    "maskBytes": 7260,
    "maskSize": [
     1280,
@@ -591,7 +623,7 @@
   "formats": {
    "formats": {
     "mp4": {
-     "seconds": 4.2,
+     "seconds": 3.7,
      "bytes": 432303,
      "probe": {
       "codec_name": "h264",
@@ -602,7 +634,7 @@
       "nb_read_frames": "150",
       "tags": {}
      },
-     "info": "rendered 150 frames in 3.5 s (42.2 fps) · 0.4 MB"
+     "info": "rendered 150 frames in 2.9 s (51.6 fps) · 0.4 MB"
     },
     "webm": {
      "seconds": 3.7,
@@ -616,7 +648,7 @@
       "nb_read_frames": "150",
       "tags": {}
      },
-     "info": "rendered 150 frames in 3.0 s (49.6 fps) · 0.4 MB"
+     "info": "rendered 150 frames in 3.1 s (49.0 fps) · 0.4 MB"
     },
     "gif": {
      "seconds": 3.6,
@@ -629,7 +661,7 @@
       "r_frame_rate": "15/1",
       "nb_read_frames": "75"
      },
-     "info": "rendered 150 frames in 3.1 s (48.0 fps) · 0.2 MB"
+     "info": "rendered 150 frames in 3.0 s (50.7 fps) · 0.2 MB"
     },
     "webm-alpha": {
      "seconds": 4.2,
@@ -648,7 +680,7 @@
      "info": "rendered 150 frames in 3.8 s (39.4 fps) · 0.8 MB · alpha channel written"
     },
     "prores": {
-     "seconds": 5.3,
+     "seconds": 5,
      "bytes": 19711207,
      "probe": {
       "codec_name": "prores",
@@ -659,10 +691,10 @@
       "nb_read_frames": "150",
       "tags": {}
      },
-     "info": "rendered 150 frames in 3.4 s (43.9 fps) · 19.7 MB · ProRes 4444 does not play in a browser — download it"
+     "info": "rendered 150 frames in 3.4 s (44.1 fps) · 19.7 MB · ProRes 4444 does not play in a browser — download it"
     }
    },
-   "job": "5093fff30763",
+   "job": "3f4420eb603f",
    "offered": [
     {
      "available": true,
@@ -726,7 +758,7 @@
   },
   "trim": {
    "whole": {
-    "job": "368e66726999",
+    "job": "1ff5fde4720b",
     "n_frames": 150,
     "w": 1280,
     "h": 720,
@@ -738,7 +770,7 @@
     "dots_max_frames": 65535
    },
    "middle": {
-    "job": "9c776d957c90",
+    "job": "9a173ef79f71",
     "n_frames": 60,
     "w": 1280,
     "h": 720,
@@ -750,7 +782,7 @@
     "dots_max_frames": 65535
    },
    "legacyFieldsIgnored": {
-    "job": "1636a83fa274",
+    "job": "4c679c9763bb",
     "n_frames": 150,
     "w": 1280,
     "h": 720,
@@ -763,7 +795,7 @@
    },
    "firstFrameMeanAbsDiff": 0,
    "uncapped": {
-    "job": "f77dc4c19052",
+    "job": "4b4b7263d013",
     "n_frames": 900,
     "w": 1280,
     "h": 720,
@@ -774,9 +806,9 @@
     "seconds": 30,
     "dots_max_frames": 65535
    },
-   "uncappedExtractS": 0.9,
+   "uncappedExtractS": 0.7,
    "reextract": {
-    "job": "a57bfc21b30c",
+    "job": "5e09b4f8fc98",
     "n_frames": 45,
     "w": 1280,
     "h": 720,
@@ -790,7 +822,7 @@
    "recutFirstFrameMeanAbsDiff": 0,
    "sourceShared": true,
    "pastEnd": {
-    "job": "f8c7d5f02f68",
+    "job": "7a18abb69612",
     "n_frames": 30,
     "w": 1280,
     "h": 720,
@@ -803,9 +835,9 @@
    }
   },
   "dots": {
-   "job": "5093fff30763",
+   "job": "3f4420eb603f",
    "stats": {
-    "job": "5093fff30763",
+    "job": "3f4420eb603f",
     "frames": 150,
     "bytes": 69703,
     "raw_bytes": 362047,
@@ -820,10 +852,10 @@
     ],
     "dots_mean": 1184.6,
     "dots_max": 2300,
-    "elapsed_s": 2.27,
-    "url": "/api/jobs/5093fff30763/out.dots.gz",
+    "elapsed_s": 2.07,
+    "url": "/api/jobs/3f4420eb603f/out.dots.gz",
     "json_bytes": 1753313,
-    "json_url": "/api/jobs/5093fff30763/out.dots.json"
+    "json_url": "/api/jobs/3f4420eb603f/out.dots.json"
    },
    "mp4Bytes": 432303,
    "sizes": {
@@ -842,14 +874,14 @@
     ]
    },
    "sequence": {
-    "sequence": "seq-94989035a5",
+    "sequence": "seq-b9401d65bd",
     "frames": 150,
     "w": 1280,
     "h": 720,
     "format": "mp4",
     "bytes": 432303,
-    "elapsed_s": 0.77,
-    "url": "/api/sequence/seq-94989035a5/output/mp4"
+    "elapsed_s": 0.74,
+    "url": "/api/sequence/seq-b9401d65bd/output/mp4"
    },
    "sequenceProbe": {
     "width": 1280,
@@ -858,21 +890,66 @@
     "nb_read_frames": "150"
    }
   },
+  "original": {
+   "job": "5f863ea23911",
+   "nFrames": 60,
+   "checkboxOffered": true,
+   "info": "rendered 60 frames in 2.7 s (22.1 fps) · 2.4 MB · original cut: 60 frames, MP4, 1.2 MB",
+   "dithered": {
+    "codec_name": "h264",
+    "width": 1280,
+    "height": 720,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "30/1",
+    "nb_read_frames": "60",
+    "tags": {}
+   },
+   "original": {
+    "codec_name": "h264",
+    "width": 1280,
+    "height": 720,
+    "pix_fmt": "yuvj420p",
+    "r_frame_rate": "30/1",
+    "nb_read_frames": "60",
+    "tags": {}
+   },
+   "frameMeanAbsDiff": {
+    "0": 0.688,
+    "30": 1.107,
+    "59": 0.896
+   },
+   "downloadName": "dither-5f863ea23911.original.mp4",
+   "downloadBytes": 1227987,
+   "mismatchStatus": 409,
+   "gifInfo": "rendered 60 frames in 2.8 s (21.7 fps) · 0.7 MB · original cut: 60 frames, MP4, 1.2 MB",
+   "gifPairName": "sample-ordered.original.mp4",
+   "gifOriginal": {
+    "codec_name": "h264",
+    "width": 1280,
+    "height": 720,
+    "pix_fmt": "yuvj420p",
+    "r_frame_rate": "30/1",
+    "nb_read_frames": "60",
+    "tags": {}
+   },
+   "rememberedAcrossReload": true,
+   "hiddenForStills": true
+  },
   "lasso": {
-   "job": "c1dd1dba6885",
-   "boxPreviewText": "frame 0 · 1 subject in 3.92 s (768 px) · #1 12767 px",
-   "boxPreviewWallSeconds": 4.04,
+   "job": "d212318961c0",
+   "boxPreviewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12767 px",
+   "boxPreviewWallSeconds": 0.52,
    "boxPreviewOverlay": 1,
    "shapes": [
     27
    ],
    "maskDataURLBytes": 36138,
-   "lassoPreviewText": "frame 0 · 1 subject in 0.34 s (768 px) · #1 12093 px",
-   "lassoPreviewWallSeconds": 0.54,
-   "trackInfo": "tracked 150 frames in 13.8 s (10.8 fps) on MPS coreml · 1 subject",
-   "trackWallSeconds": 14.2,
+   "lassoPreviewText": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12093 px",
+   "lassoPreviewWallSeconds": 0.53,
+   "trackInfo": "tracked 150 frames in 9.5 s (15.7 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 10.1,
    "doneFrames": 150,
-   "fps": 10.84,
+   "fps": 15.73,
    "backend": "coreml",
    "promptRecorded": {
     "frame_idx": 0,
@@ -977,9 +1054,9 @@
     "slowTotal": 2.838,
     "fastTotal": 1
    },
-   "job": "2ee8ae4f8f56",
-   "trackInfo": "tracked 150 frames in 10.9 s (13.7 fps) on MPS coreml · 1 subject",
-   "dotsOff": "66.7 fps · 782 dots",
+   "job": "751552cf4b16",
+   "trackInfo": "tracked 150 frames in 9.4 s (15.9 fps) on MPS coreml · 1 subject",
+   "dotsOff": "65.8 fps · 782 dots",
    "rowsBefore": [
     "#1off"
    ],
@@ -995,7 +1072,7 @@
      "polish": 70
     }
    ],
-   "dotsOn": "30.6 fps · 923 dots",
+   "dotsOn": "26.0 fps · 923 dots",
    "maskParity": {
     "pixels": 921600,
     "lit": 19008,
@@ -1009,7 +1086,7 @@
     "leftColours": 33,
     "rightColours": 1
    },
-   "render": "rendered 150 frames in 2.9 s (52.2 fps) · 0.5 MB",
+   "render": "rendered 150 frames in 3.0 s (50.3 fps) · 0.5 MB",
    "renderWallSeconds": 3.5,
    "probe": {
     "width": 1280,
@@ -1031,25 +1108,25 @@
     "max_age_days": 14,
     "keep_hours": 48,
     "every_h": 6,
-    "usage_bytes": 829604865,
-    "usage_mb": 791.2,
-    "jobs": 84,
+    "usage_bytes": 1516269322,
+    "usage_mb": 1446,
+    "jobs": 136,
     "over_budget": false,
     "last_run": {
-     "at": 1787241510.457035,
-     "reason": "manual",
+     "at": 1787248603.198424,
+     "reason": "startup",
      "deleted": [],
      "trimmed": [],
      "freed_bytes": 0,
-     "usage_bytes": 631717611,
-     "usage_before_bytes": 631717611,
-     "jobs": 71,
-     "protected": 71,
-     "elapsed_s": 0.076
+     "usage_bytes": 1305764795,
+     "usage_before_bytes": 1305764795,
+     "jobs": 122,
+     "protected": 122,
+     "elapsed_s": 0.489
     },
-    "next_run_in_s": 21119
+    "next_run_in_s": 21261
    },
-   "line": "storage: 791 MB · 84 jobs",
+   "line": "storage: 1.4 GB · 136 jobs",
    "barVisible": true,
    "run": {
     "enabled": true,
@@ -1057,12 +1134,12 @@
     "max_age_days": 14,
     "keep_hours": 48,
     "every_h": 6,
-    "usage_bytes": 830657949,
-    "usage_mb": 792.2,
-    "jobs": 87,
+    "usage_bytes": 1517322406,
+    "usage_mb": 1447,
+    "jobs": 139,
     "over_budget": false,
     "last_run": {
-     "at": 1787241923.999302,
+     "at": 1787248942.503937,
      "reason": "manual",
      "deleted": [
       "gcfake-old",
@@ -1073,15 +1150,15 @@
       "gcfake-photo"
      ],
      "freed_bytes": 1913009,
-     "usage_bytes": 830657839,
-     "usage_before_bytes": 832570848,
-     "jobs": 87,
-     "protected": 85,
-     "elapsed_s": 0.092
+     "usage_bytes": 1517322296,
+     "usage_before_bytes": 1519235305,
+     "jobs": 139,
+     "protected": 137,
+     "elapsed_s": 0.151
     },
-    "next_run_in_s": 21119,
+    "next_run_in_s": 21261,
     "ran": {
-     "at": 1787241923.999302,
+     "at": 1787248942.503937,
      "reason": "manual",
      "deleted": [
       "gcfake-old",
@@ -1092,11 +1169,11 @@
       "gcfake-photo"
      ],
      "freed_bytes": 1913009,
-     "usage_bytes": 830657839,
-     "usage_before_bytes": 832570848,
-     "jobs": 87,
-     "protected": 85,
-     "elapsed_s": 0.092
+     "usage_bytes": 1517322296,
+     "usage_before_bytes": 1519235305,
+     "jobs": 139,
+     "protected": 137,
+     "elapsed_s": 0.151
     }
    },
    "freedBytes": 1913009,
@@ -1108,10 +1185,10 @@
     "gcfake-cam",
     "gcfake-photo"
    ],
-   "job": "89358f3bb301",
-   "trackInfo": "tracked 150 frames in 10.2 s (14.7 fps) on MPS coreml · 1 subject",
-   "render": "rendered 150 frames in 9.6 s (15.7 fps) · 0.8 MB",
-   "sweepsDuringFlow": 12,
+   "job": "acb3b7618ef4",
+   "trackInfo": "tracked 150 frames in 9.3 s (16.2 fps) on MPS coreml · 1 subject",
+   "render": "rendered 150 frames in 9.1 s (16.4 fps) · 0.8 MB",
+   "sweepsDuringFlow": 10,
    "stamped": true,
    "probe": {
     "width": 1280,
@@ -1119,30 +1196,30 @@
     "r_frame_rate": "30/1",
     "nb_read_frames": "150"
    },
-   "lineAfter": "storage: 802 MB · 85 jobs",
+   "lineAfter": "storage: 1.4 GB · 137 jobs",
    "after": {
     "enabled": true,
     "budget_mb": 2048,
     "max_age_days": 14,
     "keep_hours": 48,
     "every_h": 6,
-    "usage_bytes": 841064158,
-    "usage_mb": 802.1,
-    "jobs": 85,
+    "usage_bytes": 1530402287,
+    "usage_mb": 1459.5,
+    "jobs": 137,
     "over_budget": false,
     "last_run": {
-     "at": 1787241948.027443,
+     "at": 1787248965.30234,
      "reason": "manual",
      "deleted": [],
      "trimmed": [],
      "freed_bytes": 0,
-     "usage_bytes": 841064158,
-     "usage_before_bytes": 841064158,
-     "jobs": 85,
-     "protected": 85,
-     "elapsed_s": 0.099
+     "usage_bytes": 1530402287,
+     "usage_before_bytes": 1530402287,
+     "jobs": 137,
+     "protected": 137,
+     "elapsed_s": 0.185
     },
-    "next_run_in_s": 21095
+    "next_run_in_s": 21238
    }
   }
  },

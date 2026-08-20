@@ -503,6 +503,7 @@ def api_meta():
             "reextract": True,         # POST /api/jobs/<id>/reextract
             "extract_progress": True,  # GET /api/extract/<ticket>
             "gc": True,                # GET /api/gc/status, POST /api/gc/run
+            "original": True,          # POST /api/jobs/<id>/original
             "dots_max_frames": DOTS_MAX_FRAMES,
             "formats": list(R.FORMATS)}
 
@@ -535,6 +536,7 @@ def palettes():
         "reextract": True,
         "extract_progress": True,
         "gc": True,
+        "original": True,
         "dots_max_frames": DOTS_MAX_FRAMES,
         "jpeg_bytes_per_frame": JPEG_BYTES_PER_FRAME,
         "decode_height": DECODE_HEIGHT,
@@ -1142,6 +1144,72 @@ def _render_worker(jid, d, subs, params):
         with _state_lock:
             _jobs[jid]["render"].update(state="error",
                                         error="%s: %s" % (type(e).__name__, e))
+
+
+class OriginalReq(BaseModel):
+    """The matched cut: the render's own frames, re-encoded without the dither.
+
+    `format` is the format the RENDER asked for -- the original follows it
+    where that makes sense and falls back to MP4 where it does not (see
+    render.ORIGINAL_FORMAT). `expect_frames` is the render's frame count; when
+    it is sent and does not match what is on disk, this refuses rather than
+    writing a file that would not line up.
+    """
+    format: str = "mp4"
+    fps: int | None = None
+    expect_frames: int | None = None
+
+
+@app.post("/api/jobs/{jid}/original")
+def export_original(jid: str, req: OriginalReq):
+    """Write out.original.<ext> beside the render: the same frames, undithered.
+
+    Synchronous, like /dots and for the same reason -- there is nothing to
+    compute, only JPEGs to decode and hand to ffmpeg, which runs at hundreds of
+    frames a second.
+    """
+    d = job_dir(jid)
+    meta = read_meta(jid)
+    if req.format not in R.FORMATS:
+        raise HTTPException(400, "format must be one of %s" % list(R.FORMATS))
+    frames_dir = os.path.join(d, "frames")
+    have = R.count_frames(frames_dir) if os.path.isdir(frames_dir) else 0
+    if not have:
+        raise HTTPException(404, "this job has no frames to cut from")
+    if req.expect_frames is not None and int(req.expect_frames) != have:
+        raise HTTPException(409, "the render used %d frames and the clip has %d — "
+                                 "the original cut would not line up"
+                                 % (int(req.expect_frames), have))
+    fps = int(req.fps or meta.get("fps", 30))
+    fmt = R.original_format(req.format)
+    out = os.path.join(d, R.original_file(req.format))
+    t0 = time.perf_counter()
+    info = R.render_original(frames_dir, out, {"format": req.format, "fps": fps})
+    el = time.perf_counter() - t0
+    print("[original] %s: %d frames -> %s in %.1fs (%.1f MB)"
+          % (jid, info["frames"], fmt, el, info.get("bytes", 0) / 1e6), flush=True)
+    return {"job": jid, "frames": info["frames"], "w": info["w"], "h": info["h"],
+            "fps": fps, "format": fmt, "ext": R.FORMATS[fmt]["ext"],
+            "bytes": info["bytes"], "elapsed_s": round(el, 2),
+            "matched": fmt == req.format,
+            "url": "/api/jobs/%s/original/%s" % (jid, fmt)}
+
+
+@app.get("/api/jobs/{jid}/original/{fmt}")
+def get_original(jid: str, fmt: str):
+    """The matched cut for one format. `fmt` is the ORIGINAL's format, which
+    is what POST /original hands back in its `url`."""
+    if fmt not in R.FORMATS:
+        raise HTTPException(400, "unknown format %r" % fmt)
+    f = R.FORMATS[fmt]
+    p = os.path.join(job_dir(jid), R.original_file(fmt))
+    if not os.path.exists(p):
+        raise HTTPException(404, "no original cut yet")
+    return FileResponse(p, media_type=f["mime"], headers={
+        # the pair, named as a pair: dither-<id>.mp4 / dither-<id>.original.mp4
+        "Content-Disposition": 'inline; filename="dither-%s.original.%s"'
+                               % (jid, f["ext"]),
+        "Accept-Ranges": "bytes"})
 
 
 class DotsReq(BaseModel):
