@@ -5,7 +5,7 @@
  * loads it for its side effect and re-exports the global it publishes. Both
  * halves are the same object — there is one implementation.
  *
- *   import { Player, buildMorph } from './dither-player.mjs';
+ *   import { Player, buildTransition } from './dither-player.mjs';
  */
 import './dither-player.js';
 
@@ -13,7 +13,8 @@ const P = globalThis.DitherPlayer;
 
 export const {
   Player, encode, decode, gzip, gunzip, pack, unpack, toJSON, fromJSON,
-  paintFrame, buildMorph, buildSequence, hilbertOrder, hexRGB,
+  paintFrame, buildMorph, morphPairs, scatterPairs, densityPairs, regrid,
+  buildTransition, TRANSITIONS, buildSequence, hilbertOrder, hexRGB,
   easeInOut, mulberry32, version,
 } = P;
 

@@ -107,7 +107,8 @@ a CUDA box, with `DV_API_KEY` set. See *Hosting a paid backend* below.
 ```
 
 ```
-web/            the deployable page. engines/, dither.js, track.js, models/
+web/            the deployable page. engines/, dither.js, polish.js, track.js,
+                player/, models/
 server/         the optional accelerator. FastAPI + numpy + the C dither loop
 coreml/         EdgeTAM -> CoreML: traceable wrappers, exporter, live-swap accel
 onnxexport/     EdgeTAM -> ONNX: the five graphs the browser engine runs
@@ -115,7 +116,7 @@ bench/          tracking benchmarks, stage profiler, the resolution A/B
 verify.mjs      headless end-to-end check, server engine
 verify-web.mjs  headless end-to-end check, browser engine + the engine seam
 env/            venv, EdgeTAM checkout, checkpoint, libcdither, CoreML  (ignored)
-jobs/<id>/      source, frames/, masks/<obj>/, out.mp4                  (ignored)
+jobs/<id>/      source, frames/, masks/<obj>/, polish/, out.mp4        (ignored)
                 a still is the same thing with one frame in it and no source
 docs/           verification screenshots, reports, the tracking test clip
 ```
@@ -139,8 +140,14 @@ rather than silently re-uploading.
 
 ## What you can do
 
-Drop **an image** or **a clip** (or paste one). The steps adapt to what you gave
-it, and to which engine is live.
+The page has two views, and the header switches between them:
+
+* **Studio** — drop **an image** or **a clip** (or paste one), point at what you
+  want isolated, choose a look and a palette, export. The steps adapt to what you
+  gave it and to which engine is live. Everything below, up to *Export*.
+* **Sequence** — a strip of dot clouds with a transition between each pair. It
+  draws on everything the studio has produced this session and outlives any one
+  clip. See [Sequences](#sequences).
 
 ### 1 · Source
 Images stay in the tab on either engine — they are never uploaded. Clips are
@@ -465,26 +472,90 @@ clip: `.dots.gz` is the dots themselves — every dot's integer position on ever
 frame — and `.dots.json` is the same numbers in readable form. See
 [Dot data, the player and morphs](#dot-data-the-player-and-morphs).
 
-### 6 · Sequence
-One swarm changing shape. Capture a segment from the clip you have tracked (a
-subject, a start frame, a length), add another from a *different* clip, drop in a
-static shape, and the step morphs each into the next.
+## Sequences
 
-* **capture segment** takes the current subject from the frame the transport is
-  on. The library survives loading another clip, which is the whole point: clip
-  A's athlete can morph into clip B's tennis player.
-* **static shapes** — a built-in ring or coral, or any image you pick — are
-  rasterised into dots through the same pipeline a clip is: drawn dark on light,
-  handed to the dots renderer with a full-frame mask. A ring is dithered, not
-  plotted.
-* **morph** sets the transition length (900 ms by default).
-* **preview** plays the whole thing in the player, on the stage.
-* **.dots.gz** exports the sequence as data; **render video** turns it into a
-  file — MP4 on the server, WebM in the tab.
+A sequence is a strip of dot clouds and the transitions between them. It is a
+**view, not a step**: the header switches to it, it keeps everything captured
+this session, and it survives loading another clip — which is the whole point,
+because a morph from one clip into another needs both and only one can be open
+at a time.
 
-A sequence is deliberately not a timeline: one subject track, one global palette,
-segments and shapes in order. That is enough for "the runner dissolves into the
-logo" and it keeps the format a list of dots rather than a project file.
+![the sequence view: four items, three joins](docs/seq-flow-2-join.png)
+
+### The strip
+Items sit in order, with a **join** between each pair. Drag a card to reorder it
+(the join travels with the item that follows it); click a card or a join to
+change it in the panel.
+
+**+ add** offers, in this order:
+
+* **this clip** — every tracked subject of the clip open in the studio, at the
+  current look, as one item with one track per subject;
+* **this still** — the picture open in the studio, as dots: the subjects cut out
+  of it if any are selected, otherwise the whole frame;
+* **ring**, **coral**, **image…** — static shapes, rasterised into dots through
+  the same pipeline a clip is (drawn dark on light, handed to the dots renderer
+  with a full-frame mask). A ring is dithered, not plotted;
+* **everything captured this session**, so an item can go in twice.
+
+**upload or record something new…** goes back to the studio to bring a source
+in; the header then carries a **→ add to the sequence** button back.
+
+Per item: which **subject** (one, or all of them), **in/out** for a clip, **hold**
+for a still or a shape, and a **colour** — its captured subject colour unless you
+override it.
+
+An item is a snapshot of dot positions taken at the look that was on when it was
+captured — dot count, cell, tone, and the [mask polish](#mask-polish) if the
+subject had it. Changing the look in the studio afterwards does not reach back
+into it; add the clip again for that.
+
+### Transitions
+Four kinds, per join, with a length in milliseconds (900 by default). Click the
+join to choose one; shift-click cycles.
+
+| | what it does |
+|---|---|
+| **morph** | the dot flight: both clouds sorted by Hilbert index and paired rank for rank, staggered, with a perpendicular curl. 900 ms = 37 frames at 30 fps |
+| **scatter** | no pairing at all — A's dots are thrown outwards on a random heading with gravity under them and vanish one by one while B's dots come in from scattered positions and settle. 900 ms = 27 frames |
+| **cut** | nothing between the two items. 0 frames |
+| **density fade** | A snaps to a grid twice the dot cell, then four times, becomes B at that coarseness, and refines back down — five short morphs over progressively smaller dot sets. The picture dissolves into its own resolution rather than flying across the frame. 900 ms = 30 frames |
+
+Colour is carried **through** a transition rather than switched at the end of it:
+a dot that has a partner changes hands at the halfway point of its own flight,
+and the flights are staggered, so a red swarm becoming a green one changes colour
+the way it changes shape. Dots with no partner belong to the side they exist on.
+
+![a morph mid-flight, red handing over to green](docs/seq-flow-3-preview.png)
+
+### The look, and getting it out
+One background, one dot size for the whole strip, plus a palette preset that
+takes the background from the first colour and gives the items the rest in order.
+Per-subject colours inside an item are respected until you do that.
+
+* **preview** plays the whole sequence in the player, on the stage, with the
+  transport naming the item or transition under the playhead. Adding an item
+  rebuilds and plays it immediately.
+* **.dots.gz** is the whole sequence as dot positions — one `.dots` subject track
+  per distinct colour.
+* **render video** hands those same positions to the server (`/api/sequence`),
+  which rasterises them into any of the five formats. Without a server the tab
+  encodes it itself, through the *same* machinery a clip export uses — WebM, GIF
+  and alpha WebM, MP4 and ProRes greyed out with the reason.
+
+Because a sequence is dot positions and nothing else, it survives an engine
+switch: build it on the local server, then export it from the tab, or the other
+way round.
+
+![the whole sequence, fifteen frames of the rendered MP4](docs/seq-morph-sheet.png)
+
+Fifteen frames of the MP4 the verification run produces: the parkour athlete in
+red, a morph, the tennis player in green, a scatter, the photograph's subject in
+brown, a density fade, the ring in blue.
+
+A sequence is still not a timeline: items in order, one transition per join, one
+background. No layers, no easing curves, no audio. What it does have is a colour
+per item and four ways to get from one to the next.
 
 ## Dot data, the player and morphs
 
@@ -558,7 +629,7 @@ ways:
 ```
 
 ```js
-import { Player, buildMorph, buildSequence } from './dither-player.mjs';
+import { Player, buildTransition, buildSequence } from './dither-player.mjs';
 ```
 
 `web/player/demo.html` is a page around it: drop a file (or `?src=…`), scrub,
@@ -580,9 +651,13 @@ the other side of it. That is measured rather than hidden.
 Pro (worst 4.7 ms), i.e. about 500 fps of rasterisation. The demo page sustained
 **120 fps** in the verifier — twice the 60 fps the flagship check asks for.
 
-### Morphs
-`buildMorph(a, b, opts)` tweens one dot cloud into another; the image demo this
-came from is where the shape of it was worked out.
+### Transitions, in the player
+`buildTransition(a, b, {kind, durationMs, …})` takes one dot cloud to another and
+returns a list of `{a, b}` frames — the dots still reading as the outgoing cloud
+and the ones that have become the incoming one. That split is how a sequence
+carries a colour per item without a per-dot palette.
+
+**morph** is the original, from the image demo this came from:
 
 * **matching** — both clouds are sorted by Hilbert-curve index and paired rank
   for rank, so neighbours stay neighbours and the swarm flows instead of
@@ -593,17 +668,34 @@ came from is where the shape of it was worked out.
   makes it read as a dissolve rather than a cut.
 * **flight** — per-dot delay from noise plus a spatial wave, ease-in-out cubic,
   and a perpendicular curl that peaks mid-flight.
+* **colour** — a paired dot changes hands as it passes the halfway point of its
+  own flight; a partnerless dot belongs to the side it exists on.
 
 A 900 ms morph at 30 fps is 37 frames. Going from the parkour athlete (1,863
 dots) to the tennis player (6,446), the count climbs smoothly frame by frame:
 1863, 1873, 1903, 1956, 2051, … 6245, 6332, 6396, 6427, 6441, 6446.
 
+**scatter** does not match anything: every dot of A gets a random heading, a
+speed and a gravity, and gives up at its own moment; every dot of B starts from a
+scattered position of its own and eases in. A dot that leaves the frame is
+dropped rather than clamped — a clamped dot piles up against the edge and the
+edge lights up like a bar.
+
+**density fade** is a ladder rather than a flight. `regrid(xy, cell)` snaps a
+cloud to a coarser grid and lets the duplicates collapse — a 400-dot ring at cell
+16 is 87 dots that still read as a ring — and the transition walks A down two
+rungs, swaps to B at the coarsest one, and walks back up. Five short morphs over
+small clouds, which is both cheaper than one long morph over big ones and a
+different effect.
+
+**cut** returns no frames at all.
+
 **Where the tween runs.** In JS, always — in the page for a preview or a WebM,
 and in the page for an MP4 too: the finished dot positions are POSTed to
-`/api/sequence`, and the server rasterises what it is given. Porting the tween
-into `render.py` would have meant two implementations of the same easing, two
-RNGs and a parity gate to keep them honest; shipping positions means there is one
-morph. The server's half is 127 frames of squares in **0.73 s**.
+`/api/sequence`, and the server rasterises what it is given. Porting four
+transitions into `render.py` would have meant two implementations of the same
+easing, two RNGs and a parity gate to keep them honest; shipping positions means
+there is one of each. The server's half is 127 frames of squares in **0.73 s**.
 
 ## The two engines
 
@@ -778,10 +870,15 @@ before/after wipe, and preview against the exported MP4.
 
 `verify-web.mjs` drives the **browser engine** and the seam between the two: the
 auto probe and the manual switch, a still, whole-image dots on a still, a still
-subject **on both engines**, a whole-frame clip, a tracked subject, a polygon
-through the `heads_mask` graph, two subjects prompted on two different frames —
-and the same two-frame test on the server engine, so the feature is checked on
-both. It also starts a second server with `DV_API_KEY` set and checks
+subject **on both engines**, a whole-frame clip, a tracked subject (exported with
+the mask polish on), a polygon through the `heads_mask` graph, two subjects
+prompted on two different frames — and the same two-frame test on the server
+engine, so the feature is checked on both. Its flagship run is the **sequence
+view**: four items added through the UI the way a person would — a subject
+tracked in one clip, a subject tracked in a second clip, a subject cut out of a
+photograph, and a ring — trimmed, coloured, joined by a morph, a scatter and a
+density fade, reordered by dragging, previewed, exported as `.dots.gz` and
+rendered to MP4 by the server. It also starts a second server with `DV_API_KEY` set and checks
 401 / 401 / 200. It picks a browser rather than assuming one: headless Chromium
 with the WebGPU flags, then `channel:'chrome'`, then the WASM backend over a
 shorter clip with the report saying so.
@@ -811,25 +908,29 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
 | engine parity, polish | **27/27 float-identical** (3 strengths × 9 frames); crop shortcut vs whole frame, max difference **0** |
 | `verify.mjs` | 11 flows, **0 console errors** |
-| `verify-web.mjs` | 16 flows, **164/164 assertions**, **0 console errors** |
+| `verify-web.mjs` | 16 flows, **188/188 assertions**, **0 console errors** |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
 | still: subject, server | one frame, **0.09 s** at 768 px, a 12,750 px mask, no propagation |
-| still: subject, browser | one frame, **0.09 s** at 768 px, a 12,654 px mask, WebGPU fp16 |
+| still: subject, browser | one frame, **0.08 s** at 768 px, a 12,654 px mask, WebGPU fp16 |
 | still: cutout PNG, alpha | 1280×720 `rgba` on both engines · **99.3 % / 99.4 % transparent**, 0.7 % / 0.6 % opaque, ffprobed |
 | still: whole-image dots | **31,500 dots**, and a one-frame `.dots.gz` whose positions the player replays |
-| browser: clip decode | 150 frames in **5.6 s**, in the tab |
-| browser: frame-0 preview | **0.14 s** once the graphs are warm (1.75 s including the load) |
-| browser: track | 150/150 frames in 17.1 s (**8.8 fps**), WebGPU fp16 |
+| browser: clip decode | 150 frames in **5.0 s**, in the tab |
+| browser: frame-0 preview | **0.14 s** once the graphs are warm (1.6 s including the load) |
+| browser: track | 150/150 frames in 12.8 s (**11.7 fps**), WebGPU fp16 |
 | browser: mask prompt | tracked from a polygon alone, non-empty on 150/150 frames |
-| browser: dots preview | 54.6 fps · 774 dots (7.0 fps on the first polished frame, 95 fps once its masks are cached) |
-| browser: export | 150 frames of VP9 WebM in 8.1 s **with polish on**, 1280×720, ffprobed |
-| server: track, 2 subjects | 150/150 in 16.9 s (**8.8 fps**) end to end, CoreML |
-| server: track, 1 subject @ 512 px | 150/150 in 10.4 s (**14.5 fps**), masks still 1280×720 |
+| browser: dots preview | 56.8 fps · 774 dots (9.8 fps on the first polished frame, 95 fps once its masks are cached) |
+| browser: export | 150 frames of VP9 WebM in 8.0 s **with polish on**, 1280×720, ffprobed |
+| server: track, 2 subjects | 150/150 in 13.0 s (**11.5 fps**) end to end, CoreML |
+| server: track, 1 subject @ 512 px | 150/150 in 7.8 s (**19.3 fps**), masks still 1280×720 |
 | server: track from a polygon | mask-prompt vs box-prompt IoU **0.978 mean / 0.928 worst** |
-| server: export | 150 frames of H.264 in 10.5 s, ffprobed |
+| server: export | 150 frames of H.264 in 10.4 s, ffprobed |
 | preview vs exported MP4 | **97.8 %** of pixels within 30 RGB units |
 | polish: tab vs server mask | **0 of 921,600** pixels differ on the same frame at strength 70 |
 | polish: preview vs export | **99.3 %** of pixels within 30 RGB units, polish on |
+| sequence: 4 items, 3 joins | 243 frames = 45+37+45+21+30+25+40, exactly its items plus its joins |
+| sequence: colours | 4 item colours + background survive into the `.dots.gz` palette |
+| sequence: MP4 | **243/243 frames** ffprobed off `/api/sequence`, 1.6 MB H.264 |
+| sequence: replay | the 338 KB `.dots.gz` plays back at **120 fps**, 1.5 ms a frame |
 | `DV_API_KEY` | bare 401 · wrong key 401 · right key 200 · the page still 200 |
 
 The remaining 2.2 % of the preview-vs-export comparison is not an engine
@@ -1212,9 +1313,12 @@ why the setting exists rather than a silently lowered default.
   server (cached afterwards, per strength, under `jobs/<id>/polish/`), 50–100 ms
   for the first draw of a frame in the tab. Changing the strength rebuilds it.
 * **No audio.** Video export is picture only.
-* **A sequence is not a timeline.** Segments and shapes in order, one subject
-  track, one global palette, one morph length per join. No layers, no easing
-  curves, no per-item colour.
+* **A sequence is not a timeline.** Items in order, one transition per join, one
+  background and one dot size. No layers, no easing curves, no audio. Colour is
+  per item, not per dot.
+* **A sequence item is a snapshot.** It holds the dot positions as they were when
+  it was captured, at the look that was on at the time. Changing the look in the
+  studio afterwards does not reach back into it — add it again.
 * **Sequence items should share a frame size.** They all do when they come from
   720p clips; if they do not, the sequence uses the first item's frame and says
   so.

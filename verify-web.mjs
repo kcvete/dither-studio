@@ -20,6 +20,9 @@
  *       with the mask polish on for the export and off again afterwards
  *   W4  browser · a polygon mask prompt (the heads_mask graph) -> tracked
  *   W5  browser · two subjects prompted on DIFFERENT frames, mask-area census
+ *   W8  the SEQUENCE view: four items added through the UI (two clips, a still
+ *       cutout, a shape), per-item trims and colours, three transition kinds,
+ *       drag-reorder, preview, .dots.gz and an MP4 off the server
  *   R5  server  · the same two-frame prompt, so the feature is checked on both
  *   K   an optional DV_API_KEY server: 401 without the header, 200 with it
  *
@@ -1046,17 +1049,20 @@ async function runDots(engineId) {
   return r;
 }
 
-/* ============ W8: the flagship — subject to subject, and subject to shape ====
- * Clip A's subject morphs into clip B's subject, then into a ring rasterised
- * through the same dither pipeline. Preview in the player, export the dot data,
- * render the whole thing to MP4 on the server, and measure the player's own
- * frame rate on the finished sequence.
+/* ============ W8: the flagship — the sequence view, four items, three joins ==
+ * A parkour subject from one clip, a tennis player from another, a subject cut
+ * out of a photograph, and a ring rasterised through the dots pipeline — added
+ * through the UI the way a person would, reordered by dragging, joined by three
+ * different transitions, played in the player and rendered to MP4 by the
+ * server. The library surviving two clip changes is part of the test, because
+ * that is the whole reason a sequence is a view and not a step.
  */
 async function runSequence() {
   const r = { twoClips: fs.existsSync(CLIP2) };
   const { ctx, page } = await newPage({ mode: 'local', url: '', key: '' });
+  const stripLen = () => page.evaluate(() => window.DV_seq.strip().length);
 
-  const trackAndCapture = async (file, box, at, len, seconds) => {
+  const trackAndAdd = async (file, box, seconds) => {
     await loadClip(page, file, seconds);
     await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
     await promptBoxPoint(page, box);
@@ -1064,57 +1070,179 @@ async function runSequence() {
     const t = await waitText(page, '#tinfo', /tracked|failed/, 900000);
     check('sequence · ' + path.basename(file) + ' tracks', !/failed/.test(t), t);
     await setMode(page, 'dots');
-    await page.evaluate((i) => window.DV_draw(i), at); await sleep(500);
-    await openStep(page, 'st6');
-    await page.$eval('#seqLen', (el, v) => {
-      el.value = String(v); el.dispatchEvent(new Event('input', { bubbles: true }));
-    }, len);
-    await page.click('#bCap');
-    return waitText(page, '#seqinfo', /captured|failed/, 300000);
+    const before = await stripLen();
+    await page.click('#bToSeq');                 // the header's one way in
+    await page.waitForFunction((n) => window.DV_seq.strip().length > n,
+                               before, { timeout: 600000 });
+    return waitText(page, '#seqinfo', /added|could not/, 10000);
   };
 
-  r.captureA = await trackAndCapture(CLIP, SUBJECT_A, 100, 45, BR.seconds);
-  check('sequence · segment A captured', /captured/.test(r.captureA), r.captureA);
+  // --- 1. the parkour subject
+  r.addA = await trackAndAdd(CLIP, SUBJECT_A, BR.seconds);
+  check('sequence · the clip went in as an item', /added/.test(r.addA), r.addA);
+  r.view = await page.evaluate(() => window.DV.view);
+  check('sequence · adding switches to the sequence view', r.view === 'sequence',
+        r.view);
+
+  // --- 2. a subject from a SECOND clip, via "upload something new"
   if (r.twoClips) {
-    // the tennis player, prompted with the box the job's own meta.json records
-    r.captureB = await trackAndCapture(CLIP2, TENNIS, 0, 45, 3);
-    check('sequence · segment B captured from the second clip',
-          /captured/.test(r.captureB), r.captureB);
-    r.libraryKept = await page.evaluate(() => window.DV_dots.library().length);
+    await page.click('#bSeqNew');
+    check('sequence · "something new" goes back to the studio',
+          (await page.evaluate(() => window.DV.view)) === 'studio');
+    r.addB = await trackAndAdd(CLIP2, TENNIS, 3);
+    check('sequence · the second clip went in', /added/.test(r.addB), r.addB);
+    r.libraryKept = await page.evaluate(() => window.DV_seq.library().length);
     check('sequence · the library survived loading another clip',
           r.libraryKept === 2, String(r.libraryKept));
   }
-  await openStep(page, 'st6');
-  await page.click('#shapes .chip[data-shape="ring"]');
-  await sleep(2000);
-  r.library = await page.evaluate(() => window.DV_dots.library()
-    .map((x) => ({ name: x.name, kind: x.kind, frames: x.frames.length, dots: x.dots })));
-  check('sequence · the ring rasterised into dots',
-        (r.library[r.library.length - 1] || {}).dots > 500, JSON.stringify(r.library));
 
+  // --- 3. a subject cut out of a photograph
+  await page.click('#bSeqNew');
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 60000 });
+  await sleep(600);
+  await openStep(page, 'st2');
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(700);
+  await promptBoxPoint(page, SUBJECT_A);
+  r.stillInfo = await waitText(page, '#pvinfo', /subject|failed/, 300000);
+  check('sequence · the still subject segments', !/failed/.test(r.stillInfo),
+        r.stillInfo);
+  await page.click('#bTrack'); await sleep(700);
+  await setMode(page, 'dots');
+  let before = await stripLen();
+  await page.click('#bToSeq');
+  await page.waitForFunction((n) => window.DV_seq.strip().length > n, before,
+                             { timeout: 300000 });
+
+  // --- 4. and a ring, from the sequence view's own add row
+  before = await stripLen();
+  await page.click('#seqadd .chip:has-text("ring")').catch(async () => {
+    await page.evaluate(() => window.DV_seq.add('shape', 'ring'));
+  });
+  await page.waitForFunction((n) => window.DV_seq.strip().length > n, before,
+                             { timeout: 120000 });
+
+  r.strip = await page.evaluate(() => window.DV_seq.strip());
+  r.library = await page.evaluate(() => window.DV_seq.library());
+  check('sequence · four items in the strip', r.strip.length === 4,
+        JSON.stringify(r.strip.map((x) => x.name)));
+  check('sequence · the ring rasterised into dots',
+        (r.library[r.library.length - 1].tracks[0] || {}).frames === 1
+          && r.library[r.library.length - 1].kind === 'shape',
+        JSON.stringify(r.library));
+  await page.screenshot({ path: path.join(DOCS, 'seq-flow-1-strip.png') });
+
+  // --- per-item options: a trim on the first item, a hold on the ring
+  await page.evaluate(() => {
+    window.DV_seq.set(0, { in: 10, out: 54 });
+    window.DV_seq.set(3, { hold: 40 });
+  });
+  r.trimmed = await page.evaluate(() => window.DV_seq.strip());
+  check('sequence · an in/out trim decides a clip item\'s length',
+        r.trimmed[0].frames === 45, JSON.stringify(r.trimmed[0]));
+  check('sequence · a hold decides a shape item\'s length',
+        r.trimmed[3].frames === 40, JSON.stringify(r.trimmed[3]));
+
+  // --- one colour per item, so the transitions have something to carry
+  const COLOURS = ['#b0413e', '#2f4f4a', '#7a6a4f', '#3c5a7a'];
+  await page.evaluate((cols) => {
+    cols.forEach((c, i) => window.DV_seq.set(i, { color: c }));
+  }, COLOURS);
+
+  // --- three different joins, one of them set by shift-clicking the chip
+  await page.evaluate(() => {
+    window.DV_seq.trans(2, 'scatter', 700);
+    window.DV_seq.trans(3, 'density', 800);
+  });
+  await page.click('#strip2 .join[data-i="1"]');      // select the first join
+  await page.screenshot({ path: path.join(DOCS, 'seq-flow-2-join.png') });
+  r.joinChips = await page.$$eval('#seqinspect .chips.seg .chip',
+                                  (n) => n.map((e) => e.textContent));
+  check('sequence · the inspector offers all four transitions',
+        r.joinChips.length === 4, JSON.stringify(r.joinChips));
+  await page.click('#strip2 .join[data-i="1"]', { modifiers: ['Shift'] });
+  r.cycled = (await page.evaluate(() => window.DV_seq.strip()))[1].trans.kind;
+  check('sequence · shift-clicking a join cycles the transition',
+        r.cycled === 'scatter', r.cycled);
+  await page.evaluate(() => window.DV_seq.trans(1, 'morph', 900));
+
+  // --- preview
   await page.click('#bSeqPrev');
-  r.preview = await waitText(page, '#seqinfo', /frames|failed/, 180000);
+  r.preview = await waitText(page, '#seqinfo', /frames|failed/, 300000);
   check('sequence · previews in the player', !/failed/.test(r.preview), r.preview);
   r.doc = await page.evaluate(() => {
-    const d = window.DV.seqDoc;
-    const counts = d.frames.map((f) => f[0].length >> 1);
+    const d = window.DV_seq.doc();
+    const counts = d.frames.map((f) => f.reduce((a, x) => a + (x.length >> 1), 0));
     return { frames: d.frames.length, fps: d.fps, marks: d.marks,
+             palette: d.palette, subjects: d.subjects.length,
              counts: { min: Math.min(...counts), max: Math.max(...counts) } };
   });
-  const morphs = r.doc.marks.filter((m) => m.kind === 'morph');
-  check('sequence · one morph per join',
-        morphs.length === r.library.length - 1,
-        `${morphs.length} morphs for ${r.library.length} items`);
+  const joins = r.doc.marks.filter((m) => m.kind !== 'item');
+  const items = r.doc.marks.filter((m) => m.kind === 'item');
+  check('sequence · one join per pair and one mark per item',
+        items.length === 4 && joins.length === 3,
+        JSON.stringify(r.doc.marks.map((m) => m.kind)));
+  check('sequence · three different transition kinds',
+        new Set(joins.map((m) => m.kind)).size === 3,
+        JSON.stringify(joins.map((m) => m.kind)));
+  check('sequence · every item keeps its own colour',
+        r.doc.subjects === 4 && COLOURS.every((c) => r.doc.palette.includes(c)),
+        JSON.stringify(r.doc.palette));
+  const morph = joins.find((m) => m.kind === 'morph');
+  const scatter = joins.find((m) => m.kind === 'scatter');
+  const density = joins.find((m) => m.kind === 'density');
   check('sequence · a 900 ms morph is ~37 frames at 30 fps',
-        morphs.every((m) => Math.abs(m.frames - 37) <= 2),
-        JSON.stringify(morphs));
-  await sleep(1200);
-  await page.screenshot({ path: path.join(DOCS, 'w-sequence.png') });
+        Math.abs(morph.frames - 37) <= 2, JSON.stringify(morph));
+  check('sequence · a 700 ms scatter is ~21 frames',
+        Math.abs(scatter.frames - 21) <= 2, JSON.stringify(scatter));
+  check('sequence · a density fade is a ladder of short morphs',
+        density.frames >= 18 && density.frames <= 40, JSON.stringify(density));
+  const expect = r.doc.marks.reduce((a, m) => a + m.frames, 0);
+  check('sequence · the document is exactly its items plus its joins',
+        r.doc.frames === expect, `${r.doc.frames} vs ${expect}`);
+  check('sequence · every frame has dots on it', r.doc.counts.min > 0,
+        JSON.stringify(r.doc.counts));
 
-  // the dot data for the whole sequence
+  // the player is actually running, not just showing frame 0
+  const f0 = await page.evaluate(() => window.DV_seq.player().frame);
+  await sleep(1200);
+  const f1 = await page.evaluate(() => window.DV_seq.player().frame);
+  check('sequence · the preview plays', f1 !== f0, `${f0} -> ${f1}`);
+  await sleep(600);
+  await page.screenshot({ path: path.join(DOCS, 'seq-flow-3-preview.png') });
+  await page.click('#strip2 .card[data-i="0"]');
+  await page.screenshot({ path: path.join(DOCS, 'seq-flow-4-item.png') });
+
+  // --- a cut really is nothing, and the reorder really reorders
+  r.cut = await page.evaluate(async () => {
+    window.DV_seq.trans(1, 'cut');
+    const d = await window.DV_seq.build();
+    const n = d.frames.length;
+    window.DV_seq.trans(1, 'morph', 900);
+    return n;
+  });
+  check('sequence · a cut costs no frames at all',
+        r.cut === r.doc.frames - morph.frames,
+        `${r.cut} vs ${r.doc.frames - morph.frames}`);
+  r.order = await page.evaluate(() => {
+    const before = window.DV_seq.strip().map((x) => x.name);
+    window.DV_seq.move(3, 0);
+    const after = window.DV_seq.strip().map((x) => x.name);
+    window.DV_seq.move(0, 3);
+    return { before, after, back: window.DV_seq.strip().map((x) => x.name) };
+  });
+  check('sequence · items reorder, and the order comes back',
+        r.order.after[0] === r.order.before[3]
+          && r.order.back.join() === r.order.before.join(),
+        JSON.stringify(r.order));
+
+  await page.click('#bSeqPrev');
+  await waitText(page, '#seqinfo', /frames|failed/, 120000);
+
+  // --- the dot data for the whole sequence
   const dots = path.join(DOCS, 'w-sequence-export.dots.gz');
   const [dl] = await Promise.all([
-    page.waitForEvent('download', { timeout: 60000 }),
+    page.waitForEvent('download', { timeout: 120000 }),
     page.click('#bSeqDots'),
   ]);
   await dl.saveAs(dots);
@@ -1127,7 +1255,7 @@ async function runSequence() {
     multipart: { file: { name: 'sequence.dots.gz', mimeType: 'application/octet-stream',
                          buffer: gz },
                  format: 'mp4' },
-    timeout: 180000,
+    timeout: 300000,
   });
   check('sequence · the server rasterises the dot data', up.ok(), String(up.status()));
   r.server = await up.json();
@@ -1143,7 +1271,7 @@ async function runSequence() {
       + 'scale=320:-1,tile=5x3', '-frames:v', '1', '-update', '1',
     path.join(DOCS, 'seq-morph-sheet.png')]);
 
-  // and the player's own frame rate on the finished sequence
+  // --- and the player's own frame rate on the finished sequence
   const demo = await ctx.newPage();
   demo.on('console', (m) => { if (m.type() === 'error') R.consoleErrors.push('demo: ' + m.text()); });
   demo.on('pageerror', (e) => R.pageErrors.push('demo: ' + String(e)));
@@ -1169,14 +1297,52 @@ async function runSequence() {
     const el = (performance.now() - t0) / 1000;
     return { frames: P.nFrames, painted: n, seconds: +el.toFixed(2),
              fps: +(n / el).toFixed(1), meanPaintMs: +(sum / n).toFixed(2),
-             worstPaintMs: +worst.toFixed(2) };
+             worstPaintMs: +worst.toFixed(2),
+             subjects: P.doc.subjects.length, palette: P.doc.palette };
   });
+  check('sequence · the .dots.gz replays with all four colours',
+        r.player.frames === r.doc.frames && r.player.subjects === 4,
+        JSON.stringify(r.player));
   check('sequence · the player holds 60 fps', r.player.fps >= 60,
         JSON.stringify(r.player));
   check('sequence · a frame costs well under a 60 fps budget',
         r.player.meanPaintMs < 16.6, JSON.stringify(r.player));
   await demo.screenshot({ path: path.join(DOCS, 'w-player-demo.png') });
   await demo.close();
+
+  // --- the same strip, on the free tier. A sequence is dot positions, so it
+  // outlives the engine that produced it — and the tab encodes it with the very
+  // machinery a clip export uses, GIF and alpha included.
+  await page.evaluate(() => window.DV_switchEngine({ mode: 'browser', url: '', key: '' }));
+  await page.waitForFunction(() => window.DV_engine().id === 'browser',
+                             null, { timeout: 120000 });
+  r.afterSwitch = await page.evaluate(() => window.DV_seq.strip().length);
+  check('sequence · the strip survives an engine switch', r.afterSwitch === 4,
+        String(r.afterSwitch));
+  await page.evaluate(() => {
+    window.DV_seq.view('sequence');
+    // a short strip: this is about the encoders, not about patience
+    window.DV_seq.set(0, { in: 0, out: 9 });
+    window.DV_seq.set(1, { in: 0, out: 9 });
+    window.DV_seq.set(2, { hold: 6 });
+    window.DV_seq.set(3, { hold: 6 });
+    [1, 2, 3].forEach((i) => window.DV_seq.trans(i,
+      window.DV_seq.strip()[i].trans.kind, 300));
+  });
+  r.browser = {};
+  for (const id of ['webm', 'gif', 'webm-alpha']) {
+    await page.evaluate((x) => window.DV_seq.format(x), id);
+    await page.click('#bSeqVideo');
+    const txt = await waitText(page, '#seqinfo', /MB|failed/, 600000);
+    r.browser[id] = txt.trim();
+    check(`sequence · the tab writes the sequence as ${id}`,
+          !/failed/.test(txt), txt);
+  }
+  check('sequence · the tab\'s sequence GIF carries a palette and loops',
+        /colours · loops forever/.test(r.browser.gif), r.browser.gif);
+  check('sequence · the tab\'s alpha sequence really has an alpha channel',
+        /alpha channel/.test(r.browser['webm-alpha']), r.browser['webm-alpha']);
+  await page.screenshot({ path: path.join(DOCS, 'seq-flow-5-browser.png') });
   await ctx.close();
   return r;
 }

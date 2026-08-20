@@ -8,10 +8,12 @@ There is no build step, no bundler, no framework and nothing is fetched from a
 CDN at run time.
 
 ```
-index.html        the page
-app.js            the flow: source -> subjects -> look -> palette -> export
-                  -> sequence
+index.html        the page: two views, Studio and Sequence
+app.js            Studio: source -> subjects -> look -> palette -> export
+                  Sequence: a strip of dot clouds and the joins between them
 dither.js         the dithering engine (server/dither.py mirrors it exactly)
+polish.js         mask polish — motion-aware temporal smoothing of the tracker's
+                  masks (server/polish.py mirrors it exactly)
 style.css
 engines/
   index.js        which engine to run, and the /api/meta probe that decides
@@ -21,8 +23,9 @@ track.js          EdgeTAM's tracking loop in JS over the ONNX graphs
 vendor/
   gifenc.js       a GIF89a/LZW encoder, ~220 lines, no dependencies
 player/
-  dither-player.js  plays a .dots.gz on a canvas: the codec, the morph and the
-                    player, one file, no dependencies. Carries the format spec.
+  dither-player.js  plays a .dots.gz on a canvas: the codec, the four
+                    transitions, the sequence builder and the player, one file,
+                    no dependencies. Carries the format spec.
   dither-player.mjs the same thing as ES module exports
   demo.html         a page around it — drop a file, scrub, recolour, resize
 bluenoise.json    the server's default 64x64 threshold tile, so both engines

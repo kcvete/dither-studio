@@ -254,7 +254,22 @@ function paintFrame(out, w, h, doc, frame, opts) {
   return lit;
 }
 
-/* ================================================================ morph ===
+/* ========================================================== transitions ===
+ * Four ways for one dot cloud to become another. All of them return the same
+ * thing -- a list of frames, each frame a pair of clouds {a, b}: the dots that
+ * still belong to the OUTGOING item and the dots that already belong to the
+ * INCOMING one. Colour is carried by that split, which is what lets a sequence
+ * keep a per-item colour through a transition without a per-dot palette.
+ *
+ *   morph     the dot flight below: matched by Hilbert rank, staggered, curled
+ *   scatter   A disperses on noise and gravity while B assembles out of the
+ *             same mess -- two overlapping clouds, no pairing at all
+ *   cut       nothing between the two items
+ *   density   A re-grids to huge cells, coarsens once more, becomes B at that
+ *             coarseness, then refines back down. Five cheap morphs on
+ *             progressively smaller dot sets rather than one expensive one, so
+ *             it reads as the picture dissolving into its own resolution.
+ *
  * Port of the image demo's transition, in clip pixels instead of unit space:
  *
  *   MATCH    both dot clouds are sorted by Hilbert-curve index and paired rank
@@ -312,12 +327,16 @@ function hilbertOrder(xy, w, h) {
  * Tween one dot cloud into another.
  *   a, b     Uint16Array of x,y pairs (the last frame of A, the first of B)
  *   opts     { w, h, fps, durationMs = 900, seed = 11, curl = 0.42 }
- * Returns an array of Uint16Array frames, NOT including a or b themselves.
+ * Returns an array of { a, b } frames, NOT including a or b themselves: `a`
+ * holds the dots still reading as the outgoing cloud, `b` the ones that have
+ * become the incoming one. A dot with a partner changes hands at the halfway
+ * point of its OWN flight, so the colour change is staggered exactly the way
+ * the movement is; a dot with no partner belongs to the side it exists on.
  */
-function buildMorph(a, b, opts = {}) {
+function morphPairs(a, b, opts = {}) {
   const w = opts.w || 1280, h = opts.h || 720, fps = opts.fps || 30;
   const dur = opts.durationMs || 900;
-  const stagger = dur * 0.38;
+  const stagger = dur * (opts.stagger === undefined ? 0.38 : opts.stagger);
   const curlAmp = opts.curl === undefined ? 0.42 : opts.curl;
   const rnd = mulberry32(opts.seed || 11);
   const nA = a.length >> 1, nB = b.length >> 1;
@@ -340,8 +359,11 @@ function buildMorph(a, b, opts = {}) {
     // extras start (or end) near where they belong instead of all in one corner
     const fa = ia >= 0 ? ia : oA[Math.floor(k * nA / Math.max(1, n)) % Math.max(1, nA)];
     const fb = ib >= 0 ? ib : oB[Math.floor(k * nB / Math.max(1, n)) % Math.max(1, nB)];
-    sx[k] = a[fa * 2]; sy[k] = a[fa * 2 + 1];
-    tx[k] = b[fb * 2]; ty[k] = b[fb * 2 + 1];
+    // one side can be empty (an item with no dots on its first frame, a cut
+    // down to nothing); `|| 0` keeps the arithmetic below finite, and the
+    // born/dies flags mean the bogus end is never actually drawn
+    sx[k] = a[fa * 2] || 0; sy[k] = a[fa * 2 + 1] || 0;
+    tx[k] = b[fb * 2] || 0; ty[k] = b[fb * 2 + 1] || 0;
     born[k] = ia < 0 ? 1 : 0;              // no source: pops in at the target
     dies[k] = ib < 0 ? 1 : 0;              // no target: pops out at the source
     const wave = 0.5 + 0.5 * Math.sin(sx[k] / w * 5.1 + sy[k] / h * 4.3);
@@ -358,17 +380,17 @@ function buildMorph(a, b, opts = {}) {
   const frames = [];
   for (let f = 1; f <= total; f++) {
     const t = f / fps * 1000;
-    const xy = [];
+    const A = [], B = [];
     for (let k = 0; k < n; k++) {
       const p = (t - dl[k]) / dur;
       if (born[k]) {                        // spawns at its own moment
         if (t < pop[k]) continue;
-        xy.push(tx[k] | 0, ty[k] | 0);
+        B.push(tx[k] | 0, ty[k] | 0);
         continue;
       }
       if (dies[k]) {                        // and the surplus at the other end
         if (t >= pop[k]) continue;
-        xy.push(sx[k] | 0, sy[k] | 0);
+        A.push(sx[k] | 0, sy[k] | 0);
         continue;
       }
       let x, y;
@@ -378,45 +400,259 @@ function buildMorph(a, b, opts = {}) {
         x = sx[k] + dx * e - dy * cu[k] * s;
         y = sy[k] + dy * e + dx * cu[k] * s;
       }
-      xy.push(clamp(Math.round(x), 0, w - 1), clamp(Math.round(y), 0, h - 1));
+      (p < 0.5 ? A : B).push(clamp(Math.round(x), 0, w - 1),
+                             clamp(Math.round(y), 0, h - 1));
     }
-    frames.push(Uint16Array.from(xy));
+    frames.push({ a: Uint16Array.from(A), b: Uint16Array.from(B) });
+  }
+  return frames;
+}
+
+/** The old single-cloud signature, kept because `demo.html` and anything that
+ *  imported it treat a morph as one swarm with one colour. */
+function buildMorph(a, b, opts = {}) {
+  return morphPairs(a, b, opts).map((f) => {
+    const xy = new Uint16Array(f.a.length + f.b.length);
+    xy.set(f.a, 0); xy.set(f.b, f.a.length);
+    return xy;
+  });
+}
+
+/* ------------------------------------------------------------- scatter ---
+ * No pairing, no matching: A's dots are thrown outwards on a random heading
+ * with gravity under them and vanish one by one, while B's dots come in from
+ * scattered positions of their own and settle. The two overlap for most of the
+ * transition, so the swarm reads as a cloud of debris that reassembles rather
+ * than a flight from one shape to the other. Dots that leave the frame are
+ * dropped rather than clamped -- a clamped dot piles up on the edge and the
+ * edge lights up like a bar. */
+function scatterPairs(a, b, opts = {}) {
+  const w = opts.w || 1280, h = opts.h || 720, fps = opts.fps || 30;
+  const dur = opts.durationMs || 900;
+  const rnd = mulberry32(opts.seed || 11);
+  const spread = (opts.spread || 0.55) * Math.min(w, h);
+  const grav = (opts.gravity === undefined ? 1.0 : opts.gravity) * Math.min(w, h);
+  const nA = a.length >> 1, nB = b.length >> 1;
+  const av = new Float32Array(nA * 2), ago = new Float32Array(nA);
+  for (let i = 0; i < nA; i++) {
+    const ang = rnd() * TAU, sp = (0.35 + 0.9 * rnd()) * spread;
+    av[i * 2] = Math.cos(ang) * sp;
+    av[i * 2 + 1] = Math.sin(ang) * sp - 0.35 * spread;   // a little upward bias
+    ago[i] = 0.35 + 0.6 * rnd();                          // when it gives up
+  }
+  const bs = new Float32Array(nB * 2), bin = new Float32Array(nB);
+  for (let i = 0; i < nB; i++) {
+    const ang = rnd() * TAU, sp = (0.4 + 0.9 * rnd()) * spread;
+    bs[i * 2] = b[i * 2] + Math.cos(ang) * sp;
+    bs[i * 2 + 1] = b[i * 2 + 1] + Math.sin(ang) * sp;
+    bin[i] = 0.12 + 0.42 * rnd();                         // when it appears
+  }
+  const total = Math.max(1, Math.round(dur / 1000 * fps));
+  const frames = [];
+  for (let f = 1; f <= total; f++) {
+    const t = f / total;
+    const A = [], B = [];
+    for (let i = 0; i < nA; i++) {
+      if (t >= ago[i]) continue;
+      const x = a[i * 2] + av[i * 2] * t;
+      const y = a[i * 2 + 1] + av[i * 2 + 1] * t + 0.5 * grav * t * t;
+      const xi = Math.round(x), yi = Math.round(y);
+      if (xi < 0 || yi < 0 || xi >= w || yi >= h) continue;
+      A.push(xi, yi);
+    }
+    for (let i = 0; i < nB; i++) {
+      if (t < bin[i]) continue;
+      const p = easeInOut(clamp((t - bin[i]) / Math.max(1e-3, 1 - bin[i]), 0, 1));
+      const x = bs[i * 2] + (b[i * 2] - bs[i * 2]) * p;
+      const y = bs[i * 2 + 1] + (b[i * 2 + 1] - bs[i * 2 + 1]) * p;
+      const xi = Math.round(x), yi = Math.round(y);
+      if (xi < 0 || yi < 0 || xi >= w || yi >= h) continue;
+      B.push(xi, yi);
+    }
+    frames.push({ a: Uint16Array.from(A), b: Uint16Array.from(B) });
+  }
+  return frames;
+}
+
+/* ------------------------------------------------------- density fade ---
+ * Snap a cloud to a coarser grid and the duplicates collapse: a 6,000-dot
+ * subject at cell 16 is a few hundred dots that still read as the same shape.
+ * The transition walks A down that ladder, swaps to B at the coarsest rung,
+ * and walks back up -- five short morphs over small clouds instead of one long
+ * one over big ones, which is both cheaper and a different effect: the picture
+ * dissolves into its own resolution rather than flying across the frame. */
+function regrid(xy, cell) {
+  if (cell <= 1) return xy;
+  const seen = new Set(), out = [];
+  for (let i = 0; i < xy.length; i += 2) {
+    const gx = Math.floor(xy[i] / cell), gy = Math.floor(xy[i + 1] / cell);
+    const key = gy * 65536 + gx;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(Math.round(gx * cell + cell / 2), Math.round(gy * cell + cell / 2));
+  }
+  return Uint16Array.from(out);
+}
+
+function densityPairs(a, b, opts = {}) {
+  const cell = Math.max(2, opts.cell || 4);
+  const rungs = [2, 4].map((k) => k * cell);
+  const seed = opts.seed || 11;
+  // A -> A coarse -> A coarsest -> B coarsest -> B coarse -> B
+  const ladder = [
+    { xy: a, side: 'a' },
+    { xy: regrid(a, rungs[0]), side: 'a' },
+    { xy: regrid(a, rungs[1]), side: 'a' },
+    { xy: regrid(b, rungs[1]), side: 'b' },
+    { xy: regrid(b, rungs[0]), side: 'b' },
+    { xy: b, side: 'b' },
+  ];
+  const hops = ladder.length - 1;
+  const each = Math.max(60, (opts.durationMs || 900) / hops);
+  const frames = [];
+  for (let i = 0; i < hops; i++) {
+    const from = ladder[i], to = ladder[i + 1];
+    const hop = morphPairs(from.xy, to.xy, {
+      w: opts.w, h: opts.h, fps: opts.fps, durationMs: each,
+      seed: seed + i * 131, curl: 0.06, stagger: 0.12,
+    });
+    for (const f of hop) {
+      // inside A's half of the ladder every dot is still A's, and vice versa;
+      // only the middle hop actually changes hands
+      if (from.side === to.side) {
+        const one = new Uint16Array(f.a.length + f.b.length);
+        one.set(f.a, 0); one.set(f.b, f.a.length);
+        frames.push(from.side === 'a' ? { a: one, b: EMPTY } : { a: EMPTY, b: one });
+      } else {
+        frames.push(f);
+      }
+    }
   }
   return frames;
 }
 
 /**
- * Stitch segments and transitions into one document.
- *   segments  [{ frames: [Uint16Array], color }] — each already one subject
- *   opts      { w, h, fps, dotpx, bg, durationMs, seed }
- * Every segment is flattened onto ONE subject track with ONE palette: a
- * sequence is a single swarm changing shape, not a multi-track timeline.
+ * One transition, whichever kind. `kind` is 'morph' | 'scatter' | 'cut' |
+ * 'density'; anything else is a morph.
  */
-function buildSequence(segments, opts = {}) {
+function buildTransition(a, b, opts = {}) {
+  const kind = opts.kind || 'morph';
+  if (kind === 'cut') return [];
+  if (kind === 'scatter') return scatterPairs(a, b, opts);
+  if (kind === 'density') return densityPairs(a, b, opts);
+  return morphPairs(a, b, opts);
+}
+
+const TRANSITIONS = [
+  { id: 'morph', name: 'morph',
+    note: 'dots fly from one shape to the other, matched neighbour to neighbour' },
+  { id: 'scatter', name: 'scatter',
+    note: 'the first shape blows apart while the second assembles out of it' },
+  { id: 'cut', name: 'cut', note: 'no transition at all — one frame to the next' },
+  { id: 'density', name: 'density fade',
+    note: 'the shape coarsens to huge cells, becomes the next one there, and refines back' },
+];
+
+/**
+ * Stitch items and transitions into one document.
+ *
+ *   items   [{ name, frames:[Uint16Array], color }]                 one track
+ *           [{ name, tracks:[{ frames:[Uint16Array], color }] }]    several
+ *           each may carry { transition: { kind, ms } } — the join BEFORE it.
+ *   opts    { w, h, fps, dotpx, bg, durationMs, kind, seed, cell }
+ *
+ * Colour is per item (and per track inside an item), not per document: the
+ * output has one .dots subject track per DISTINCT COLOUR, and every item's dots
+ * land in the track its colour owns. A transition splits its dots between the
+ * outgoing colour and the incoming one, dot by dot, so a red swarm becoming a
+ * green one changes colour the way it changes shape instead of all at once.
+ */
+function buildSequence(items, opts = {}) {
   const w = opts.w || 1280, h = opts.h || 720, fps = opts.fps || 30;
   const bg = opts.bg || '#c9d4c5';
-  const color = opts.color || (segments[0] && segments[0].color) || '#b0413e';
-  const frames = [];
+  const fallback = opts.color || '#b0413e';
+  const norm = items.map((it, i) => ({
+    name: it.name || ('#' + (i + 1)),
+    transition: it.transition || null,
+    tracks: (it.tracks && it.tracks.length ? it.tracks
+      : [{ frames: it.frames || [], color: it.color || fallback }])
+      .map((t) => ({ frames: t.frames || [], color: t.color || fallback })),
+  }));
+
+  const colours = [];
+  const colourOf = (c) => {
+    let i = colours.indexOf(c);
+    if (i < 0) { colours.push(c); i = colours.length - 1; }
+    return i;
+  };
+  norm.forEach((it) => it.tracks.forEach((t) => colourOf(t.color)));
+  if (!colours.length) colours.push(fallback);
+
+  const frames = [];        // [ [Uint16Array per colour] per frame ]
   const marks = [];
-  segments.forEach((seg, i) => {
+  const blank = () => colours.map(() => []);
+  const push = (buckets) => frames.push(buckets.map((b) => Uint16Array.from(b)));
+  const add = (buckets, idx, xy) => {
+    const b = buckets[idx];
+    for (let i = 0; i < xy.length; i++) b.push(xy[i]);
+  };
+
+  norm.forEach((it, i) => {
     if (i > 0) {
-      const prev = frames[frames.length - 1] || new Uint16Array(0);
-      const next = seg.frames[0] || new Uint16Array(0);
-      const dur = (seg.transitionMs === undefined ? opts.durationMs : seg.transitionMs) || 900;
-      const tween = buildMorph(prev, next, { w, h, fps, durationMs: dur,
-                                             seed: (opts.seed || 11) + i * 7919 });
-      marks.push({ kind: 'morph', start: frames.length, frames: tween.length, ms: dur });
-      for (const f of tween) frames.push(f);
+      const prev = norm[i - 1];
+      const kind = (it.transition && it.transition.kind) || opts.kind || 'morph';
+      const ms = (it.transition && it.transition.ms) || opts.durationMs || 900;
+      const pairs = [];
+      const n = Math.max(prev.tracks.length, it.tracks.length);
+      let len = 0;
+      for (let k = 0; k < n; k++) {
+        const pt = prev.tracks[k], nt = it.tracks[k];
+        const from = (pt && pt.frames[pt.frames.length - 1]) || EMPTY;
+        const to = (nt && nt.frames[0]) || EMPTY;
+        const tween = buildTransition(from, to, {
+          w, h, fps, durationMs: ms, kind, cell: opts.cell,
+          seed: (opts.seed || 11) + i * 7919 + k * 101,
+        });
+        pairs.push({ tween,
+                     a: colourOf((pt || it.tracks[0]).color),
+                     b: colourOf((nt || prev.tracks[0]).color) });
+        len = Math.max(len, tween.length);
+      }
+      if (len) {
+        marks.push({ kind, start: frames.length, frames: len, ms,
+                     name: prev.name + ' → ' + it.name });
+        for (let f = 0; f < len; f++) {
+          const buckets = blank();
+          for (const p of pairs) {
+            const fr = p.tween[f];
+            if (!fr) continue;
+            add(buckets, p.a, fr.a);
+            add(buckets, p.b, fr.b);
+          }
+          push(buckets);
+        }
+      } else {
+        marks.push({ kind: 'cut', start: frames.length, frames: 0, ms: 0,
+                     name: prev.name + ' → ' + it.name });
+      }
     }
-    marks.push({ kind: 'segment', name: seg.name || ('#' + (i + 1)),
-                 start: frames.length, frames: seg.frames.length });
-    for (const f of seg.frames) frames.push(f);
+    const nf = it.tracks.reduce((a, t) => Math.max(a, t.frames.length), 0);
+    marks.push({ kind: 'item', name: it.name, start: frames.length, frames: nf });
+    for (let f = 0; f < nf; f++) {
+      const buckets = blank();
+      it.tracks.forEach((t) => {
+        const xy = t.frames[f];
+        if (xy && xy.length) add(buckets, colourOf(t.color), xy);
+      });
+      push(buckets);
+    }
   });
+
   return {
     w, h, fps, dotpx: opts.dotpx || 3,
-    palette: [bg, color], bgIndex: 0, bg,
-    subjects: [{ color }],
-    frames: frames.map((f) => [f]),
+    palette: [bg].concat(colours), bgIndex: 0, bg,
+    subjects: colours.map((color) => ({ color })),
+    frames,
     marks,
   };
 }
@@ -521,7 +757,8 @@ class Player {
 }
 
 return { Player, encode, decode, gzip, gunzip, pack, unpack, toJSON, fromJSON,
-         paintFrame, buildMorph, buildSequence, hilbertOrder, hexRGB,
+         paintFrame, buildMorph, morphPairs, scatterPairs, densityPairs, regrid,
+         buildTransition, TRANSITIONS, buildSequence, hilbertOrder, hexRGB,
          easeInOut, mulberry32, version: 1 };
 })();
 

@@ -641,6 +641,13 @@ export class BrowserEngine {
    *                tracker. The server engine writes it.
    *   prores       NOT here, same reason and then some.
    */
+  /**
+   * params.source, when present, overrides the open clip's {w, h, nFrames, fps}
+   * — that is how the sequence view gets its GIF and its alpha WebM out of the
+   * tab: a sequence is not the clip that happens to be loaded (it may be longer,
+   * a different size, or the only thing in the session), but it is exactly the
+   * same job of "call renderFrame(i) and feed an encoder".
+   */
   async exportClip(params, onProgress, renderFrame) {
     const fmt = params.format || 'webm';
     const f = (this.supports.formats || []).find((x) => x.id === fmt);
@@ -658,7 +665,7 @@ export class BrowserEngine {
   async exportGIF(params, onProgress, renderFrame) {
     await import('../vendor/gifenc.js');
     const G = globalThis.GifEnc;
-    const { w, h, nFrames, fps } = this.clip;
+    const { w, h, nFrames, fps } = params.source || this.clip;
     const gfps = Math.max(1, Math.min(50, params.gif_fps || 15));
     // keep every k-th frame so the GIF runs at the asked-for rate in real time
     const step = Math.max(1, Math.round(fps / gfps));
@@ -704,7 +711,7 @@ export class BrowserEngine {
    * tracker itself. The server engine writes MP4.
    */
   async exportWebM(params, onProgress, renderFrame, alpha) {
-    const { w, h, nFrames, fps } = this.clip;
+    const { w, h, nFrames, fps } = params.source || this.clip;
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
     const g = cv.getContext('2d', { alpha: !!alpha });

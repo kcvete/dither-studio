@@ -15,6 +15,13 @@
       </button>
       <span id="dev" class="tag" hidden></span>
     </div>
+    <!-- Two views, one page. Studio is the flow that turns a source into a
+         picture; Sequence is the strip that turns several of them into one. -->
+    <div id="viewbar" class="chips seg" data-pending="0">
+      <button class="chip" data-view="studio" aria-pressed="true">Studio</button>
+      <button class="chip" data-view="sequence" aria-pressed="false">Sequence</button>
+      <button class="chip go" id="bToSeq" hidden>+ to the sequence</button>
+    </div>
     <div id="engpop" class="pop" hidden>
       <div class="poph">Where the work happens</div>
       <button class="opt" data-eng="browser">
@@ -36,6 +43,7 @@
       <div id="engstat" class="note"></div>
     </div>
 
+    <div id="studiopanel">
     <!-- ---------------------------------------------------------- step 1 -->
     <section class="step" id="st1" data-open="1">
       <div class="sh"><i>1</i><span>Source</span><em id="s1sum"></em></div>
@@ -273,53 +281,72 @@
       </div>
     </section>
 
-    <!-- ---------------------------------------------------------- step 6 -->
-    <section class="step" id="st6" data-open="0" hidden>
-      <div class="sh"><i>6</i><span>Sequence</span><em id="s6sum"></em></div>
-      <div class="sb">
-        <div class="note">A sequence is one swarm changing shape: segments of
-          tracked clips and static shapes, morphed into each other. It keeps what
-          you capture, so a clip can morph into a subject from another clip.</div>
+    </div><!-- /#studiopanel -->
 
-        <div class="lbl"><span>Capture from this clip</span></div>
-        <div class="row">
-          <select id="seqSubj"></select>
-          <button class="btn" id="bCap">capture segment</button>
+    <!-- ------------------------------------------------------- the sequence -->
+    <div id="seqpanel" hidden>
+      <section class="step" id="sq1" data-open="1">
+        <div class="sh"><i>1</i><span>Items</span><em id="sq1sum"></em></div>
+        <div class="sb">
+          <div class="note">A sequence is a strip of dot clouds with a
+            transition between each pair &mdash; segments of tracked clips,
+            dithered stills, and static shapes. It keeps everything you capture,
+            so one clip can morph into a subject from another.</div>
+          <div class="lbl"><span>Add</span><span id="seqsrc"></span></div>
+          <div class="chips" id="seqadd"></div>
+          <div class="note" id="addnote"></div>
+          <div class="row">
+            <button class="btn" id="bSeqNew">upload or record something new…</button>
+          </div>
+          <input type="file" id="shapeFile" accept="image/*" hidden>
         </div>
-        <div class="mini"><span>length</span>
-          <input type="range" id="seqLen" min="4" max="150" step="1" value="45">
-          <b id="vSeqLen">45 frames</b></div>
-        <div class="note" id="capnote"></div>
+      </section>
 
-        <div class="lbl"><span>Static shapes</span></div>
-        <div class="chips" id="shapes">
-          <button class="chip" data-shape="ring">ring</button>
-          <button class="chip" data-shape="coral">coral</button>
-          <button class="chip" id="bShapeImg">from image…</button>
-        </div>
-        <input type="file" id="shapeFile" accept="image/*" hidden>
-        <div class="mini"><span>hold</span>
-          <input type="range" id="seqHold" min="1" max="120" step="1" value="30">
-          <b id="vSeqHold">30 frames</b></div>
+      <section class="step" id="sq2" data-open="1">
+        <div class="sh"><i>2</i><span>Selected</span><em id="sq2sum"></em></div>
+        <div class="sb" id="seqinspect"></div>
+      </section>
 
-        <div class="lbl"><span>Sequence</span><span id="vSeq"></span></div>
-        <div class="chips" id="seqlist"></div>
-        <div class="note warn" id="seqwarn" hidden>These items are different sizes —
-          the sequence uses the first one's frame, so the rest will sit off centre.</div>
-        <div class="mini"><span>morph</span>
-          <input type="range" id="seqDur" min="200" max="2500" step="50" value="900">
-          <b id="vSeqDur">900 ms</b></div>
-        <div class="row">
-          <button class="btn go" id="bSeqPrev">preview</button>
-          <button class="btn" id="bSeqDots">.dots.gz</button>
-          <button class="btn" id="bSeqVideo">render video</button>
-          <button class="btn" id="bSeqClear">clear</button>
+      <section class="step" id="sq3" data-open="0">
+        <div class="sh"><i>3</i><span>Look</span><em id="sq3sum"></em></div>
+        <div class="sb">
+          <div class="lbl"><span>Dot size</span><span id="vSeqDot">3 px</span></div>
+          <input type="range" id="sSeqDot" min="1" max="8" step="1" value="3">
+          <div class="lbl"><span>Background</span></div>
+          <div class="chips"><label class="chip"><input type="color" id="cSeqBg"
+            value="#c9d4c5"><span>bg</span></label></div>
+          <div class="lbl"><span>Palette</span></div>
+          <div class="chips" id="seqpals"></div>
+          <div class="note">One look for the whole strip: background, dot size
+            and, if you pick a preset, a colour per item. Until then every item
+            keeps the colour its subject had when it was captured.</div>
         </div>
-        <div id="seqinfo" class="stat" hidden></div>
-        <a id="seqdl" class="btn dl" hidden download>download</a>
-        <video id="seqvid" hidden controls loop playsinline></video>
-      </div>
-    </section>
+      </section>
+
+      <section class="step" id="sq4" data-open="1">
+        <div class="sh"><i>4</i><span>Play &amp; export</span><em id="sq4sum"></em></div>
+        <div class="sb">
+          <div class="row">
+            <button class="btn go" id="bSeqPrev">preview</button>
+            <button class="btn" id="bSeqClear">clear the strip</button>
+          </div>
+          <div id="seqfmt" hidden>
+            <div class="lbl"><span>Format</span><span id="vSeqFmt"></span></div>
+            <select id="sSeqFmt"></select>
+          </div>
+          <div class="row">
+            <button class="btn" id="bSeqDots">.dots.gz</button>
+            <button class="btn" id="bSeqVideo">render video</button>
+          </div>
+          <div class="note warn" id="seqwarn" hidden>These items are different
+            sizes &mdash; the sequence uses the first one's frame, so the rest
+            will sit off centre.</div>
+          <div id="seqinfo" class="stat" hidden></div>
+          <a id="seqdl" class="btn dl" hidden download>download</a>
+          <video id="seqvid" hidden controls loop playsinline></video>
+        </div>
+      </section>
+    </div>
   </aside>
 
   <main id="stage">
@@ -350,8 +377,10 @@
       <div id="transport">
         <button class="chip" id="bSeqPlay" aria-pressed="false">pause</button>
         <span class="mono" id="seqframe">0 / 0</span>
-        <button class="chip" id="bSeqBack">back to the clip</button>
+        <span class="mono" id="seqmark"></span>
       </div>
+      <!-- the strip: items, and a join between each pair. Drag to reorder. -->
+      <div id="strip2"></div>
     </div>
 
     <div id="vwrap" hidden>

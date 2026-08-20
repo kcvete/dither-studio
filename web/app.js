@@ -67,9 +67,14 @@ const S = {
   exportURL: null, frameURL: null,
   // export
   format: '', gifFps: 15,
-  // sequence: captured segments and static shapes, in order. Survives loading
-  // another clip on purpose — a morph from one clip to another needs both.
-  library: [], seqDoc: null,
+  // sequence. `library` is the session's pool of captured dot clouds and
+  // survives loading another clip on purpose — a morph from one clip into
+  // another needs both, and only one can be open at a time. `strip` is the
+  // sequence itself: instances of pool items, each carrying its own trim,
+  // colour and the transition that leads into it.
+  view: 'studio', library: [], strip: [], sel: null, seqDoc: null,
+  returnToSeq: false,
+  seq: { dotpx: 3, bg: '#c9d4c5', fps: 30, format: '' },
 };
 const E = () => S.engine;
 
@@ -97,8 +102,11 @@ function showStage(which) {
   $('#empty').hidden = which !== 'empty';
 }
 
+/* Only the studio rail accordions: the sequence panel's sections are a
+ * different set of steps and must not close because the studio moved on. */
 function openStep(n) {
-  $$('.step').forEach((el) => el.setAttribute('data-open', el.id === 'st' + n ? '1' : '0'));
+  $$('#studiopanel .step').forEach((el) => el.setAttribute(
+    'data-open', el.id === 'st' + n ? '1' : '0'));
 }
 $$('.step .sh').forEach((h) => h.addEventListener('click', () => {
   const st = h.parentElement;
@@ -312,6 +320,7 @@ function camClose() {
 
 /** Back to whatever the current source was showing before the camera opened. */
 function restoreStage() {
+  if (S.view === 'sequence') return showStage('sequence');
   if (S.kind === 'none') return showStage('empty');
   const prompting = S.scope === 'track'
     && (S.kind === 'image' ? !S.stillMasks.size : !S.tracked);
@@ -388,15 +397,14 @@ function showSteps(kind) {
   $('#st2').hidden = kind === 'none';
   paintStep2(kind);
   $('#st3').hidden = $('#st4').hidden = $('#st5').hidden = kind === 'none';
-  // the sequence step outlives the clip: a morph from one clip into another
-  // needs the segment captured from the first one to still be there
-  $('#st6').hidden = kind !== 'video' && !S.library.length;
-  buildSubjectPicker();
-  $('#empty').hidden = kind !== 'none';
-  $$('.step .sh i').forEach((el, i) => { el.textContent = i + 1; });
-  // renumber visible steps so the rail always reads 1,2,3…
+  $('#empty').hidden = kind !== 'none' || S.view === 'sequence';
+  // renumber visible steps so the studio rail always reads 1,2,3…
   let n = 0;
-  $$('.step').forEach((st) => { if (!st.hidden) $('.sh i', st).textContent = ++n; });
+  $$('#studiopanel .step').forEach((st) => {
+    if (!st.hidden) $('.sh i', st).textContent = ++n;
+  });
+  paintToSeq();
+  if (S.view === 'sequence') renderAdd();
 }
 
 async function loadStill(f) {
@@ -1184,7 +1192,8 @@ async function track() {
     $('#bgui').hidden = S.P.compose !== 'cutout';
     dropCache(); buildTargets(); renderModes(); renderPolish(); openStep(3);
     DOTS_CACHE = null;
-    buildSubjectPicker();
+    paintToSeq();
+    if (S.returnToSeq) toast('tracked — "add to the sequence" is in the header');
     await draw();
   } catch (err) {
     prog.hidden = true;
@@ -2123,6 +2132,7 @@ function buildFormats() {
   }
   sel.value = S.format;
   paintFormat();
+  buildSeqFormats();
 }
 function paintFormat() {
   const f = currentFormat();
@@ -2327,6 +2337,72 @@ async function exportDots(asJSON) {
 $('#bDots').addEventListener('click', () => exportDots(false));
 $('#bDotsJson').addEventListener('click', () => exportDots(true));
 
+/* ==================================================== the sequence flow ===
+ * A sequence is its own view, not a step: the header switches between STUDIO
+ * (drop something, cut a subject out of it, pick a look, export it) and
+ * SEQUENCE (a strip of dot clouds with a transition between each pair).
+ *
+ * Three lists hold it:
+ *
+ *   S.library   the pool. Everything captured this session — a tracked clip's
+ *               subjects, a dithered still, a rasterised shape — kept as dot
+ *               positions, per subject, at full length. It outlives the clip it
+ *               came from on purpose: a morph from one clip into another needs
+ *               both, and only one of them can be loaded at a time.
+ *   S.strip     what is actually in the sequence: instances that point at a
+ *               pool item and carry their own options — which subject, in/out,
+ *               how long a still holds, an optional colour override, and the
+ *               transition that leads INTO them.
+ *   S.trans     nothing. The join lives on the item that follows it, so
+ *               dragging an item to a new position takes its transition with
+ *               it instead of leaving it behind.
+ *
+ * The document is built by web/player/dither-player.js, played by the same
+ * player the .dots.gz files use, and rendered to video by the server route
+ * that has always rasterised dot positions (/api/sequence) — one implementation
+ * of every transition, in JS, and the server only ever feeds an encoder.
+ */
+let SEQID = 1;
+const libOf = (id) => S.library.find((x) => x.id === id);
+const KINDS = ['morph', 'scatter', 'cut', 'density'];
+
+function seqLook() {
+  return { dotpx: S.seq.dotpx, bg: S.seq.bg, fps: S.seq.fps,
+           cell: S.P.cell, seed: S.P.seed };
+}
+
+/* ------------------------------------------------------------- the pool */
+/** Everything the current source could contribute, as pool items. */
+async function captureClip() {
+  const { doc } = await dotsDoc((pr) => seqInfo('reading dot positions ' + pr.text));
+  const item = {
+    id: SEQID++, kind: 'clip', name: S.fileName || 'clip',
+    w: doc.w, h: doc.h, fps: doc.fps,
+    tracks: doc.subjects.map((sub, k) => ({
+      id: (S.subjects[k] || {}).id || (k + 1),
+      color: sub.color,
+      frames: doc.frames.map((f) => f[k] || new Uint16Array(0)),
+    })),
+  };
+  S.library.push(item);
+  return item;
+}
+
+async function captureStill() {
+  const { doc } = await dotsDocStill();
+  const item = {
+    id: SEQID++, kind: 'still', name: S.fileName || 'still',
+    w: doc.w, h: doc.h, fps: 30,
+    tracks: doc.subjects.map((sub, k) => ({
+      id: (S.subjects[k] || {}).id || (k + 1),
+      color: sub.color,
+      frames: [doc.frames[0][k] || new Uint16Array(0)],
+    })),
+  };
+  S.library.push(item);
+  return item;
+}
+
 /* ---------------------------------------------------------- static shapes
  * A shape becomes dots through the same pipeline a clip does: draw it dark on
  * light, hand it to `dotsOn` with a full-frame mask, keep the positions. So a
@@ -2368,6 +2444,11 @@ function drawCoral(g, W, H) {
   g.restore();
 }
 
+const seqW = () => (S.library[0] ? S.library[0].w : (S.W || 1280));
+const seqH = () => (S.library[0] ? S.library[0].h : (S.H || 720));
+const seqColor = () => (S.library[0] ? S.library[0].tracks[0].color
+  : (S.subjects[0] ? S.subjects[0].palette.slice(-1)[0] : '#b0413e'));
+
 async function addShape(kind, bitmap) {
   await playerLib();
   const W = seqW(), H = seqH();
@@ -2383,235 +2464,617 @@ async function addShape(kind, bitmap) {
   const mask = new Float32Array(W * H).fill(1);
   const r = dotsOn(src, W, H, [mask], S.P, BLUE);
   const xy = dotXY(r.F, r.on[0]);
-  if (!xy.length) { toast('that shape came out empty', true); return; }
-  const hold = Math.max(1, +$('#seqHold').value || 30);
-  S.library.push({ name: kind, kind: 'shape', color: seqColor(),
-                   frames: new Array(hold).fill(xy), w: W, h: H,
-                   dots: xy.length >> 1 });
-  renderLibrary();
-  toast(`${kind}: ${xy.length >> 1} dots`);
+  if (!xy.length) throw new Error('that shape came out empty');
+  const item = { id: SEQID++, kind: 'shape', name: kind, w: W, h: H, fps: 30,
+                 tracks: [{ id: 1, color: seqColor(), frames: [xy] }] };
+  S.library.push(item);
+  return item;
 }
 
-const seqW = () => (S.library[0] ? S.library[0].w : (S.W || 1280));
-const seqH = () => (S.library[0] ? S.library[0].h : (S.H || 720));
-const seqColor = () => (S.library[0] ? S.library[0].color
-  : (S.subjects[0] ? S.subjects[0].palette.slice(-1)[0] : '#b0413e'));
+/* --------------------------------------------------------------- the strip */
+function stripAdd(item, opts) {
+  const n = item.tracks.reduce((a, t) => Math.max(a, t.frames.length), 0);
+  const clip = n > 1;
+  const start = clip ? clamp(S.cur || 0, 0, Math.max(0, n - 2)) : 0;
+  const inst = Object.assign({
+    uid: SEQID++, lib: item.id, subject: 'all',
+    in: clip ? start : 0,
+    out: clip ? Math.min(n - 1, start + 44) : 0,
+    hold: 30, color: null,
+    trans: { kind: 'morph', ms: 900 },
+  }, opts || {});
+  S.strip.push(inst);
+  S.sel = { type: 'item', i: S.strip.length - 1 };
+  renderSeq();
+  return inst;
+}
 
-/* ------------------------------------------------------------- the library */
-async function captureSegment() {
-  const btn = $('#bCap'); btn.disabled = true;
-  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
-  info.textContent = 'reading dot positions…';
-  try {
-    const { doc } = await dotsDoc((pr) => { info.textContent = 'dots ' + pr.text; });
-    const k = Math.max(0, +$('#seqSubj').value || 0);
-    const len = Math.max(2, +$('#seqLen').value);
-    const start = Math.min(S.cur, Math.max(0, doc.frames.length - 2));
-    const frames = [];
-    for (let i = start; i < Math.min(doc.frames.length, start + len); i++) {
-      frames.push(doc.frames[i][k] || new Uint16Array(0));
+/** One strip entry as the player wants it: tracks of dot frames, trimmed. */
+function stripTracks(inst) {
+  const it = libOf(inst.lib);
+  if (!it) return [];
+  const picked = inst.subject === 'all' ? it.tracks
+    : [it.tracks[inst.subject] || it.tracks[0]];
+  return picked.map((t) => {
+    let frames;
+    if (t.frames.length > 1) {
+      const a = clamp(inst.in | 0, 0, t.frames.length - 1);
+      const b = clamp(inst.out | 0, a, t.frames.length - 1);
+      frames = t.frames.slice(a, b + 1);
+    } else {
+      frames = new Array(Math.max(1, inst.hold | 0)).fill(
+        t.frames[0] || new Uint16Array(0));
     }
-    const dots = frames.reduce((a, f) => a + (f.length >> 1), 0) / frames.length;
-    S.library.push({
-      name: `${S.fileName || 'clip'} #${(S.subjects[k] || {}).id || k + 1} `
-        + `${start}–${start + frames.length - 1}`,
-      kind: 'segment', color: doc.subjects[k].color, frames,
-      w: doc.w, h: doc.h, dots: Math.round(dots),
-    });
-    renderLibrary();
-    info.textContent = `captured ${frames.length} frames from ${start}, `
-      + `${Math.round(dots)} dots a frame`;
-  } catch (err) {
-    info.classList.add('err');
-    info.textContent = 'capture failed: ' + why(err);
-  }
-  btn.disabled = false;
-}
-
-function renderLibrary() {
-  const wrap = $('#seqlist'); wrap.textContent = '';
-  S.library.forEach((it, i) => {
-    const b = document.createElement('span');
-    b.className = 'chip seqit';
-    const sw = document.createElement('span');
-    sw.className = 'sw'; sw.style.background = it.color;
-    const nm = document.createElement('span');
-    nm.textContent = `${i + 1}. ${it.name} · ${it.frames.length}f · ${it.dots} dots`;
-    b.append(sw, nm);
-    const mk = (label, fn, title) => {
-      const x = document.createElement('button');
-      x.className = 'lnk'; x.textContent = label; x.title = title;
-      x.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
-      b.append(x);
-    };
-    if (i > 0) mk('↑', () => { const t = S.library[i - 1]; S.library[i - 1] = it;
-                               S.library[i] = t; renderLibrary(); }, 'move earlier');
-    mk('✕', () => { S.library.splice(i, 1); renderLibrary(); }, 'remove');
-    wrap.append(b);
+    return { frames, color: inst.color || t.color };
   });
-  const n = S.library.length;
-  $('#vSeq').textContent = n ? `${n} item${n > 1 ? 's' : ''}` : 'nothing captured yet';
-  $('#s6sum').textContent = n ? `${n} · ${(n - 1)} morph${n === 2 ? '' : 's'}` : '';
-  const mixed = S.library.some((x) => x.w !== seqW() || x.h !== seqH());
-  $('#seqwarn').hidden = !mixed;
-  ['#bSeqPrev', '#bSeqDots', '#bSeqVideo'].forEach((id) => { $(id).disabled = n < 1; });
 }
 
-function buildSubjectPicker() {
-  const sel = $('#seqSubj'); sel.textContent = '';
-  S.subjects.forEach((x, i) => {
-    const o = document.createElement('option');
-    o.value = String(i); o.textContent = '#' + x.id;
-    sel.append(o);
+const stripLen = (inst) => {
+  const t = stripTracks(inst);
+  return t.reduce((a, x) => Math.max(a, x.frames.length), 0);
+};
+
+function seqItems() {
+  return S.strip.map((inst, i) => {
+    const it = libOf(inst.lib) || { name: '?' };
+    return { name: `${i + 1}. ${it.name}`, tracks: stripTracks(inst),
+             transition: i > 0 ? inst.trans : null };
   });
-  $('#bCap').disabled = !dotsReady();
-  $('#capnote').textContent = dotsReady()
-    ? 'Captures from the frame the transport is on, in the current look.'
-    : 'Track a subject and pick the dots look to capture from this clip. '
-      + 'Static shapes work without one.';
 }
 
-/* ------------------------------------------------------------ the sequence */
 async function buildSeq() {
   const P = await playerLib();
-  if (!S.library.length) throw new Error('nothing in the sequence yet');
-  const doc = P.buildSequence(S.library.map((x) => ({
-    name: x.name, frames: x.frames, color: x.color,
-  })), {
-    w: seqW(), h: seqH(), fps: S.fps || 30, dotpx: S.P.dotpx, bg: S.bg,
-    color: seqColor(), durationMs: +$('#seqDur').value, seed: S.P.seed,
-  });
+  if (!S.strip.length) throw new Error('nothing in the sequence yet');
+  const doc = P.buildSequence(seqItems(), Object.assign({
+    w: seqW(), h: seqH(), color: seqColor(), durationMs: 900,
+  }, seqLook()));
   S.seqDoc = doc;
   return doc;
 }
 
+/* ------------------------------------------------------------ the view */
+function setView(v, opts) {
+  S.view = v;
+  $('#studiopanel').hidden = v !== 'studio';
+  $('#seqpanel').hidden = v !== 'sequence';
+  $$('#viewbar .chip[data-view]').forEach((b) => b.setAttribute(
+    'aria-pressed', String(b.dataset.view === v)));
+  if (v === 'sequence') {
+    showStage('sequence');
+    renderSeq();
+    // opening the view rebuilds and plays: the strip may have been edited
+    // since the last preview, and a stage showing a stale document (or a black
+    // rectangle) is worse than the tenth of a second the rebuild costs.
+    // `skipPreview` is for seqAdd, which awaits its own.
+    if (opts && opts.skipPreview) return paintToSeq();
+    if (S.strip.length) seqPreviewSafe();
+    else if (PLAYER) PLAYER.pause();
+  } else {
+    if (PLAYER) PLAYER.pause();
+    restoreStage();
+  }
+  paintToSeq();
+}
+
+/** The studio's one link back: everything the current source could add. */
+function paintToSeq() {
+  const b = $('#bToSeq');
+  const can = seqCandidates();
+  b.hidden = S.view !== 'studio' || !can.length;
+  b.textContent = S.returnToSeq ? '→ add to the sequence' : '+ to the sequence';
+  $('#viewbar').dataset.pending = S.returnToSeq ? '1' : '0';
+}
+
+/** What the current source could contribute right now, as add buttons. */
+function seqCandidates() {
+  const out = [];
+  if (S.kind === 'video' && dotsReady()) {
+    out.push({ id: 'clip', label: 'this clip · '
+      + S.subjects.length + ' subject' + (S.subjects.length > 1 ? 's' : ''),
+      note: 'the tracked subjects of ' + (S.fileName || 'this clip')
+        + ', at the current look' });
+  }
+  if (S.kind === 'image') {
+    out.push({ id: 'still', label: 'this still',
+      note: (usingSubjects() ? 'the subjects cut out of ' : 'the whole of ')
+        + (S.fileName || 'this picture') + ', as dots' });
+  }
+  return out;
+}
+
+async function seqAdd(what, arg) {
+  const t0 = performance.now();
+  busy(true);
+  try {
+    let item;
+    if (what === 'clip') item = await captureClip();
+    else if (what === 'still') item = await captureStill();
+    else if (what === 'shape') item = await addShape(arg);
+    else if (what === 'image') item = await addShape(arg.name, arg.bitmap);
+    else if (what === 'lib') item = libOf(arg);
+    if (!item) throw new Error('nothing to add');
+    stripAdd(item);
+    setView('sequence', { skipPreview: true });
+    await seqPreviewSafe();
+    seqInfo(`added ${item.name} · ${item.tracks.length} track`
+      + `${item.tracks.length > 1 ? 's' : ''} · `
+      + `${item.tracks[0].frames.length} frame`
+      + `${item.tracks[0].frames.length > 1 ? 's' : ''} · `
+      + `${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    S.returnToSeq = false;
+  } catch (err) {
+    seqInfo('could not add that: ' + why(err), true);
+  }
+  busy(false);
+}
+
+function seqInfo(msg, bad) {
+  const el = $('#seqinfo');
+  el.hidden = false; el.classList.toggle('err', !!bad);
+  el.textContent = msg;
+}
+
+/* ----------------------------------------------------------- the panel */
+function renderAdd() {
+  const wrap = $('#seqadd');
+  wrap.textContent = '';
+  const mk = (label, title, fn) => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = label; b.title = title || '';
+    b.addEventListener('click', fn);
+    wrap.append(b);
+    return b;
+  };
+  seqCandidates().forEach((c) => mk('+ ' + c.label, c.note, () => seqAdd(c.id)));
+  mk('+ ring', 'a dithered ring', () => seqAdd('shape', 'ring'));
+  mk('+ coral', 'a dithered branching form', () => seqAdd('shape', 'coral'));
+  mk('+ image…', 'a picture, rasterised through the same dots pipeline',
+     () => $('#shapeFile').click());
+  if (S.library.length) {
+    const lbl = document.createElement('span');
+    lbl.className = 'seqsep';
+    lbl.textContent = 'captured this session — click to add (again)';
+    wrap.append(lbl);
+    S.library.forEach((it, i) => mk(`${i + 1}. ${it.name}`,
+      `${it.kind} · ${it.tracks.length} track(s) · `
+        + `${it.tracks[0].frames.length} frame(s)`,
+      () => seqAdd('lib', it.id)));
+  }
+  $('#seqsrc').textContent = S.library.length
+    ? `${S.library.length} in the library` : '';
+  $('#addnote').textContent = seqCandidates().length ? ''
+    : 'Nothing loaded to capture from — add a shape, or bring in a clip or a '
+      + 'picture and come back.';
+}
+
+function renderInspector() {
+  const box = $('#seqinspect');
+  box.textContent = '';
+  const sel = S.sel;
+  const note = (t) => {
+    const d = document.createElement('div');
+    d.className = 'note'; d.textContent = t; box.append(d); return d;
+  };
+  if (!sel || !S.strip.length) {
+    note('Click an item or a join in the strip below the stage.');
+    $('#sq2sum').textContent = '';
+    return;
+  }
+  const lbl = (t, v) => {
+    const d = document.createElement('div');
+    d.className = 'lbl';
+    const a = document.createElement('span'); a.textContent = t;
+    const b = document.createElement('span'); b.textContent = v || '';
+    d.append(a, b); box.append(d);
+    return b;
+  };
+  const slider = (min, max, val, fmt, onIn) => {
+    const i = document.createElement('input');
+    i.type = 'range'; i.min = String(min); i.max = String(max); i.step = '1';
+    i.value = String(val);
+    i.addEventListener('input', () => onIn(+i.value));
+    box.append(i);
+    return i;
+  };
+
+  if (sel.type === 'join') {
+    const inst = S.strip[sel.i];
+    $('#sq2sum').textContent = 'join ' + sel.i;
+    lbl('Transition', inst.trans.kind);
+    const chips = document.createElement('div');
+    chips.className = 'chips seg';
+    (DP ? DP.TRANSITIONS : KINDS.map((id) => ({ id, name: id })))
+      .forEach((t) => {
+        const b = document.createElement('button');
+        b.className = 'chip'; b.textContent = t.name; b.title = t.note || '';
+        b.dataset.kind = t.id;
+        b.setAttribute('aria-pressed', String(inst.trans.kind === t.id));
+        b.addEventListener('click', () => {
+          inst.trans.kind = t.id; renderSeq(); seqPreviewSafe();
+        });
+        chips.append(b);
+      });
+    box.append(chips);
+    const tn = document.createElement('div');
+    tn.className = 'note';
+    tn.textContent = ((DP && DP.TRANSITIONS.find((x) => x.id === inst.trans.kind))
+      || {}).note || '';
+    box.append(tn);
+    if (inst.trans.kind !== 'cut') {
+      const out = lbl('Length', inst.trans.ms + ' ms');
+      slider(100, 2500, inst.trans.ms, null, (v) => {
+        inst.trans.ms = Math.round(v / 50) * 50;
+        out.textContent = inst.trans.ms + ' ms';
+        renderStrip();
+      });
+    }
+    return;
+  }
+
+  const inst = S.strip[sel.i];
+  const it = libOf(inst.lib);
+  if (!it) { note('that item is gone'); return; }
+  $('#sq2sum').textContent = `${sel.i + 1}. ${it.name}`;
+  lbl(it.kind === 'clip' ? 'Clip' : it.kind === 'still' ? 'Still' : 'Shape',
+      `${it.w}×${it.h}`);
+  if (it.tracks.length > 1) {
+    lbl('Subject', inst.subject === 'all' ? 'all' : '#' + it.tracks[inst.subject].id);
+    const chips = document.createElement('div');
+    chips.className = 'chips seg';
+    const mk = (v, label, col) => {
+      const b = document.createElement('button');
+      b.className = 'chip'; b.setAttribute('aria-pressed',
+                                           String(String(inst.subject) === String(v)));
+      if (col) {
+        const sw = document.createElement('span');
+        sw.className = 'sw'; sw.style.background = col;
+        b.classList.add('sub'); b.append(sw);
+      }
+      const t = document.createElement('span'); t.textContent = label;
+      b.append(t);
+      b.addEventListener('click', () => { inst.subject = v; renderSeq(); });
+      chips.append(b);
+    };
+    mk('all', 'all');
+    it.tracks.forEach((t, k) => mk(k, '#' + t.id, t.color));
+    box.append(chips);
+  }
+  const n = it.tracks.reduce((a, t) => Math.max(a, t.frames.length), 0);
+  if (n > 1) {
+    const io = lbl('In / out', `${inst.in} – ${inst.out} · ${stripLen(inst)}f`);
+    slider(0, n - 1, inst.in, null, (v) => {
+      inst.in = Math.min(v, inst.out);
+      io.textContent = `${inst.in} – ${inst.out} · ${stripLen(inst)}f`;
+      renderStrip();
+    });
+    slider(0, n - 1, inst.out, null, (v) => {
+      inst.out = Math.max(v, inst.in);
+      io.textContent = `${inst.in} – ${inst.out} · ${stripLen(inst)}f`;
+      renderStrip();
+    });
+  } else {
+    const ho = lbl('Hold', inst.hold + ' frames');
+    slider(1, 150, inst.hold, null, (v) => {
+      inst.hold = v; ho.textContent = v + ' frames'; renderStrip();
+    });
+  }
+  lbl('Colour', inst.color ? 'this item' : 'as captured');
+  const cw = document.createElement('div');
+  cw.className = 'chips';
+  const lab = document.createElement('label');
+  lab.className = 'chip sw1';
+  const col = document.createElement('input');
+  col.type = 'color';
+  col.value = inst.color || it.tracks[0].color;
+  col.addEventListener('input', () => { inst.color = col.value; renderSeq(); });
+  lab.append(col);
+  const reset = document.createElement('button');
+  reset.className = 'chip'; reset.textContent = 'as captured';
+  reset.setAttribute('aria-pressed', String(!inst.color));
+  reset.addEventListener('click', () => { inst.color = null; renderSeq(); });
+  cw.append(lab, reset);
+  box.append(cw);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const rm = document.createElement('button');
+  rm.className = 'btn'; rm.textContent = 'remove from the strip';
+  rm.addEventListener('click', () => {
+    S.strip.splice(sel.i, 1); S.sel = null; renderSeq();
+  });
+  row.append(rm);
+  box.append(row);
+}
+
+/* ------------------------------------------------------------- the strip */
+function thumb(cv, inst) {
+  const it = libOf(inst.lib);
+  const g = cv.getContext('2d');
+  const w = cv.width, h = cv.height;
+  g.fillStyle = S.seq.bg; g.fillRect(0, 0, w, h);
+  if (!it) return;
+  const k = Math.min(w / it.w, h / it.h);
+  const ox = (w - it.w * k) / 2, oy = (h - it.h * k) / 2;
+  stripTracks(inst).forEach((t) => {
+    const xy = t.frames[0] || new Uint16Array(0);
+    g.fillStyle = t.color;
+    for (let i = 0; i < xy.length; i += 2) {
+      g.fillRect(Math.round(ox + xy[i] * k), Math.round(oy + xy[i + 1] * k), 1, 1);
+    }
+  });
+}
+
+function renderStrip() {
+  const wrap = $('#strip2');
+  wrap.textContent = '';
+  S.strip.forEach((inst, i) => {
+    if (i > 0) {
+      const j = document.createElement('button');
+      j.className = 'join';
+      j.dataset.i = String(i);
+      j.setAttribute('aria-pressed',
+                     String(S.sel && S.sel.type === 'join' && S.sel.i === i));
+      const k = document.createElement('b');
+      k.textContent = inst.trans.kind === 'density' ? 'density' : inst.trans.kind;
+      const ms = document.createElement('em');
+      ms.textContent = inst.trans.kind === 'cut' ? '—' : inst.trans.ms + ' ms';
+      j.append(k, ms);
+      j.title = 'click to choose the transition · shift-click cycles it';
+      j.addEventListener('click', (e) => {
+        if (e.shiftKey) {
+          inst.trans.kind = KINDS[(KINDS.indexOf(inst.trans.kind) + 1) % KINDS.length];
+        }
+        S.sel = { type: 'join', i };
+        renderSeq();
+      });
+      wrap.append(j);
+    }
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.draggable = true;
+    card.dataset.i = String(i);
+    card.setAttribute('aria-pressed',
+                      String(S.sel && S.sel.type === 'item' && S.sel.i === i));
+    const cv = document.createElement('canvas');
+    cv.width = 112; cv.height = 63;
+    card.append(cv);
+    const it = libOf(inst.lib) || { name: '?', kind: '?' };
+    const nm = document.createElement('b');
+    nm.textContent = `${i + 1}. ${it.name}`;
+    const sub = document.createElement('em');
+    const tracks = stripTracks(inst);
+    sub.textContent = `${stripLen(inst)}f · `
+      + (tracks.length > 1 ? `${tracks.length} subjects` : it.kind);
+    card.append(nm, sub);
+    card.addEventListener('click', () => { S.sel = { type: 'item', i }; renderSeq(); });
+    card.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', String(i));
+      e.dataTransfer.effectAllowed = 'move';
+      card.classList.add('drag');
+    });
+    card.addEventListener('dragend', () => card.classList.remove('drag'));
+    card.addEventListener('dragover', (e) => { e.preventDefault(); card.classList.add('over'); });
+    card.addEventListener('dragleave', () => card.classList.remove('over'));
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      card.classList.remove('over');
+      const from = +e.dataTransfer.getData('text/plain');
+      if (Number.isNaN(from) || from === i) return;
+      const [moved] = S.strip.splice(from, 1);
+      S.strip.splice(i, 0, moved);
+      S.sel = { type: 'item', i };
+      renderSeq();
+    });
+    wrap.append(card);
+    thumb(cv, inst);
+  });
+  if (!S.strip.length) {
+    const empty = document.createElement('div');
+    empty.className = 'seqempty';
+    empty.textContent = 'nothing in the strip yet — add something on the left';
+    wrap.append(empty);
+  }
+  const frames = S.strip.reduce((a, x) => a + stripLen(x), 0);
+  const joins = Math.max(0, S.strip.length - 1);
+  $('#sq1sum').textContent = S.strip.length
+    ? `${S.strip.length} item${S.strip.length > 1 ? 's' : ''}` : '';
+  $('#sq4sum').textContent = S.strip.length
+    ? `${frames}f + ${joins} join${joins === 1 ? '' : 's'}` : '';
+  const mixed = S.strip.some((x) => {
+    const it = libOf(x.lib);
+    return it && (it.w !== seqW() || it.h !== seqH());
+  });
+  $('#seqwarn').hidden = !mixed;
+  ['#bSeqPrev', '#bSeqDots', '#bSeqVideo'].forEach((id) => {
+    $(id).disabled = !S.strip.length;
+  });
+}
+
+function renderSeq() {
+  renderAdd();
+  renderStrip();
+  renderInspector();
+}
+
+/* ------------------------------------------------------ preview + export */
+/* Every UI path into the preview goes through this: seqPreview() rejects so
+ * window.DV_seq.preview() can be awaited in a test, and an unhandled rejection
+ * from a click handler would show up as a page error. */
+const seqPreviewSafe = () => seqPreview().catch(() => {});
+
 async function seqPreview() {
-  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
   try {
     const P = await playerLib();
     const doc = await buildSeq();
-    $('#seqwrap').hidden = false;
-    $('#pwrap').hidden = true; $('#vwrap').hidden = true; $('#camwrap').hidden = true;
-    $('#empty').hidden = true;
+    showStage('sequence');
     if (!PLAYER) {
       PLAYER = new P.Player($('#seqcv'), { loop: true, onFrame: (f) => {
-        $('#seqframe').textContent = `${f} / ${doc.frames.length - 1}`;
+        const d = S.seqDoc;
+        if (!d) return;
+        $('#seqframe').textContent = `${f} / ${d.frames.length - 1}`;
+        const m = d.marks.filter((x) => x.start <= f).pop();
+        $('#seqmark').textContent = m ? (m.kind === 'item' ? m.name : m.kind) : '';
       } });
     }
     PLAYER.setDoc(doc);
     PLAYER.play();
     $('#bSeqPlay').textContent = 'pause';
-    const morphs = doc.marks.filter((m) => m.kind === 'morph');
-    info.textContent = `${doc.frames.length} frames · ${doc.fps} fps · `
-      + `${(doc.frames.length / doc.fps).toFixed(1)} s · ${morphs.length} morph`
-      + `${morphs.length === 1 ? '' : 's'} of `
-      + `${morphs.map((m) => m.frames).join('/')} frames`;
+    const joins = doc.marks.filter((m) => m.kind !== 'item');
+    seqInfo(`${doc.frames.length} frames · ${doc.fps} fps · `
+      + `${(doc.frames.length / doc.fps).toFixed(1)} s · `
+      + `${doc.subjects.length} colour${doc.subjects.length > 1 ? 's' : ''}`
+      + (joins.length ? ' · ' + joins.map((m) => `${m.kind} ${m.frames}f`).join(' · ')
+        : ''));
+    return doc;
   } catch (err) {
-    info.classList.add('err');
-    info.textContent = 'preview failed: ' + why(err);
+    seqInfo('preview failed: ' + why(err), true);
+    throw err;
   }
 }
 
 async function seqExportDots() {
-  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
   try {
     const P = await playerLib();
     const doc = await buildSeq();
     const bytes = await P.pack(doc);
     download(new Blob([bytes], { type: 'application/octet-stream' }),
              'sequence.dots.gz');
-    info.textContent = `${doc.frames.length} frames · `
-      + `${(bytes.length / 1024).toFixed(0)} KB .dots.gz`;
+    seqInfo(`${doc.frames.length} frames · `
+      + `${(bytes.length / 1024).toFixed(0)} KB .dots.gz`);
   } catch (err) {
-    info.classList.add('err');
-    info.textContent = 'export failed: ' + why(err);
+    seqInfo('export failed: ' + why(err), true);
   }
 }
 
-/** A sequence as a video. The server rasterises the dot positions it is given
- *  (one implementation of the morph, in JS); without one, MediaRecorder does
- *  the same job in the tab and gives WebM. */
+/** A sequence as a video.
+ *
+ *  With a server: the finished dot positions go up to /api/sequence and it
+ *  rasterises them into any of the five containers. Without one: the SAME
+ *  encoder path a clip export uses in the tab — `engine.exportClip` with a
+ *  `source` override and a renderFrame that paints sequence frames — so a
+ *  sequence gets the browser's GIF and alpha WebM for free rather than a
+ *  second, weaker recorder of its own. */
 async function seqExportVideo() {
-  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
   const btn = $('#bSeqVideo'); btn.disabled = true;
   try {
     const P = await playerLib();
     const doc = await buildSeq();
-    const bytes = await P.pack(doc);
+    const fmt = seqFormat();
     let r;
     if (E().renderSequence) {
-      info.textContent = 'rendering on the server…';
-      r = await E().renderSequence(bytes, currentFormat().id);
+      seqInfo('rendering on the server…');
+      const bytes = await P.pack(doc);
+      r = await E().renderSequence(bytes, fmt.id);
     } else {
-      info.textContent = 'recording in the tab…';
-      r = await recordSequence(doc, (pr) => {
-        info.textContent = `recording ${pr.done}/${pr.total}`;
-      });
+      seqInfo('encoding in the tab…');
+      const img = new ImageData(doc.w, doc.h);
+      const opts = fmt.alpha ? { bg: null, transparent: true } : { bg: doc.bg };
+      r = await E().exportClip({
+        format: fmt.id, fps: doc.fps, gif_fps: S.gifFps, bg: doc.bg,
+        palette: doc.palette, subjects: [],
+        source: { w: doc.w, h: doc.h, nFrames: doc.frames.length, fps: doc.fps },
+      }, (pr) => seqInfo(`encoding ${pr.text || pr.done + '/' + pr.total}`),
+         (i) => {
+           P.paintFrame(img.data, doc.w, doc.h, doc, doc.frames[i], opts);
+           return img;
+         });
     }
     const a = $('#seqdl');
     a.href = r.url; a.download = 'sequence.' + r.ext; a.hidden = false;
     const v = $('#seqvid');
-    if (r.ext !== 'gif' && r.ext !== 'mov') { v.src = r.url; v.hidden = false; }
-    info.textContent = `${r.frames} frames · ${r.ext.toUpperCase()} · `
+    if (r.playable !== false && r.ext !== 'gif' && r.ext !== 'mov') {
+      v.src = r.url; v.hidden = false;
+    } else { v.hidden = true; }
+    seqInfo(`${r.frames} frames · ${r.ext.toUpperCase()} · `
       + `${(r.bytes / 1e6).toFixed(2)} MB`
-      + (r.elapsedS ? ` · ${r.elapsedS.toFixed(1)} s` : '');
+      + (r.elapsedS ? ` · ${r.elapsedS.toFixed(1)} s` : '')
+      + (r.note ? ` · ${r.note}` : ''));
   } catch (err) {
-    info.classList.add('err');
-    info.textContent = 'render failed: ' + why(err);
+    seqInfo('render failed: ' + why(err), true);
   }
   btn.disabled = false;
 }
 
-/** MediaRecorder over the player's own rasteriser — the browser engine's
- *  answer to "render this sequence". */
-async function recordSequence(doc, onProgress) {
-  const P = await playerLib();
-  const cv = document.createElement('canvas');
-  cv.width = doc.w; cv.height = doc.h;
-  const g = cv.getContext('2d');
-  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
-  const mime = types.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
-  if (!mime) throw new Error('this browser has no MediaRecorder WebM encoder');
-  const img = g.createImageData(doc.w, doc.h);
-  const stream = cv.captureStream(0);
-  const vtrack = stream.getVideoTracks()[0];
-  const chunks = [];
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12e6 });
-  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  const stopped = new Promise((ok) => { rec.onstop = ok; });
-  const t0 = performance.now();
-  rec.start();
-  const dt = 1000 / doc.fps;
-  for (let i = 0; i < doc.frames.length; i++) {
-    const fs = performance.now();
-    P.paintFrame(img.data, doc.w, doc.h, doc, doc.frames[i], { bg: doc.bg });
-    g.putImageData(img, 0, 0);
-    vtrack.requestFrame();
-    if (onProgress) onProgress({ done: i + 1, total: doc.frames.length });
-    await sleep(Math.max(0, dt - (performance.now() - fs)));
-  }
-  await sleep(dt * 2);
-  rec.stop(); await stopped; vtrack.stop();
-  const blob = new Blob(chunks, { type: mime });
-  return { url: URL.createObjectURL(blob), ext: 'webm', bytes: blob.size,
-           frames: doc.frames.length,
-           elapsedS: (performance.now() - t0) / 1000 };
+/* --------------------------------------------------- the sequence's look */
+function seqFormat() {
+  const list = engineFormats();
+  return list.find((f) => f.id === S.seq.format && f.available)
+    || list.find((f) => f.available) || { id: 'webm', ext: 'webm' };
 }
 
-$('#bCap').addEventListener('click', captureSegment);
-$('#seqLen').addEventListener('input', (e) => { $('#vSeqLen').textContent = e.target.value + ' frames'; });
-$('#seqHold').addEventListener('input', (e) => { $('#vSeqHold').textContent = e.target.value + ' frames'; });
-$('#seqDur').addEventListener('input', (e) => { $('#vSeqDur').textContent = e.target.value + ' ms'; });
-$$('#shapes [data-shape]').forEach((b) => b.addEventListener('click', () => addShape(b.dataset.shape)));
-$('#bShapeImg').addEventListener('click', () => $('#shapeFile').click());
+function buildSeqFormats() {
+  const sel = $('#sSeqFmt'), list = engineFormats();
+  $('#seqfmt').hidden = !list.length;
+  sel.textContent = '';
+  list.forEach((f) => {
+    const o = document.createElement('option');
+    o.value = f.id;
+    o.textContent = f.label + (f.available ? '' : ' — unavailable here');
+    o.disabled = !f.available;
+    sel.append(o);
+  });
+  sel.value = seqFormat().id;
+  S.seq.format = sel.value;
+  $('#vSeqFmt').textContent = (seqFormat().ext || '').toUpperCase();
+}
+
+function renderSeqPalettes() {
+  const wrap = $('#seqpals');
+  if (!wrap || !S.meta) return;
+  wrap.textContent = '';
+  S.meta.palettes.forEach((p) => {
+    const b = document.createElement('button');
+    b.className = 'chip pal';
+    const pv = document.createElement('span'); pv.className = 'pv';
+    p.colors.slice(0, 5).forEach((c) => {
+      const s = document.createElement('b'); s.style.background = c; pv.append(s);
+    });
+    const nm = document.createElement('span'); nm.textContent = p.name;
+    b.append(pv, nm);
+    b.title = 'background from the first colour, item colours from the rest';
+    b.addEventListener('click', () => {
+      // the background is the palette's darkest end, the items take the rest in
+      // order — so one click re-colours the whole strip and keeps items apart
+      const cols = p.colors.slice();
+      S.seq.bg = cols[0];
+      $('#cSeqBg').value = cols[0];
+      const rest = cols.length > 1 ? cols.slice(1) : cols;
+      S.strip.forEach((inst, i) => { inst.color = rest[i % rest.length]; });
+      renderSeq();
+    });
+    wrap.append(b);
+  });
+}
+
+/* ------------------------------------------------------------- handlers */
+$$('#viewbar .chip[data-view]').forEach((b) => b.addEventListener('click', () => {
+  setView(b.dataset.view);
+}));
+$('#bToSeq').addEventListener('click', () => {
+  const can = seqCandidates();
+  if (can.length) seqAdd(can[0].id);
+});
+$('#bSeqNew').addEventListener('click', () => {
+  S.returnToSeq = true;
+  setView('studio');
+  openStep(1);
+  toast('drop or record something — then "add to the sequence"');
+});
 $('#shapeFile').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
-  try { await addShape(f.name.replace(/\.[^.]+$/, ''), await createImageBitmap(f)); }
-  catch (err) { toast('could not read that image: ' + err.message, true); }
+  try {
+    await seqAdd('image', { name: f.name.replace(/\.[^.]+$/, ''),
+                            bitmap: await createImageBitmap(f) });
+  } catch (err) { toast('could not read that image: ' + err.message, true); }
+  e.target.value = '';
 });
-$('#bSeqClear').addEventListener('click', () => { S.library = []; renderLibrary(); });
-$('#bSeqPrev').addEventListener('click', seqPreview);
+$('#bSeqClear').addEventListener('click', () => {
+  S.strip = []; S.sel = null; S.seqDoc = null;
+  if (PLAYER) PLAYER.pause();
+  renderSeq();
+  seqInfo('the strip is empty — the library kept everything');
+});
+$('#bSeqPrev').addEventListener('click', seqPreviewSafe);
 $('#bSeqDots').addEventListener('click', seqExportDots);
 $('#bSeqVideo').addEventListener('click', seqExportVideo);
 $('#bSeqPlay').addEventListener('click', () => {
@@ -2619,11 +3082,20 @@ $('#bSeqPlay').addEventListener('click', () => {
   PLAYER.toggle();
   $('#bSeqPlay').textContent = PLAYER.playing ? 'pause' : 'play';
 });
-$('#bSeqBack').addEventListener('click', () => {
-  $('#seqwrap').hidden = true;
-  if (PLAYER) PLAYER.pause();
-  $('#empty').hidden = S.kind !== 'none';
-  $('#vwrap').hidden = S.kind === 'none';
+$('#sSeqFmt').addEventListener('change', (e) => {
+  S.seq.format = e.target.value;
+  $('#vSeqFmt').textContent = (seqFormat().ext || '').toUpperCase();
+});
+$('#sSeqDot').addEventListener('input', (e) => {
+  S.seq.dotpx = +e.target.value;
+  $('#vSeqDot').textContent = S.seq.dotpx + ' px';
+  if (PLAYER && S.seqDoc) PLAYER.set({ dotpx: S.seq.dotpx });
+  renderStrip();
+});
+$('#cSeqBg').addEventListener('input', (e) => {
+  S.seq.bg = e.target.value;
+  if (PLAYER && S.seqDoc) PLAYER.set({ bg: S.seq.bg });
+  renderStrip();
 });
 
 /* ======================================================== the engine chip */
@@ -2784,7 +3256,13 @@ async function checkModels() {
                default_track_size: 768 };
   }
   await afterEngine();
+  S.seq.dotpx = S.P.dotpx;
+  S.seq.bg = S.bg;
+  $('#cSeqBg').value = S.bg;
+  renderSeqPalettes();
+  setView('studio');
   showSteps('none');
+  renderSeq();
   window.DV = S;
   window.DV_maskURL = subjectMaskDataURL;
   window.DV_draw = draw;
@@ -2850,8 +3328,55 @@ async function checkModels() {
   };
   window.DV_dots = { doc: dotsDoc, params: dotsParams, lib: playerLib,
                      library: () => S.library, build: buildSeq,
-                     capture: captureSegment, shape: addShape,
                      preview: seqPreview, player: () => PLAYER };
+  /* The sequence view, for the verifiers: everything the UI does, callable. */
+  window.DV_seq = {
+    view: (v) => { setView(v); return S.view; },
+    add: (what, arg) => seqAdd(what, arg),
+    library: () => S.library.map((x) => ({ id: x.id, name: x.name, kind: x.kind,
+                                           w: x.w, h: x.h,
+                                           tracks: x.tracks.map((t) => ({
+                                             id: t.id, color: t.color,
+                                             frames: t.frames.length })) })),
+    strip: () => S.strip.map((x, i) => {
+      const it = libOf(x.lib) || {};
+      return { i, lib: x.lib, name: it.name, kind: it.kind, subject: x.subject,
+               in: x.in, out: x.out, hold: x.hold, color: x.color,
+               frames: stripLen(x), trans: i > 0 ? x.trans : null };
+    }),
+    set: (i, opts) => { Object.assign(S.strip[i], opts); renderSeq();
+                        return S.strip[i]; },
+    trans: (i, kind, ms) => {
+      const inst = S.strip[i];
+      if (!inst || !i) throw new Error('no join before item ' + i);
+      inst.trans = { kind, ms: ms === undefined ? inst.trans.ms : ms };
+      renderSeq();
+      return inst.trans;
+    },
+    move: (from, to) => { const [m] = S.strip.splice(from, 1);
+                          S.strip.splice(to, 0, m); renderSeq();
+                          return S.strip.map((x) => x.lib); },
+    select: (type, i) => { S.sel = { type, i }; renderSeq(); return S.sel; },
+    look: (o) => {
+      Object.assign(S.seq, o || {});
+      $('#sSeqDot').value = String(S.seq.dotpx);
+      $('#vSeqDot').textContent = S.seq.dotpx + ' px';
+      $('#cSeqBg').value = S.seq.bg;
+      if (PLAYER && S.seqDoc) PLAYER.set({ dotpx: S.seq.dotpx, bg: S.seq.bg });
+      renderStrip();
+      return S.seq;
+    },
+    build: buildSeq,
+    preview: seqPreview,
+    dots: seqExportDots,
+    video: seqExportVideo,
+    format: (id) => { S.seq.format = id; $('#sSeqFmt').value = id;
+                      $('#vSeqFmt').textContent = (seqFormat().ext || '').toUpperCase();
+                      return seqFormat(); },
+    doc: () => S.seqDoc,
+    player: () => PLAYER,
+    transitions: () => (DP ? DP.TRANSITIONS : null),
+  };
   window.DV_setFormat = (id) => {
     S.format = id; $('#sFmt').value = id; paintFormat();
     return currentFormat();

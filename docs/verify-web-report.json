@@ -148,8 +148,8 @@
     ]
    },
    "browserChip": "Browser · free",
-   "deadPort": 59248,
-   "badCustom": "could not reach http://127.0.0.1:59248 — running in the browser instead",
+   "deadPort": 61867,
+   "badCustom": "could not reach http://127.0.0.1:61867 — running in the browser instead",
    "afterBadCustom": {
     "id": "browser",
     "label": "Browser",
@@ -271,7 +271,7 @@
    }
   },
   "stillDots": {
-   "fps": "1280×720 · 36 ms · 31500 dots",
+   "fps": "1280×720 · 40 ms · 31500 dots",
    "dots": 31500,
    "census": {
     "w": 1280,
@@ -294,9 +294,9 @@
     "select subjects"
    ],
    "button": "Use this selection",
-   "info": "1 subject in 0.09 s (768 px) · #1 12850 px",
+   "info": "1 subject in 0.08 s (768 px) · #1 12850 px",
    "firstSeconds": 1.7,
-   "segmentSeconds": 0.09,
+   "segmentSeconds": 0.08,
    "areas": {
     "1": 12654
    },
@@ -317,7 +317,7 @@
     "h": 720,
     "distinctColours": 4
    },
-   "dotsFps": "1280×720 · 37 ms · 709 dots",
+   "dotsFps": "1280×720 · 35 ms · 709 dots",
    "subjectDots": 709,
    "export": "1280×720 PNG · 27 KB · 709 dots · 1 subject, cutout · transparent background",
    "bytes": 27347,
@@ -342,9 +342,9 @@
     "select subjects"
    ],
    "button": "Use this selection",
-   "info": "1 subject in 0.09 s (768 px) · #1 12750 px",
+   "info": "1 subject in 0.07 s (768 px) · #1 12750 px",
    "firstSeconds": 0.6,
-   "segmentSeconds": 0.09,
+   "segmentSeconds": 0.07,
    "areas": {
     "1": 12750
    },
@@ -365,7 +365,7 @@
     "h": 720,
     "distinctColours": 4
    },
-   "dotsFps": "1280×720 · 34 ms · 707 dots",
+   "dotsFps": "1280×720 · 31 ms · 707 dots",
    "subjectDots": 707,
    "export": "1280×720 PNG · 27 KB · 707 dots · 1 subject, cutout · transparent background",
    "bytes": 27332,
@@ -384,7 +384,7 @@
    }
   },
   "whole": {
-   "decodeSeconds": 5.6,
+   "decodeSeconds": 5,
    "source": "150 frames · 1280×720 · 30 fps · stays in this tab",
    "nFrames": 150,
    "preview": {
@@ -397,15 +397,15 @@
     "h": 720,
     "distinctColours": 4
    },
-   "render": "rendered 150 frames in 5.1 s (29.3 fps) · 3.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+   "render": "rendered 150 frames in 5.1 s (29.4 fps) · 3.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
    "renderSeconds": 5.6,
-   "bytes": 3121772,
+   "bytes": 3257428,
    "probe": {
     "codec_name": "vp9",
     "width": 1280,
     "height": 720,
     "pix_fmt": "yuv420p",
-    "r_frame_rate": "119/4",
+    "r_frame_rate": "59/2",
     "nb_read_frames": "150",
     "tags": {
      "alpha_mode": "1"
@@ -420,17 +420,17 @@
    "qualityChips": [
     "balanced · 768 px 12 fps"
    ],
-   "previewText": "frame 0 · 1 subject in 0.21 s (768 px) · #1 12825 px",
-   "previewSeconds": 1.75,
-   "trackText": "tracked 150 frames in 17.1 s (8.8 fps) on WEBGPU fp16 · 1 subject",
-   "trackSeconds": 17.3,
-   "trackFps": 8.8,
+   "previewText": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12825 px",
+   "previewSeconds": 1.6,
+   "trackText": "tracked 150 frames in 12.8 s (11.7 fps) on WEBGPU fp16 · 1 subject",
+   "trackSeconds": 13.1,
+   "trackFps": 11.7,
    "dots": {
     "w": 1280,
     "h": 720,
     "distinctColours": 2
    },
-   "dotsFps": "54.6 fps · 774 dots",
+   "dotsFps": "56.8 fps · 774 dots",
    "polish": {
     "params": {
      "u": 0.7,
@@ -440,7 +440,7 @@
      "alpha": 0.35
     },
     "before": {
-     "fps": "54.6 fps · 774 dots",
+     "fps": "56.8 fps · 774 dots",
      "hash": 2826338162
     },
     "state": [
@@ -450,12 +450,12 @@
      }
     ],
     "after": {
-     "fps": "7.0 fps · 918 dots",
+     "fps": "9.8 fps · 918 dots",
      "hash": 1808330858
     },
     "exportSeconds": 8.4
    },
-   "render": "rendered 150 frames in 8.1 s (18.6 fps) · 1.3 MB · rendered slower than real time (8.1 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server",
+   "render": "rendered 150 frames in 8.0 s (18.9 fps) · 1.3 MB · rendered slower than real time (8.0 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server",
    "renderSeconds": 8.4,
    "bytes": 1299234,
    "probe": {
@@ -522,7 +522,7 @@
    ],
    "formats": {
     "gif": {
-     "seconds": 3.8,
+     "seconds": 3.4,
      "bytes": 347378,
      "probe": {
       "codec_name": "gif",
@@ -532,23 +532,23 @@
       "r_frame_rate": "100/7",
       "nb_read_frames": "75"
      },
-     "info": "rendered 75 frames in 3.7 s (20.2 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
+     "info": "rendered 75 frames in 3.4 s (22.2 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
     },
     "webm-alpha": {
      "seconds": 5.7,
-     "bytes": 1956058,
+     "bytes": 1947663,
      "probe": {
       "codec_name": "vp8",
       "width": 1280,
       "height": 720,
       "pix_fmt": "yuv420p",
-      "r_frame_rate": "30/1",
+      "r_frame_rate": "179/6",
       "nb_read_frames": "150",
       "tags": {
        "alpha_mode": "1"
       }
      },
-     "info": "rendered 150 frames in 5.2 s (29.0 fps) · 2.0 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too",
+     "info": "rendered 150 frames in 5.1 s (29.3 fps) · 1.9 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too",
      "alphaTag": "1",
      "census": {
       "pixels": 921600,
@@ -562,10 +562,10 @@
    "shapes": [
     27
    ],
-   "previewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12125 px",
-   "previewSeconds": 1.58,
-   "trackText": "tracked 150 frames in 19.6 s (7.7 fps) on WEBGPU fp16 · 1 subject",
-   "trackSeconds": 19.7,
+   "previewText": "frame 0 · 1 subject in 0.11 s (768 px) · #1 12125 px",
+   "previewSeconds": 1.6,
+   "trackText": "tracked 150 frames in 12.7 s (11.8 fps) on WEBGPU fp16 · 1 subject",
+   "trackSeconds": 13.1,
    "areas": [
     12063,
     12809,
@@ -725,9 +725,9 @@
    "engineId": "remote",
    "cameraTrack": {
     "aspectRatio": 1.7777777777777777,
-    "deviceId": "3fbc43d90da61725fd69d5350abb4cf7410bd81d1d6549cd7fc60a4bb871f558",
+    "deviceId": "b1131f67a81848c81ed0c3ea2046726b38199567401d7472c79712bd6a21d744",
     "frameRate": 30,
-    "groupId": "118c1fba88b29b0f2ed8ef44d0c1857b13c7ba67d92de406efbc2b1c98a3fb76",
+    "groupId": "8daff8eedeee88513d6fceab83837f0ba7d9cbc1dd2e53ea67631b909654d1ac",
     "height": 720,
     "resizeMode": "none",
     "width": 1280
@@ -736,19 +736,19 @@
     "photo": {
      "w": 1280,
      "h": 720,
-     "bytes": 631462
+     "bytes": 557434
     },
     "natW": 1280,
     "natH": 720,
-    "source": "1280 × 720 · 617 KB · stays in this tab"
+    "source": "1280 × 720 · 544 KB · stays in this tab"
    },
    "photoCensus": {
     "w": 1280,
     "h": 720,
     "distinctColours": 2
    },
-   "photoExport": "1280×720 PNG · 110 KB",
-   "photoBytes": 113088,
+   "photoExport": "1280×720 PNG · 88 KB",
+   "photoBytes": 90318,
    "photoProbe": {
     "codec_name": "png",
     "width": 1280,
@@ -757,33 +757,33 @@
     "r_frame_rate": "25/1",
     "nb_read_frames": "1"
    },
-   "recordedS": 3.98,
-   "wholeFrames": 119,
-   "srcDuration": 3.935,
+   "recordedS": 3.89,
+   "wholeFrames": 117,
+   "srcDuration": 3.866,
    "strip": {
-    "colours": 30083,
+    "colours": 10342,
     "w": 960,
     "h": 80
    },
    "range": {
-    "start": 0.9675,
-    "end": 2.9675000000000002,
-    "duration": 3.935
+    "start": 0.933,
+    "end": 2.933,
+    "duration": 3.866
    },
-   "trimmedFrames": 60,
-   "upstat": "60 frames · 1280×720 · 30 fps · trimmed 1.0–3.0 s",
-   "trackText": "tracked 60 frames in 4.6 s (12.9 fps) on MPS coreml · 1 subject",
-   "trackSeconds": 5,
-   "dots": "51.0 fps · 8153 dots",
-   "render": "rendered 60 frames in 1.5 s (40.2 fps) · 0.3 MB",
-   "bytes": 286052,
+   "trimmedFrames": 59,
+   "upstat": "59 frames · 1280×720 · 30 fps · trimmed 0.9–2.9 s",
+   "trackText": "tracked 59 frames in 4.0 s (14.6 fps) on MPS coreml · 1 subject",
+   "trackSeconds": 4.5,
+   "dots": "44.2 fps · 4341 dots",
+   "render": "rendered 59 frames in 1.4 s (43.0 fps) · 0.4 MB",
+   "bytes": 397104,
    "probe": {
     "codec_name": "h264",
     "width": 1280,
     "height": 720,
     "pix_fmt": "yuv420p",
     "r_frame_rate": "30/1",
-    "nb_read_frames": "60",
+    "nb_read_frames": "59",
     "tags": {}
    }
   },
@@ -792,9 +792,9 @@
    "engineId": "browser",
    "cameraTrack": {
     "aspectRatio": 1.7777777777777777,
-    "deviceId": "ec0bad951b91d7c2361a9fea03c750428c14fc46db27f0c8d52873068d0c36a3",
+    "deviceId": "1283636b9ad058ed4166cd5725835b03c411d37d768f64c32696078a78a72e97",
     "frameRate": 30,
-    "groupId": "81f2fd1e63dfcc2e784fd003e26593a76f434f15b674c53cd76afff9351e5e02",
+    "groupId": "909b8f92898c65adb9da28ef33ca9118ac972fb8a578c61cdadb698c2591f4bd",
     "height": 720,
     "resizeMode": "none",
     "width": 1280
@@ -803,19 +803,19 @@
     "photo": {
      "w": 1280,
      "h": 720,
-     "bytes": 653082
+     "bytes": 577883
     },
     "natW": 1280,
     "natH": 720,
-    "source": "1280 × 720 · 638 KB · stays in this tab"
+    "source": "1280 × 720 · 564 KB · stays in this tab"
    },
    "photoCensus": {
     "w": 1280,
     "h": 720,
     "distinctColours": 2
    },
-   "photoExport": "1280×720 PNG · 123 KB",
-   "photoBytes": 125673,
+   "photoExport": "1280×720 PNG · 92 KB",
+   "photoBytes": 93739,
    "photoProbe": {
     "codec_name": "png",
     "width": 1280,
@@ -824,26 +824,26 @@
     "r_frame_rate": "25/1",
     "nb_read_frames": "1"
    },
-   "recordedS": 3.96,
+   "recordedS": 3.93,
    "wholeFrames": 117,
-   "srcDuration": 3.931,
+   "srcDuration": 3.9,
    "strip": {
-    "colours": 27669,
+    "colours": 10454,
     "w": 960,
     "h": 80
    },
    "range": {
-    "start": 0.9655,
-    "end": 2.9655,
-    "duration": 3.931
+    "start": 0.95,
+    "end": 2.95,
+    "duration": 3.9
    },
    "trimmedFrames": 60,
-   "upstat": "60 frames · 1280×720 · 30 fps · trimmed 1.0–3.0 s · stays in this tab"
+   "upstat": "60 frames · 1280×720 · 30 fps · trimmed 0.9–3.0 s · stays in this tab"
   },
   "dotsRemote": {
    "engine": "remote",
    "nFrames": 150,
-   "trackText": "tracked 150 frames in 9.6 s (15.7 fps) on MPS coreml · 1 subject",
+   "trackText": "tracked 150 frames in 9.7 s (15.5 fps) on MPS coreml · 1 subject",
    "stats": {
     "frames": 150,
     "w": 1280,
@@ -886,7 +886,7 @@
   "dotsBrowser": {
    "engine": "browser",
    "nFrames": 150,
-   "trackText": "tracked 150 frames in 13.6 s (11.1 fps) on WEBGPU fp16 · 1 subject",
+   "trackText": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject",
    "stats": {
     "frames": 150,
     "w": 1280,
@@ -901,7 +901,7 @@
     "dotsMean": 1162,
     "dotsMax": 2340
    },
-   "seconds": 4.4,
+   "seconds": 4.6,
    "replay": [
     {
      "frame": 0,
@@ -928,37 +928,210 @@
   },
   "sequence": {
    "twoClips": true,
-   "captureA": "captured 45 frames from 100, 1441 dots a frame",
-   "captureB": "captured 45 frames from 0, 5694 dots a frame",
+   "addA": "added clip5s · 1 track · 150 frames · 2.2 s",
+   "view": "sequence",
+   "addB": "added source · 1 track · 90 frames · 2.0 s",
    "libraryKept": 2,
-   "library": [
+   "stillInfo": "1 subject in 0.09 s (768 px) · #1 12750 px",
+   "strip": [
     {
-     "name": "clip5s #1 100–144",
-     "kind": "segment",
+     "i": 0,
+     "lib": 1,
+     "name": "clip5s",
+     "kind": "clip",
+     "subject": "all",
+     "in": 0,
+     "out": 44,
+     "hold": 30,
+     "color": null,
      "frames": 45,
-     "dots": 1441
+     "trans": null
     },
     {
-     "name": "source #1 0–44",
-     "kind": "segment",
+     "i": 1,
+     "lib": 3,
+     "name": "source",
+     "kind": "clip",
+     "subject": "all",
+     "in": 0,
+     "out": 44,
+     "hold": 30,
+     "color": null,
      "frames": 45,
-     "dots": 5694
+     "trans": {
+      "kind": "morph",
+      "ms": 900
+     }
     },
     {
+     "i": 2,
+     "lib": 5,
+     "name": "still",
+     "kind": "still",
+     "subject": "all",
+     "in": 0,
+     "out": 0,
+     "hold": 30,
+     "color": null,
+     "frames": 30,
+     "trans": {
+      "kind": "morph",
+      "ms": 900
+     }
+    },
+    {
+     "i": 3,
+     "lib": 7,
      "name": "ring",
      "kind": "shape",
+     "subject": "all",
+     "in": 0,
+     "out": 0,
+     "hold": 30,
+     "color": null,
      "frames": 30,
-     "dots": 7940
+     "trans": {
+      "kind": "morph",
+      "ms": 900
+     }
     }
    ],
-   "preview": "194 frames · 30 fps · 6.5 s · 2 morphs of 37/37 frames",
+   "library": [
+    {
+     "id": 1,
+     "name": "clip5s",
+     "kind": "clip",
+     "w": 1280,
+     "h": 720,
+     "tracks": [
+      {
+       "id": 1,
+       "color": "#b0413e",
+       "frames": 150
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "name": "source",
+     "kind": "clip",
+     "w": 1280,
+     "h": 720,
+     "tracks": [
+      {
+       "id": 1,
+       "color": "#b0413e",
+       "frames": 90
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "name": "still",
+     "kind": "still",
+     "w": 1280,
+     "h": 720,
+     "tracks": [
+      {
+       "id": 1,
+       "color": "#b0413e",
+       "frames": 1
+      }
+     ]
+    },
+    {
+     "id": 7,
+     "name": "ring",
+     "kind": "shape",
+     "w": 1280,
+     "h": 720,
+     "tracks": [
+      {
+       "id": 1,
+       "color": "#b0413e",
+       "frames": 1
+      }
+     ]
+    }
+   ],
+   "trimmed": [
+    {
+     "i": 0,
+     "lib": 1,
+     "name": "clip5s",
+     "kind": "clip",
+     "subject": "all",
+     "in": 10,
+     "out": 54,
+     "hold": 30,
+     "color": null,
+     "frames": 45,
+     "trans": null
+    },
+    {
+     "i": 1,
+     "lib": 3,
+     "name": "source",
+     "kind": "clip",
+     "subject": "all",
+     "in": 0,
+     "out": 44,
+     "hold": 30,
+     "color": null,
+     "frames": 45,
+     "trans": {
+      "kind": "morph",
+      "ms": 900
+     }
+    },
+    {
+     "i": 2,
+     "lib": 5,
+     "name": "still",
+     "kind": "still",
+     "subject": "all",
+     "in": 0,
+     "out": 0,
+     "hold": 30,
+     "color": null,
+     "frames": 30,
+     "trans": {
+      "kind": "morph",
+      "ms": 900
+     }
+    },
+    {
+     "i": 3,
+     "lib": 7,
+     "name": "ring",
+     "kind": "shape",
+     "subject": "all",
+     "in": 0,
+     "out": 0,
+     "hold": 40,
+     "color": null,
+     "frames": 40,
+     "trans": {
+      "kind": "morph",
+      "ms": 900
+     }
+    }
+   ],
+   "joinChips": [
+    "morph",
+    "scatter",
+    "cut",
+    "density fade"
+   ],
+   "cycled": "scatter",
+   "preview": "243 frames · 30 fps · 8.1 s · 4 colours · morph 37f · scatter 21f · density 25f",
    "doc": {
-    "frames": 194,
+    "frames": 243,
     "fps": 30,
     "marks": [
      {
-      "kind": "segment",
-      "name": "clip5s #1 100–144",
+      "kind": "item",
+      "name": "1. clip5s",
       "start": 0,
       "frames": 45
      },
@@ -966,62 +1139,120 @@
       "kind": "morph",
       "start": 45,
       "frames": 37,
-      "ms": 900
+      "ms": 900,
+      "name": "1. clip5s → 2. source"
      },
      {
-      "kind": "segment",
-      "name": "source #1 0–44",
+      "kind": "item",
+      "name": "2. source",
       "start": 82,
       "frames": 45
      },
      {
-      "kind": "morph",
+      "kind": "scatter",
       "start": 127,
-      "frames": 37,
-      "ms": 900
+      "frames": 21,
+      "ms": 700,
+      "name": "2. source → 3. still"
      },
      {
-      "kind": "segment",
-      "name": "ring",
-      "start": 164,
+      "kind": "item",
+      "name": "3. still",
+      "start": 148,
       "frames": 30
+     },
+     {
+      "kind": "density",
+      "start": 178,
+      "frames": 25,
+      "ms": 800,
+      "name": "3. still → 4. ring"
+     },
+     {
+      "kind": "item",
+      "name": "4. ring",
+      "start": 203,
+      "frames": 40
      }
     ],
+    "palette": [
+     "#c9d4c5",
+     "#b0413e",
+     "#2f4f4a",
+     "#7a6a4f",
+     "#3c5a7a"
+    ],
+    "subjects": 4,
     "counts": {
-     "min": 1246,
+     "min": 93,
      "max": 7940
     }
    },
-   "dotsBytes": 428967,
+   "cut": 206,
+   "order": {
+    "before": [
+     "clip5s",
+     "source",
+     "still",
+     "ring"
+    ],
+    "after": [
+     "ring",
+     "clip5s",
+     "source",
+     "still"
+    ],
+    "back": [
+     "clip5s",
+     "source",
+     "still",
+     "ring"
+    ]
+   },
+   "dotsBytes": 345658,
    "server": {
-    "sequence": "seq-308c4b5806",
-    "frames": 194,
+    "sequence": "seq-11a3f5a658",
+    "frames": 243,
     "w": 1280,
     "h": 720,
     "format": "mp4",
-    "bytes": 2187388,
-    "elapsed_s": 1.17,
-    "url": "/api/sequence/seq-308c4b5806/output/mp4"
+    "bytes": 1670153,
+    "elapsed_s": 1.36,
+    "url": "/api/sequence/seq-11a3f5a658/output/mp4"
    },
    "mp4": {
-    "bytes": 2187388,
+    "bytes": 1670153,
     "probe": {
      "codec_name": "h264",
      "width": 1280,
      "height": 720,
      "pix_fmt": "yuv420p",
      "r_frame_rate": "30/1",
-     "nb_read_frames": "194",
+     "nb_read_frames": "243",
      "tags": {}
     }
    },
    "player": {
-    "frames": 194,
-    "painted": 361,
-    "seconds": 3,
-    "fps": 120.3,
-    "meanPaintMs": 1.61,
-    "worstPaintMs": 3.8
+    "frames": 243,
+    "painted": 362,
+    "seconds": 3.01,
+    "fps": 120.4,
+    "meanPaintMs": 1.52,
+    "worstPaintMs": 4.2,
+    "subjects": 4,
+    "palette": [
+     "#c9d4c5",
+     "#b0413e",
+     "#2f4f4a",
+     "#7a6a4f",
+     "#3c5a7a"
+    ]
+   },
+   "afterSwitch": 4,
+   "browser": {
+    "webm": "63 frames · WEBM · 0.90 MB · 2.2 s · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+    "gif": "32 frames · GIF · 0.32 MB · 0.6 s · 32 frames at 15 fps · 5 colours · loops forever",
+    "webm-alpha": "63 frames · WEBM · 1.40 MB · 2.2 s · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
    }
   },
   "entryBrowser": {
@@ -1034,9 +1265,9 @@
    ],
    "offFrameHint": "#1 prompted @ 0 — jump",
    "subject1MarksHidden": true,
-   "previewText": "frame 48 · 1 subject in 0.23 s (768 px) · #2 7600 px",
-   "trackText": "tracked 149 frames in 28.8 s (10.3 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each",
-   "trackSeconds": 28.9,
+   "previewText": "frame 48 · 1 subject in 0.14 s (768 px) · #2 7600 px",
+   "trackText": "tracked 149 frames in 26.0 s (11.4 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each",
+   "trackSeconds": 26.4,
    "tree": {
     "firstOn": 0,
     "empty": 0,
@@ -1068,8 +1299,8 @@
      8347
     ]
    },
-   "dotsBefore": "31.9 fps · 2085 dots",
-   "dotsAfter": "52.6 fps · 2610 dots",
+   "dotsBefore": "32.8 fps · 2085 dots",
+   "dotsAfter": "52.1 fps · 2610 dots",
    "dotsBeforeN": 2085,
    "dotsAfterN": 2610
   },
@@ -1083,9 +1314,9 @@
    ],
    "offFrameHint": "#1 prompted @ 0 — jump",
    "subject1MarksHidden": true,
-   "previewText": "frame 48 · 1 subject in 0.40 s (768 px) · #2 6959 px",
-   "trackText": "tracked 149 frames in 17.5 s (8.5 fps) on MPS coreml · 2 subjects prompted on 2 different frames",
-   "trackSeconds": 18.1,
+   "previewText": "frame 48 · 1 subject in 0.22 s (768 px) · #2 6959 px",
+   "trackText": "tracked 149 frames in 15.2 s (9.8 fps) on MPS coreml · 2 subjects prompted on 2 different frames",
+   "trackSeconds": 15.6,
    "tree": {
     "firstOn": 0,
     "empty": 0,
@@ -1117,13 +1348,13 @@
      8358
     ]
    },
-   "dotsBefore": "46.9 fps · 1253 dots",
-   "dotsAfter": "26.9 fps · 1759 dots",
+   "dotsBefore": "39.8 fps · 1253 dots",
+   "dotsAfter": "54.3 fps · 1759 dots",
    "dotsBeforeN": 1253,
    "dotsAfterN": 1759
   },
   "apiKey": {
-   "port": 59999,
+   "port": 62532,
    "withoutKey": 401,
    "wrongKey": 401,
    "withKey": 200,
@@ -1155,7 +1386,7 @@
    "engine": {
     "id": "remote",
     "label": "Remote server",
-    "baseUrl": "http://127.0.0.1:59999",
+    "baseUrl": "http://127.0.0.1:62532",
     "supports": {
      "maskPrompt": true,
      "perObjectPromptFrames": true,
@@ -1216,7 +1447,7 @@
     "modelsMissing": null,
     "tried": [
      {
-      "url": "http://127.0.0.1:59999",
+      "url": "http://127.0.0.1:62532",
       "ok": true
      }
     ]
@@ -1299,7 +1530,7 @@
   {
    "name": "still · whole-image dots are drawn",
    "ok": true,
-   "detail": "1280×720 · 36 ms · 31500 dots"
+   "detail": "1280×720 · 40 ms · 31500 dots"
   },
   {
    "name": "still · dots are two colours",
@@ -1349,7 +1580,7 @@
   {
    "name": "browser · the subject segments",
    "ok": true,
-   "detail": "1 subject in 0.09 s (768 px) · #1 12850 px"
+   "detail": "1 subject in 0.08 s (768 px) · #1 12850 px"
   },
   {
    "name": "browser · the mask is a person-sized region",
@@ -1379,7 +1610,7 @@
   {
    "name": "browser · the subject alone becomes dots",
    "ok": true,
-   "detail": "1280×720 · 37 ms · 709 dots"
+   "detail": "1280×720 · 35 ms · 709 dots"
   },
   {
    "name": "browser · the transparent-background switch is offered",
@@ -1426,7 +1657,7 @@
   {
    "name": "remote · the subject segments",
    "ok": true,
-   "detail": "1 subject in 0.09 s (768 px) · #1 12750 px"
+   "detail": "1 subject in 0.07 s (768 px) · #1 12750 px"
   },
   {
    "name": "remote · the mask is a person-sized region",
@@ -1456,7 +1687,7 @@
   {
    "name": "remote · the subject alone becomes dots",
    "ok": true,
-   "detail": "1280×720 · 34 ms · 707 dots"
+   "detail": "1280×720 · 31 ms · 707 dots"
   },
   {
    "name": "remote · the transparent-background switch is offered",
@@ -1490,7 +1721,7 @@
   {
    "name": "whole-frame clip exports",
    "ok": true,
-   "detail": "rendered 150 frames in 5.1 s (29.3 fps) · 3.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+   "detail": "rendered 150 frames in 5.1 s (29.4 fps) · 3.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
   },
   {
    "name": "the WebM has every frame",
@@ -1514,17 +1745,17 @@
   {
    "name": "frame-0 preview runs in the tab",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.21 s (768 px) · #1 12825 px"
+   "detail": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12825 px"
   },
   {
    "name": "the clip tracks in the tab",
    "ok": true,
-   "detail": "tracked 150 frames in 17.1 s (8.8 fps) on WEBGPU fp16 · 1 subject"
+   "detail": "tracked 150 frames in 12.8 s (11.7 fps) on WEBGPU fp16 · 1 subject"
   },
   {
    "name": "the dots look draws dots",
    "ok": true,
-   "detail": "54.6 fps · 774 dots"
+   "detail": "56.8 fps · 774 dots"
   },
   {
    "name": "browser · polish is off until it is asked for",
@@ -1538,12 +1769,12 @@
   {
    "name": "browser · polishing the mask changes the picture",
    "ok": true,
-   "detail": "{\"params\":{\"u\":0.7,\"radius\":2,\"morph\":1,\"blur\":1,\"alpha\":0.35},\"before\":{\"fps\":\"54.6 fps · 774 dots\",\"hash\":2826338162},\"state\":[{\"id\":1,\"polish\":70}],\"after\":{\"fps\":\"7.0 fps · 918 dots\",\"hash\":1808330858}}"
+   "detail": "{\"params\":{\"u\":0.7,\"radius\":2,\"morph\":1,\"blur\":1,\"alpha\":0.35},\"before\":{\"fps\":\"56.8 fps · 774 dots\",\"hash\":2826338162},\"state\":[{\"id\":1,\"polish\":70}],\"after\":{\"fps\":\"9.8 fps · 918 dots\",\"hash\":1808330858}}"
   },
   {
    "name": "the tracked clip exports",
    "ok": true,
-   "detail": "rendered 150 frames in 8.1 s (18.6 fps) · 1.3 MB · rendered slower than real time (8.1 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server"
+   "detail": "rendered 150 frames in 8.0 s (18.9 fps) · 1.3 MB · rendered slower than real time (8.0 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server"
   },
   {
    "name": "browser · the toggle turns polish back off",
@@ -1562,12 +1793,12 @@
   {
    "name": "browser · gif exports",
    "ok": true,
-   "detail": "rendered 75 frames in 3.7 s (20.2 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
+   "detail": "rendered 75 frames in 3.4 s (22.2 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
   },
   {
    "name": "browser · webm-alpha exports",
    "ok": true,
-   "detail": "rendered 150 frames in 5.2 s (29.0 fps) · 2.0 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
+   "detail": "rendered 150 frames in 5.1 s (29.3 fps) · 1.9 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
   },
   {
    "name": "browser · the GIF is a GIF and loops",
@@ -1581,7 +1812,7 @@
   {
    "name": "browser · the alpha WebM declares an alpha channel",
    "ok": true,
-   "detail": "{\"codec_name\":\"vp8\",\"width\":1280,\"height\":720,\"pix_fmt\":\"yuv420p\",\"r_frame_rate\":\"30/1\",\"nb_read_frames\":\"150\",\"tags\":{\"alpha_mode\":\"1\"}}"
+   "detail": "{\"codec_name\":\"vp8\",\"width\":1280,\"height\":720,\"pix_fmt\":\"yuv420p\",\"r_frame_rate\":\"179/6\",\"nb_read_frames\":\"150\",\"tags\":{\"alpha_mode\":\"1\"}}"
   },
   {
    "name": "browser · the alpha WebM really is mostly transparent",
@@ -1596,17 +1827,17 @@
   {
    "name": "a mask prompt previews in the tab",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12125 px"
+   "detail": "frame 0 · 1 subject in 0.11 s (768 px) · #1 12125 px"
   },
   {
    "name": "the mask prompt was NOT downgraded to a box",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12125 px"
+   "detail": "frame 0 · 1 subject in 0.11 s (768 px) · #1 12125 px"
   },
   {
    "name": "a mask prompt tracks the clip",
    "ok": true,
-   "detail": "tracked 150 frames in 19.6 s (7.7 fps) on WEBGPU fp16 · 1 subject"
+   "detail": "tracked 150 frames in 12.7 s (11.8 fps) on WEBGPU fp16 · 1 subject"
   },
   {
    "name": "the mask-prompted subject survives the clip",
@@ -1621,12 +1852,12 @@
   {
    "name": "remote · the camera is live at the resolution it asked for",
    "ok": true,
-   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"3fbc43d90da61725fd69d5350abb4cf7410bd81d1d6549cd7fc60a4bb871f558\",\"frameRate\":30,\"groupId\":\"118c1fba88b29b0f2ed8ef44d0c1857b13c7ba67d92de406efbc2b1c98a3fb76\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
+   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"b1131f67a81848c81ed0c3ea2046726b38199567401d7472c79712bd6a21d744\",\"frameRate\":30,\"groupId\":\"8daff8eedeee88513d6fceab83837f0ba7d9cbc1dd2e53ea67631b909654d1ac\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
   },
   {
    "name": "remote · a photo comes back at the camera's resolution",
    "ok": true,
-   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":631462},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 617 KB · stays in this tab\"}"
+   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":557434},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 544 KB · stays in this tab\"}"
   },
   {
    "name": "remote · the photo closed the camera",
@@ -1640,7 +1871,7 @@
   {
    "name": "remote · the photo exports a PNG",
    "ok": true,
-   "detail": "1280×720 PNG · 110 KB"
+   "detail": "1280×720 PNG · 88 KB"
   },
   {
    "name": "remote · the exported PNG is the camera's own resolution",
@@ -1650,42 +1881,42 @@
   {
    "name": "remote · about three seconds were recorded",
    "ok": true,
-   "detail": "3.98"
+   "detail": "3.89"
   },
   {
    "name": "remote · the recording became a clip",
    "ok": true,
-   "detail": "119"
+   "detail": "117"
   },
   {
    "name": "remote · the filmstrip has thumbnails on it",
    "ok": true,
-   "detail": "{\"colours\":30083,\"w\":960,\"h\":80}"
+   "detail": "{\"colours\":10342,\"w\":960,\"h\":80}"
   },
   {
    "name": "remote · the trim really shortened the clip",
    "ok": true,
-   "detail": "60 frames for a 2 s range (whole clip was 119)"
+   "detail": "59 frames for a 2 s range (whole clip was 117)"
   },
   {
    "name": "remote · the trim is stated in the source line",
    "ok": true,
-   "detail": "60 frames · 1280×720 · 30 fps · trimmed 1.0–3.0 s"
+   "detail": "59 frames · 1280×720 · 30 fps · trimmed 0.9–2.9 s"
   },
   {
    "name": "remote · a camera clip tracks",
    "ok": true,
-   "detail": "tracked 60 frames in 4.6 s (12.9 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 59 frames in 4.0 s (14.6 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "remote · a camera clip renders",
    "ok": true,
-   "detail": "rendered 60 frames in 1.5 s (40.2 fps) · 0.3 MB"
+   "detail": "rendered 59 frames in 1.4 s (43.0 fps) · 0.4 MB"
   },
   {
    "name": "remote · the render has the trimmed frame count",
    "ok": true,
-   "detail": "60 vs 60"
+   "detail": "59 vs 59"
   },
   {
    "name": "browser · engine is live for the camera run",
@@ -1695,12 +1926,12 @@
   {
    "name": "browser · the camera is live at the resolution it asked for",
    "ok": true,
-   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"ec0bad951b91d7c2361a9fea03c750428c14fc46db27f0c8d52873068d0c36a3\",\"frameRate\":30,\"groupId\":\"81f2fd1e63dfcc2e784fd003e26593a76f434f15b674c53cd76afff9351e5e02\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
+   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"1283636b9ad058ed4166cd5725835b03c411d37d768f64c32696078a78a72e97\",\"frameRate\":30,\"groupId\":\"909b8f92898c65adb9da28ef33ca9118ac972fb8a578c61cdadb698c2591f4bd\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
   },
   {
    "name": "browser · a photo comes back at the camera's resolution",
    "ok": true,
-   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":653082},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 638 KB · stays in this tab\"}"
+   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":577883},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 564 KB · stays in this tab\"}"
   },
   {
    "name": "browser · the photo closed the camera",
@@ -1714,7 +1945,7 @@
   {
    "name": "browser · the photo exports a PNG",
    "ok": true,
-   "detail": "1280×720 PNG · 123 KB"
+   "detail": "1280×720 PNG · 92 KB"
   },
   {
    "name": "browser · the exported PNG is the camera's own resolution",
@@ -1724,7 +1955,7 @@
   {
    "name": "browser · about three seconds were recorded",
    "ok": true,
-   "detail": "3.96"
+   "detail": "3.93"
   },
   {
    "name": "browser · the recording became a clip",
@@ -1734,7 +1965,7 @@
   {
    "name": "browser · the filmstrip has thumbnails on it",
    "ok": true,
-   "detail": "{\"colours\":27669,\"w\":960,\"h\":80}"
+   "detail": "{\"colours\":10454,\"w\":960,\"h\":80}"
   },
   {
    "name": "browser · the trim really shortened the clip",
@@ -1744,12 +1975,12 @@
   {
    "name": "browser · the trim is stated in the source line",
    "ok": true,
-   "detail": "60 frames · 1280×720 · 30 fps · trimmed 1.0–3.0 s · stays in this tab"
+   "detail": "60 frames · 1280×720 · 30 fps · trimmed 0.9–3.0 s · stays in this tab"
   },
   {
    "name": "remote · dots run tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 9.6 s (15.7 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 150 frames in 9.7 s (15.5 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "remote · the dot data covers every frame",
@@ -1783,7 +2014,7 @@
   {
    "name": "browser · dots run tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 13.6 s (11.1 fps) on WEBGPU fp16 · 1 subject"
+   "detail": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject"
   },
   {
    "name": "browser · the dot data covers every frame",
@@ -1817,22 +2048,31 @@
   {
    "name": "sequence · clip5s.mp4 tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 9.3 s (16.1 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 150 frames in 9.8 s (15.4 fps) on MPS coreml · 1 subject"
   },
   {
-   "name": "sequence · segment A captured",
+   "name": "sequence · the clip went in as an item",
    "ok": true,
-   "detail": "captured 45 frames from 100, 1441 dots a frame"
+   "detail": "added clip5s · 1 track · 150 frames · 2.2 s"
+  },
+  {
+   "name": "sequence · adding switches to the sequence view",
+   "ok": true,
+   "detail": "sequence"
+  },
+  {
+   "name": "sequence · \"something new\" goes back to the studio",
+   "ok": true
   },
   {
    "name": "sequence · source.mp4 tracks",
    "ok": true,
-   "detail": "tracked 90 frames in 5.7 s (15.9 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 90 frames in 5.6 s (16.1 fps) on MPS coreml · 1 subject"
   },
   {
-   "name": "sequence · segment B captured from the second clip",
+   "name": "sequence · the second clip went in",
    "ok": true,
-   "detail": "captured 45 frames from 0, 5694 dots a frame"
+   "detail": "added source · 1 track · 90 frames · 2.0 s"
   },
   {
    "name": "sequence · the library survived loading another clip",
@@ -1840,24 +2080,99 @@
    "detail": "2"
   },
   {
+   "name": "sequence · the still subject segments",
+   "ok": true,
+   "detail": "1 subject in 0.09 s (768 px) · #1 12750 px"
+  },
+  {
+   "name": "sequence · four items in the strip",
+   "ok": true,
+   "detail": "[\"clip5s\",\"source\",\"still\",\"ring\"]"
+  },
+  {
    "name": "sequence · the ring rasterised into dots",
    "ok": true,
-   "detail": "[{\"name\":\"clip5s #1 100–144\",\"kind\":\"segment\",\"frames\":45,\"dots\":1441},{\"name\":\"source #1 0–44\",\"kind\":\"segment\",\"frames\":45,\"dots\":5694},{\"name\":\"ring\",\"kind\":\"shape\",\"frames\":30,\"dots\":7940}]"
+   "detail": "[{\"id\":1,\"name\":\"clip5s\",\"kind\":\"clip\",\"w\":1280,\"h\":720,\"tracks\":[{\"id\":1,\"color\":\"#b0413e\",\"frames\":150}]},{\"id\":3,\"name\":\"source\",\"kind\":\"clip\",\"w\":1280,\"h\":720,\"tracks\":[{\"id\":1,\"color\":\"#b0413e\",\"frames\":90}]},{\"id\":5,\"name\":\"still\",\"kind\":\"still\",\"w\":1280,\"h\":720,\"tracks\":[{\"id\":1,\"color\":\"#b0413e\",\"frames\":1}]},{\"id\":7,\"name\":\"ring\",\"kind\":\"shape\",\"w\":1280,\"h\":720,\"tracks\":[{\"id\":1,\"color\":\"#b0413e\",\"frames\":1}]}]"
+  },
+  {
+   "name": "sequence · an in/out trim decides a clip item's length",
+   "ok": true,
+   "detail": "{\"i\":0,\"lib\":1,\"name\":\"clip5s\",\"kind\":\"clip\",\"subject\":\"all\",\"in\":10,\"out\":54,\"hold\":30,\"color\":null,\"frames\":45,\"trans\":null}"
+  },
+  {
+   "name": "sequence · a hold decides a shape item's length",
+   "ok": true,
+   "detail": "{\"i\":3,\"lib\":7,\"name\":\"ring\",\"kind\":\"shape\",\"subject\":\"all\",\"in\":0,\"out\":0,\"hold\":40,\"color\":null,\"frames\":40,\"trans\":{\"kind\":\"morph\",\"ms\":900}}"
+  },
+  {
+   "name": "sequence · the inspector offers all four transitions",
+   "ok": true,
+   "detail": "[\"morph\",\"scatter\",\"cut\",\"density fade\"]"
+  },
+  {
+   "name": "sequence · shift-clicking a join cycles the transition",
+   "ok": true,
+   "detail": "scatter"
   },
   {
    "name": "sequence · previews in the player",
    "ok": true,
-   "detail": "194 frames · 30 fps · 6.5 s · 2 morphs of 37/37 frames"
+   "detail": "243 frames · 30 fps · 8.1 s · 4 colours · morph 37f · scatter 21f · density 25f"
   },
   {
-   "name": "sequence · one morph per join",
+   "name": "sequence · one join per pair and one mark per item",
    "ok": true,
-   "detail": "2 morphs for 3 items"
+   "detail": "[\"item\",\"morph\",\"item\",\"scatter\",\"item\",\"density\",\"item\"]"
+  },
+  {
+   "name": "sequence · three different transition kinds",
+   "ok": true,
+   "detail": "[\"morph\",\"scatter\",\"density\"]"
+  },
+  {
+   "name": "sequence · every item keeps its own colour",
+   "ok": true,
+   "detail": "[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]"
   },
   {
    "name": "sequence · a 900 ms morph is ~37 frames at 30 fps",
    "ok": true,
-   "detail": "[{\"kind\":\"morph\",\"start\":45,\"frames\":37,\"ms\":900},{\"kind\":\"morph\",\"start\":127,\"frames\":37,\"ms\":900}]"
+   "detail": "{\"kind\":\"morph\",\"start\":45,\"frames\":37,\"ms\":900,\"name\":\"1. clip5s → 2. source\"}"
+  },
+  {
+   "name": "sequence · a 700 ms scatter is ~21 frames",
+   "ok": true,
+   "detail": "{\"kind\":\"scatter\",\"start\":127,\"frames\":21,\"ms\":700,\"name\":\"2. source → 3. still\"}"
+  },
+  {
+   "name": "sequence · a density fade is a ladder of short morphs",
+   "ok": true,
+   "detail": "{\"kind\":\"density\",\"start\":178,\"frames\":25,\"ms\":800,\"name\":\"3. still → 4. ring\"}"
+  },
+  {
+   "name": "sequence · the document is exactly its items plus its joins",
+   "ok": true,
+   "detail": "243 vs 243"
+  },
+  {
+   "name": "sequence · every frame has dots on it",
+   "ok": true,
+   "detail": "{\"min\":93,\"max\":7940}"
+  },
+  {
+   "name": "sequence · the preview plays",
+   "ok": true,
+   "detail": "14 -> 50"
+  },
+  {
+   "name": "sequence · a cut costs no frames at all",
+   "ok": true,
+   "detail": "206 vs 206"
+  },
+  {
+   "name": "sequence · items reorder, and the order comes back",
+   "ok": true,
+   "detail": "{\"before\":[\"clip5s\",\"source\",\"still\",\"ring\"],\"after\":[\"ring\",\"clip5s\",\"source\",\"still\"],\"back\":[\"clip5s\",\"source\",\"still\",\"ring\"]}"
   },
   {
    "name": "sequence · the export really is gzip",
@@ -1871,17 +2186,52 @@
   {
    "name": "sequence · the MP4 has every frame of the sequence",
    "ok": true,
-   "detail": "194 vs 194"
+   "detail": "243 vs 243"
+  },
+  {
+   "name": "sequence · the .dots.gz replays with all four colours",
+   "ok": true,
+   "detail": "{\"frames\":243,\"painted\":362,\"seconds\":3.01,\"fps\":120.4,\"meanPaintMs\":1.52,\"worstPaintMs\":4.2,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
   },
   {
    "name": "sequence · the player holds 60 fps",
    "ok": true,
-   "detail": "{\"frames\":194,\"painted\":361,\"seconds\":3,\"fps\":120.3,\"meanPaintMs\":1.61,\"worstPaintMs\":3.8}"
+   "detail": "{\"frames\":243,\"painted\":362,\"seconds\":3.01,\"fps\":120.4,\"meanPaintMs\":1.52,\"worstPaintMs\":4.2,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
   },
   {
    "name": "sequence · a frame costs well under a 60 fps budget",
    "ok": true,
-   "detail": "{\"frames\":194,\"painted\":361,\"seconds\":3,\"fps\":120.3,\"meanPaintMs\":1.61,\"worstPaintMs\":3.8}"
+   "detail": "{\"frames\":243,\"painted\":362,\"seconds\":3.01,\"fps\":120.4,\"meanPaintMs\":1.52,\"worstPaintMs\":4.2,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
+  },
+  {
+   "name": "sequence · the strip survives an engine switch",
+   "ok": true,
+   "detail": "4"
+  },
+  {
+   "name": "sequence · the tab writes the sequence as webm",
+   "ok": true,
+   "detail": "63 frames · WEBM · 0.90 MB · 2.2 s · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+  },
+  {
+   "name": "sequence · the tab writes the sequence as gif",
+   "ok": true,
+   "detail": "32 frames · GIF · 0.32 MB · 0.6 s · 32 frames at 15 fps · 5 colours · loops forever"
+  },
+  {
+   "name": "sequence · the tab writes the sequence as webm-alpha",
+   "ok": true,
+   "detail": "63 frames · WEBM · 1.40 MB · 2.2 s · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
+  },
+  {
+   "name": "sequence · the tab's sequence GIF carries a palette and loops",
+   "ok": true,
+   "detail": "32 frames · GIF · 0.32 MB · 0.6 s · 32 frames at 15 fps · 5 colours · loops forever"
+  },
+  {
+   "name": "sequence · the tab's alpha sequence really has an alpha channel",
+   "ok": true,
+   "detail": "63 frames · WEBM · 1.40 MB · 2.2 s · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
   },
   {
    "name": "browser · engine is live",
@@ -1904,17 +2254,17 @@
   {
    "name": "browser · preview covers only this frame's subject",
    "ok": true,
-   "detail": "frame 48 · 1 subject in 0.23 s (768 px) · #2 7600 px"
+   "detail": "frame 48 · 1 subject in 0.14 s (768 px) · #2 7600 px"
   },
   {
    "name": "browser · both subjects track",
    "ok": true,
-   "detail": "tracked 149 frames in 28.8 s (10.3 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
+   "detail": "tracked 149 frames in 26.0 s (11.4 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
   },
   {
    "name": "browser · the two prompt frames are reported",
    "ok": true,
-   "detail": "tracked 149 frames in 28.8 s (10.3 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
+   "detail": "tracked 149 frames in 26.0 s (11.4 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
   },
   {
    "name": "browser · the subject present from the start is never empty",
@@ -1957,17 +2307,17 @@
   {
    "name": "remote · preview covers only this frame's subject",
    "ok": true,
-   "detail": "frame 48 · 1 subject in 0.40 s (768 px) · #2 6959 px"
+   "detail": "frame 48 · 1 subject in 0.22 s (768 px) · #2 6959 px"
   },
   {
    "name": "remote · both subjects track",
    "ok": true,
-   "detail": "tracked 149 frames in 17.5 s (8.5 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
+   "detail": "tracked 149 frames in 15.2 s (9.8 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
   },
   {
    "name": "remote · the two prompt frames are reported",
    "ok": true,
-   "detail": "tracked 149 frames in 17.5 s (8.5 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
+   "detail": "tracked 149 frames in 15.2 s (9.8 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
   },
   {
    "name": "remote · the subject present from the start is never empty",
@@ -2016,7 +2366,7 @@
   {
    "name": "DV_API_KEY: the remote engine connects with the key",
    "ok": true,
-   "detail": "{\"id\":\"remote\",\"label\":\"Remote server\",\"baseUrl\":\"http://127.0.0.1:59999\",\"supports\":{\"maskPrompt\":true,\"perObjectPromptFrames\":true,\"backward\":true,\"multiObject\":\"batched\",\"exportMime\":\"video/mp4\",\"exportExt\":\"mp4\",\"exportPlayable\":true,\"stillSubjects\":true,\"formats\":[{\"available\":true,\"note\":\"\",\"id\":\"mp4\",\"ext\":\"mp4\",\"mime\":\"video/mp4\",\"alpha\":false,\"label\":\"MP4 · H.264\"},{\"available\":true,\"note\":\"\",\"id\":\"webm\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":false,\"label\":\"WebM · VP9\"},{\"available\":true,\"note\":\"\",\"id\":\"gif\",\"ext\":\"gif\",\"mime\":\"image/gif\",\"alpha\":false,\"label\":\"GIF · looping\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"webm-alpha\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":true,\"label\":\"WebM · VP9 + alpha\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"prores\",\"ext\":\"mov\",\"mime\":\"video/quicktime\",\"alpha\":true,\"label\":\"ProRes 4444 · alpha\"}]},\"modelsMissing\":null,\"tried\":[{\"url\":\"http://127.0.0.1:59999\",\"ok\":true}]}"
+   "detail": "{\"id\":\"remote\",\"label\":\"Remote server\",\"baseUrl\":\"http://127.0.0.1:62532\",\"supports\":{\"maskPrompt\":true,\"perObjectPromptFrames\":true,\"backward\":true,\"multiObject\":\"batched\",\"exportMime\":\"video/mp4\",\"exportExt\":\"mp4\",\"exportPlayable\":true,\"stillSubjects\":true,\"formats\":[{\"available\":true,\"note\":\"\",\"id\":\"mp4\",\"ext\":\"mp4\",\"mime\":\"video/mp4\",\"alpha\":false,\"label\":\"MP4 · H.264\"},{\"available\":true,\"note\":\"\",\"id\":\"webm\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":false,\"label\":\"WebM · VP9\"},{\"available\":true,\"note\":\"\",\"id\":\"gif\",\"ext\":\"gif\",\"mime\":\"image/gif\",\"alpha\":false,\"label\":\"GIF · looping\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"webm-alpha\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":true,\"label\":\"WebM · VP9 + alpha\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"prores\",\"ext\":\"mov\",\"mime\":\"video/quicktime\",\"alpha\":true,\"label\":\"ProRes 4444 · alpha\"}]},\"modelsMissing\":null,\"tried\":[{\"url\":\"http://127.0.0.1:62532\",\"ok\":true}]}"
   }
  ],
  "browser": {
@@ -2026,6 +2376,6 @@
   "clipSeconds": 5
  },
  "only": [],
- "checksPassed": 164,
- "checksTotal": 164
+ "checksPassed": 188,
+ "checksTotal": 188
 }
