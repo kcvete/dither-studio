@@ -1,0 +1,769 @@
+{
+ "base": "http://127.0.0.1:8790",
+ "clip": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/clip5s.mp4",
+ "entryClip": "docs/entry-clip.mp4",
+ "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/still.jpg",
+ "consoleErrors": [],
+ "pageErrors": [],
+ "runs": {
+  "engineChip": {
+   "autoChip": "Local server · faster · MPS torch-compiled",
+   "auto": {
+    "id": "remote",
+    "label": "Local server",
+    "baseUrl": "",
+    "supports": {
+     "maskPrompt": true,
+     "perObjectPromptFrames": true,
+     "backward": true,
+     "multiObject": "batched",
+     "exportMime": "video/mp4",
+     "exportExt": "mp4",
+     "exportPlayable": true
+    },
+    "modelsMissing": null,
+    "tried": [
+     {
+      "url": "(this origin)",
+      "ok": true
+     }
+    ]
+   },
+   "popoverVisible": true,
+   "afterSwitch": {
+    "id": "browser",
+    "label": "Browser",
+    "baseUrl": "",
+    "supports": {
+     "maskPrompt": true,
+     "perObjectPromptFrames": true,
+     "backward": true,
+     "multiObject": "sequential",
+     "exportMime": "video/webm",
+     "exportExt": "webm",
+     "exportPlayable": true
+    },
+    "modelsMissing": null,
+    "tried": [
+     {
+      "url": "(this origin)",
+      "ok": true
+     }
+    ]
+   },
+   "browserChip": "Browser · free · nothing leaves this tab",
+   "deadPort": 61205,
+   "badCustom": "could not reach http://127.0.0.1:61205 — running in the browser instead",
+   "afterBadCustom": {
+    "id": "browser",
+    "label": "Browser",
+    "baseUrl": "",
+    "supports": {
+     "maskPrompt": true,
+     "perObjectPromptFrames": true,
+     "backward": true,
+     "multiObject": "sequential",
+     "exportMime": "video/webm",
+     "exportExt": "webm",
+     "exportPlayable": true
+    },
+    "modelsMissing": null,
+    "tried": [
+     {
+      "url": "(this origin)",
+      "ok": true
+     }
+    ]
+   }
+  },
+  "still": {
+   "source": "1280 × 720 · 103 KB · stays in this tab",
+   "modes": {
+    "bluenoise": {
+     "w": 1280,
+     "h": 720,
+     "distinctColours": 2
+    },
+    "ordered": {
+     "w": 1280,
+     "h": 720,
+     "distinctColours": 2
+    },
+    "halftone": {
+     "w": 1280,
+     "h": 720,
+     "distinctColours": 2
+    },
+    "whitenoise": {
+     "w": 1280,
+     "h": 720,
+     "distinctColours": 2
+    },
+    "errordiff": {
+     "w": 1280,
+     "h": 720,
+     "distinctColours": 2
+    },
+    "riemersma": {
+     "w": 1280,
+     "h": 720,
+     "distinctColours": 2
+    }
+   },
+   "gameboy": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 4
+   },
+   "export": "1280×720 PNG · 642 KB",
+   "bytes": 657268,
+   "probe": {
+    "codec_name": "png",
+    "width": 1280,
+    "height": 720,
+    "r_frame_rate": "25/1",
+    "nb_read_frames": "1"
+   }
+  },
+  "whole": {
+   "decodeSeconds": 4.9,
+   "source": "150 frames · 1280×720 · 30 fps · stays in this tab",
+   "nFrames": 150,
+   "preview": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 4
+   },
+   "previewFrame10": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 4
+   },
+   "render": "rendered 150 frames in 5.2 s (29.1 fps) · 2.5 MB · WebM (VP9) — the server engine writes H.264 MP4",
+   "renderSeconds": 5.6,
+   "bytes": 2458969,
+   "probe": {
+    "codec_name": "vp9",
+    "width": 1280,
+    "height": 720,
+    "r_frame_rate": "89/3",
+    "nb_read_frames": "150"
+   }
+  },
+  "tracked": {
+   "nFrames": 150,
+   "chips": [
+    "#1 · 1pt+box @ 0"
+   ],
+   "qualityChips": [
+    "balanced · 768 px 12 fps"
+   ],
+   "previewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12825 px",
+   "previewSeconds": 1.61,
+   "trackText": "tracked 150 frames in 12.2 s (12.3 fps) on WEBGPU fp16 · 1 subject",
+   "trackSeconds": 12.6,
+   "trackFps": 12.3,
+   "dots": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 2
+   },
+   "dotsFps": "42.0 fps · 774 dots",
+   "render": "rendered 150 frames in 5.1 s (29.4 fps) · 1.0 MB · WebM (VP9) — the server engine writes H.264 MP4",
+   "renderSeconds": 5.2,
+   "bytes": 958193,
+   "probe": {
+    "codec_name": "vp9",
+    "width": 1280,
+    "height": 720,
+    "r_frame_rate": "60/1",
+    "nb_read_frames": "150"
+   }
+  },
+  "lasso": {
+   "shapes": [
+    27
+   ],
+   "previewText": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12125 px",
+   "previewSeconds": 1.62,
+   "trackText": "tracked 150 frames in 12.4 s (12.1 fps) on WEBGPU fp16 · 1 subject",
+   "trackSeconds": 12.6,
+   "areas": [
+    12063,
+    12809,
+    12879,
+    13042,
+    12987,
+    13011,
+    13053,
+    13078,
+    13119,
+    13148,
+    13197,
+    13446,
+    13443,
+    13616,
+    13701,
+    13675,
+    13674,
+    13672,
+    13679,
+    13593,
+    13526,
+    13348,
+    13372,
+    13259,
+    13421,
+    13619,
+    13837,
+    13850,
+    13716,
+    13742,
+    13950,
+    14266,
+    14242,
+    13888,
+    13383,
+    13921,
+    14494,
+    14476,
+    14922,
+    15116,
+    15105,
+    15269,
+    15249,
+    15537,
+    16186,
+    16621,
+    16990,
+    16966,
+    17535,
+    17388,
+    17796,
+    18604,
+    18100,
+    19180,
+    19742,
+    20133,
+    20492,
+    20505,
+    20870,
+    20739,
+    20528,
+    20089,
+    20105,
+    19515,
+    18960,
+    18472,
+    18001,
+    18006,
+    18048,
+    18149,
+    18172,
+    18347,
+    18351,
+    18583,
+    18883,
+    18646,
+    19403,
+    18972,
+    19821,
+    19854,
+    20000,
+    20808,
+    20834,
+    20994,
+    21201,
+    21425,
+    21517,
+    21527,
+    21656,
+    21844,
+    21869,
+    21558,
+    22053,
+    21799,
+    22084,
+    22427,
+    22683,
+    23142,
+    22911,
+    23321,
+    23894,
+    24116,
+    24101,
+    24247,
+    24713,
+    24910,
+    24844,
+    24833,
+    25189,
+    25930,
+    26586,
+    26444,
+    26404,
+    26228,
+    25732,
+    25521,
+    25415,
+    25403,
+    25283,
+    25355,
+    24599,
+    23751,
+    23665,
+    23470,
+    23178,
+    23189,
+    23419,
+    23401,
+    23865,
+    24198,
+    25195,
+    26101,
+    26076,
+    27033,
+    27669,
+    28496,
+    29166,
+    28951,
+    29988,
+    30796,
+    31452,
+    32434,
+    32458,
+    33423,
+    34324,
+    37296,
+    39162,
+    39170,
+    40464,
+    40453
+   ],
+   "nonEmptyFrames": 150
+  },
+  "entryBrowser": {
+   "engine": "browser",
+   "nFrames": 149,
+   "scrubbedTo": 48,
+   "chips": [
+    "#1 · 1pt+box @ 0✕",
+    "#2 · 1pt+box @ 48✕"
+   ],
+   "offFrameHint": "#1 prompted @ 0 — jump",
+   "subject1MarksHidden": true,
+   "previewText": "frame 48 · 1 subject in 0.15 s (768 px) · #2 7600 px",
+   "trackText": "tracked 149 frames in 25.7 s (11.6 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each",
+   "trackSeconds": 25.8,
+   "tree": {
+    "firstOn": 0,
+    "empty": 0,
+    "n": 149
+   },
+   "jogger": {
+    "firstOn": 39,
+    "empty": 39,
+    "n": 149
+   },
+   "samples": {
+    "tree": [
+     16097,
+     22946,
+     23127,
+     23143,
+     23624,
+     23542
+    ],
+    "jogger": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     1951,
+     7528,
+     6436,
+     8347
+    ]
+   },
+   "dotsBefore": "32.6 fps · 2085 dots",
+   "dotsAfter": "55.2 fps · 2610 dots",
+   "dotsBeforeN": 2085,
+   "dotsAfterN": 2610
+  },
+  "entryRemote": {
+   "engine": "remote",
+   "nFrames": 149,
+   "scrubbedTo": 48,
+   "chips": [
+    "#1 · 1pt+box @ 0✕",
+    "#2 · 1pt+box @ 48✕"
+   ],
+   "offFrameHint": "#1 prompted @ 0 — jump",
+   "subject1MarksHidden": true,
+   "previewText": "frame 48 · 1 subject in 0.28 s (768 px) · #2 6945 px",
+   "trackText": "tracked 149 frames in 16.1 s (9.3 fps) on MPS torch-compiled · 2 subjects prompted on 2 different frames",
+   "trackSeconds": 16.6,
+   "tree": {
+    "firstOn": 0,
+    "empty": 0,
+    "n": 149
+   },
+   "jogger": {
+    "firstOn": 38,
+    "empty": 38,
+    "n": 149
+   },
+   "samples": {
+    "tree": [
+     17743,
+     18046,
+     17964,
+     17935,
+     18428,
+     18345
+    ],
+    "jogger": [
+     0,
+     0,
+     0,
+     0,
+     1464,
+     2757,
+     6945,
+     6895,
+     7961
+    ]
+   },
+   "dotsBefore": "38.3 fps · 1335 dots",
+   "dotsAfter": "57.8 fps · 1783 dots",
+   "dotsBeforeN": 1335,
+   "dotsAfterN": 1783
+  },
+  "apiKey": {
+   "port": 61531,
+   "withoutKey": 401,
+   "wrongKey": 401,
+   "withKey": 200,
+   "meta": {
+    "ok": true,
+    "name": "dither-studio",
+    "api": 1,
+    "device": "mps",
+    "backend": null,
+    "auth": "bearer",
+    "max_objects": 6,
+    "track_sizes": [
+     512,
+     768,
+     1024
+    ],
+    "default_track_size": 768,
+    "per_object_prompt_frames": true
+   },
+   "pageWithoutKey": 200,
+   "engine": {
+    "id": "remote",
+    "label": "Remote server",
+    "baseUrl": "http://127.0.0.1:61531",
+    "supports": {
+     "maskPrompt": true,
+     "perObjectPromptFrames": true,
+     "backward": true,
+     "multiObject": "batched",
+     "exportMime": "video/mp4",
+     "exportExt": "mp4",
+     "exportPlayable": true
+    },
+    "modelsMissing": null,
+    "tried": [
+     {
+      "url": "http://127.0.0.1:61531",
+      "ok": true
+     }
+    ]
+   },
+   "chip": "Remote server · MPS"
+  }
+ },
+ "checks": [
+  {
+   "name": "auto probe finds the local server",
+   "ok": true,
+   "detail": "auto picked remote"
+  },
+  {
+   "name": "manual switch to the browser engine",
+   "ok": true
+  },
+  {
+   "name": "browser engine reports the mask-prompt graph",
+   "ok": true,
+   "detail": "has_mask_prompt is false — re-run ./setup.sh"
+  },
+  {
+   "name": "browser engine exports WebM",
+   "ok": true
+  },
+  {
+   "name": "an unreachable custom URL falls back to the browser",
+   "ok": true
+  },
+  {
+   "name": "browser engine is live for the still",
+   "ok": true
+  },
+  {
+   "name": "still · bluenoise renders",
+   "ok": true,
+   "detail": "{\"w\":1280,\"h\":720,\"distinctColours\":2}"
+  },
+  {
+   "name": "still · ordered renders",
+   "ok": true,
+   "detail": "{\"w\":1280,\"h\":720,\"distinctColours\":2}"
+  },
+  {
+   "name": "still · halftone renders",
+   "ok": true,
+   "detail": "{\"w\":1280,\"h\":720,\"distinctColours\":2}"
+  },
+  {
+   "name": "still · whitenoise renders",
+   "ok": true,
+   "detail": "{\"w\":1280,\"h\":720,\"distinctColours\":2}"
+  },
+  {
+   "name": "still · errordiff renders",
+   "ok": true,
+   "detail": "{\"w\":1280,\"h\":720,\"distinctColours\":2}"
+  },
+  {
+   "name": "still · riemersma renders",
+   "ok": true,
+   "detail": "{\"w\":1280,\"h\":720,\"distinctColours\":2}"
+  },
+  {
+   "name": "still exports a PNG",
+   "ok": true,
+   "detail": "1280×720 PNG · 642 KB"
+  },
+  {
+   "name": "the clip decoded in the tab",
+   "ok": true,
+   "detail": "nFrames=150"
+  },
+  {
+   "name": "whole-frame clip exports",
+   "ok": true,
+   "detail": "rendered 150 frames in 5.2 s (29.1 fps) · 2.5 MB · WebM (VP9) — the server engine writes H.264 MP4"
+  },
+  {
+   "name": "the WebM has every frame",
+   "ok": true,
+   "detail": "150 != 150"
+  },
+  {
+   "name": "the WebM keeps the clip resolution",
+   "ok": true
+  },
+  {
+   "name": "the subject chip records its prompt frame",
+   "ok": true,
+   "detail": "#1 · 1pt+box @ 0"
+  },
+  {
+   "name": "the browser engine offers the resolution it shipped models for",
+   "ok": true,
+   "detail": "[\"balanced · 768 px 12 fps\"]"
+  },
+  {
+   "name": "frame-0 preview runs in the tab",
+   "ok": true,
+   "detail": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12825 px"
+  },
+  {
+   "name": "the clip tracks in the tab",
+   "ok": true,
+   "detail": "tracked 150 frames in 12.2 s (12.3 fps) on WEBGPU fp16 · 1 subject"
+  },
+  {
+   "name": "the dots look draws dots",
+   "ok": true,
+   "detail": "42.0 fps · 774 dots"
+  },
+  {
+   "name": "the tracked clip exports",
+   "ok": true,
+   "detail": "rendered 150 frames in 5.1 s (29.4 fps) · 1.0 MB · WebM (VP9) — the server engine writes H.264 MP4"
+  },
+  {
+   "name": "the polygon was captured",
+   "ok": true,
+   "detail": "[27]"
+  },
+  {
+   "name": "a mask prompt previews in the tab",
+   "ok": true,
+   "detail": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12125 px"
+  },
+  {
+   "name": "the mask prompt was NOT downgraded to a box",
+   "ok": true,
+   "detail": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12125 px"
+  },
+  {
+   "name": "a mask prompt tracks the clip",
+   "ok": true,
+   "detail": "tracked 150 frames in 12.4 s (12.1 fps) on WEBGPU fp16 · 1 subject"
+  },
+  {
+   "name": "the mask-prompted subject survives the clip",
+   "ok": true,
+   "detail": "150/150 frames non-empty"
+  },
+  {
+   "name": "browser · engine is live",
+   "ok": true
+  },
+  {
+   "name": "browser · chips carry two different prompt frames",
+   "ok": true,
+   "detail": "[\"#1 · 1pt+box @ 0✕\",\"#2 · 1pt+box @ 48✕\"]"
+  },
+  {
+   "name": "browser · the off-frame subject is announced",
+   "ok": true,
+   "detail": "#1 prompted @ 0 — jump"
+  },
+  {
+   "name": "browser · marks are scoped to their own frame",
+   "ok": true
+  },
+  {
+   "name": "browser · preview covers only this frame's subject",
+   "ok": true,
+   "detail": "frame 48 · 1 subject in 0.15 s (768 px) · #2 7600 px"
+  },
+  {
+   "name": "browser · both subjects track",
+   "ok": true,
+   "detail": "tracked 149 frames in 25.7 s (11.6 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
+  },
+  {
+   "name": "browser · the two prompt frames are reported",
+   "ok": true,
+   "detail": "tracked 149 frames in 25.7 s (11.6 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
+  },
+  {
+   "name": "browser · the subject present from the start is never empty",
+   "ok": true,
+   "detail": "{\"firstOn\":0,\"empty\":0,\"n\":149}"
+  },
+  {
+   "name": "browser · the subject that enters mid-clip is empty before it does",
+   "ok": true,
+   "detail": "first non-empty frame 39, she enters at 38"
+  },
+  {
+   "name": "browser · and present afterwards",
+   "ok": true,
+   "detail": "[0,0,0,0,0,1951,7528,6436,8347]"
+  },
+  {
+   "name": "browser · dots pop in with the subject, not before",
+   "ok": true,
+   "detail": "frame 10: 2085 dots, frame 100: 2610"
+  },
+  {
+   "name": "remote · engine is live",
+   "ok": true
+  },
+  {
+   "name": "remote · chips carry two different prompt frames",
+   "ok": true,
+   "detail": "[\"#1 · 1pt+box @ 0✕\",\"#2 · 1pt+box @ 48✕\"]"
+  },
+  {
+   "name": "remote · the off-frame subject is announced",
+   "ok": true,
+   "detail": "#1 prompted @ 0 — jump"
+  },
+  {
+   "name": "remote · marks are scoped to their own frame",
+   "ok": true
+  },
+  {
+   "name": "remote · preview covers only this frame's subject",
+   "ok": true,
+   "detail": "frame 48 · 1 subject in 0.28 s (768 px) · #2 6945 px"
+  },
+  {
+   "name": "remote · both subjects track",
+   "ok": true,
+   "detail": "tracked 149 frames in 16.1 s (9.3 fps) on MPS torch-compiled · 2 subjects prompted on 2 different frames"
+  },
+  {
+   "name": "remote · the two prompt frames are reported",
+   "ok": true,
+   "detail": "tracked 149 frames in 16.1 s (9.3 fps) on MPS torch-compiled · 2 subjects prompted on 2 different frames"
+  },
+  {
+   "name": "remote · the subject present from the start is never empty",
+   "ok": true,
+   "detail": "{\"firstOn\":0,\"empty\":0,\"n\":149}"
+  },
+  {
+   "name": "remote · the subject that enters mid-clip is empty before it does",
+   "ok": true,
+   "detail": "first non-empty frame 38, she enters at 38"
+  },
+  {
+   "name": "remote · and present afterwards",
+   "ok": true,
+   "detail": "[0,0,0,0,1464,2757,6945,6895,7961]"
+  },
+  {
+   "name": "remote · dots pop in with the subject, not before",
+   "ok": true,
+   "detail": "frame 10: 1335 dots, frame 100: 1783"
+  },
+  {
+   "name": "DV_API_KEY: /api/meta is 401 without a bearer token",
+   "ok": true,
+   "detail": "401"
+  },
+  {
+   "name": "DV_API_KEY: a wrong token is 401",
+   "ok": true,
+   "detail": "401"
+  },
+  {
+   "name": "DV_API_KEY: the right token is 200",
+   "ok": true
+  },
+  {
+   "name": "DV_API_KEY: /api/meta advertises the gate",
+   "ok": true,
+   "detail": "{\"ok\":true,\"name\":\"dither-studio\",\"api\":1,\"device\":\"mps\",\"backend\":null,\"auth\":\"bearer\",\"max_objects\":6,\"track_sizes\":[512,768,1024],\"default_track_size\":768,\"per_object_prompt_frames\":true}"
+  },
+  {
+   "name": "DV_API_KEY: the page itself stays reachable",
+   "ok": true,
+   "detail": "a browser cannot put a header on the request that loads the HTML"
+  },
+  {
+   "name": "DV_API_KEY: the remote engine connects with the key",
+   "ok": true,
+   "detail": "{\"id\":\"remote\",\"label\":\"Remote server\",\"baseUrl\":\"http://127.0.0.1:61531\",\"supports\":{\"maskPrompt\":true,\"perObjectPromptFrames\":true,\"backward\":true,\"multiObject\":\"batched\",\"exportMime\":\"video/mp4\",\"exportExt\":\"mp4\",\"exportPlayable\":true},\"modelsMissing\":null,\"tried\":[{\"url\":\"http://127.0.0.1:61531\",\"ok\":true}]}"
+  }
+ ],
+ "browser": {
+  "how": "chromium (headless, WebGPU flags)",
+  "executionProvider": "webgpu",
+  "webgpu": "ok",
+  "clipSeconds": 5
+ },
+ "checksPassed": 56,
+ "checksTotal": 56
+}

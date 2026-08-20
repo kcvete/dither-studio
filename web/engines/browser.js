@@ -150,12 +150,16 @@ export class BrowserEngine {
     };
   }
 
-  /* ---------------------------------------------------------- model set */
-  async init() {
-    if (this.manifest) return this;
+  /* ---------------------------------------------------------- model set
+   * Two steps, deliberately separate. manifest.json is small and committed, so
+   * it is what tells the page what the model set can do; the weights are ~130 MB
+   * and are not, so a page can perfectly well render stills and whole-frame
+   * clips without them. `meta()` needs only the first, `init()` needs both. */
+  async manifestOf() {
+    if (this.manifest) return this.manifest;
     let man;
     try {
-      const r = await fetch(this.dir + 'manifest.json', { cache: 'force-cache' });
+      const r = await fetch(this.dir + 'manifest.json');
       if (!r.ok) throw new Error('HTTP ' + r.status);
       man = await r.json();
     } catch (e) {
@@ -163,8 +167,12 @@ export class BrowserEngine {
     }
     this.manifest = man;
     this.supports.maskPrompt = !!man.has_mask_prompt;
-    // A committed manifest says what SHOULD be there; the weights themselves are
-    // gitignored, so check one before promising the user a tracker.
+    return man;
+  }
+
+  async init() {
+    if (this.ready) return this;
+    await this.manifestOf();
     const probe = this.fp16 ? 'encoder.fp16.onnx' : 'encoder.onnx';
     const head = await fetch(this.dir + probe, { method: 'HEAD' }).catch(() => null);
     if (!head || !head.ok) {
@@ -176,6 +184,7 @@ export class BrowserEngine {
       this.ep = 'wasm';
       this.epNote = 'no WebGPU in this browser — running on WASM, ~6x slower';
     }
+    this.ready = true;
     return this;
   }
 
@@ -200,8 +209,10 @@ export class BrowserEngine {
 
   /* ------------------------------------------------------------ metadata */
   async meta() {
-    await this.init();
-    const S = this.manifest.image_size;
+    // The manifest, not init(): missing weights must not stop the palette and
+    // mode tables from loading. checkModels() in app.js reports that separately.
+    let S = 768;
+    try { S = (await this.manifestOf()).image_size; } catch (e) { /* reported later */ }
     return {
       palettes: Dither.PALETTES,
       modes: Dither.MODES,

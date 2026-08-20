@@ -1,24 +1,24 @@
 {
- "base": "http://127.0.0.1:8767",
+ "base": "http://127.0.0.1:8790",
  "clip": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/clip5s.mp4",
- "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/first_frame.jpg",
+ "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/still.jpg",
  "consoleErrors": [],
  "pageErrors": [],
  "requestFailures": [
   {
-   "url": "http://127.0.0.1:8767/api/jobs/b835b887dd27/out.mp4?t=1787173078707",
+   "url": "http://127.0.0.1:8790/api/jobs/4f79b4f835d9/out.mp4?t=1787206332630",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8767/api/jobs/0585bf23718e/out.mp4?t=1787173105587",
+   "url": "http://127.0.0.1:8790/api/jobs/2bfdd7601c43/out.mp4?t=1787206359723",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8767/api/jobs/0585bf23718e/out.mp4?t=1787173123766",
+   "url": "http://127.0.0.1:8790/api/jobs/2bfdd7601c43/out.mp4?t=1787206378140",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8767/api/jobs/0585bf23718e/out.mp4?t=1787173123766",
+   "url": "http://127.0.0.1:8790/api/jobs/2bfdd7601c43/out.mp4?t=1787206378140",
    "why": "net::ERR_ABORTED"
   }
  ],
@@ -184,7 +184,7 @@
   },
   "whole": {
    "source": "150 frames · 1280×720 · 30 fps",
-   "job": "b835b887dd27",
+   "job": "4f79b4f835d9",
    "preview": {
     "w": 1280,
     "h": 720,
@@ -208,7 +208,7 @@
      ]
     ]
    },
-   "previewFps": "58.8 fps",
+   "previewFps": "57.8 fps",
    "previewFrame20": {
     "w": 1280,
     "h": 720,
@@ -232,7 +232,7 @@
      ]
     ]
    },
-   "render": "rendered 150 frames in 10.3 s (14.6 fps)",
+   "render": "rendered 150 frames in 10.4 s (14.5 fps)",
    "ffprobe": {
     "width": 1280,
     "height": 720,
@@ -241,10 +241,10 @@
    }
   },
   "tracked": {
-   "job": "0585bf23718e",
+   "job": "2bfdd7601c43",
    "subjectChips": [
-    "#1 · 1pt+box✕",
-    "#2 · 1pt+box✕"
+    "#1 · 1pt+box @ 0✕",
+    "#2 · 1pt+box @ 0✕"
    ],
    "qualityChips": [
     {
@@ -264,23 +264,27 @@
     }
    ],
    "qualityDefault": 768,
-   "trackInfo": "tracked 150 frames in 15.6 s (9.6 fps) on MPS coreml · 2 subjects",
+   "trackInfo": "tracked 150 frames in 16.0 s (9.4 fps) on MPS torch-compiled · 2 subjects",
    "trackWallSeconds": 16.6,
    "status": {
     "state": "done",
     "done_frames": 150,
     "n_frames": 150,
-    "elapsed_s": 15.61,
-    "fps": 9.61,
+    "elapsed_s": 15.96,
+    "fps": 9.4,
     "error": null,
     "device": "mps",
-    "backend": "coreml",
+    "backend": "torch-compiled",
     "precision": "fp16",
     "image_size": 768,
     "objects": [
      "1",
      "2"
     ],
+    "prompt_frames": {
+     "1": 0,
+     "2": 0
+    },
     "render": {
      "state": "idle",
      "done_frames": 0,
@@ -290,7 +294,7 @@
      "error": null
     }
    },
-   "backend": "coreml",
+   "backend": "torch-compiled",
    "trackImageSize": 768,
    "dotsPreview": {
     "w": 1280,
@@ -299,11 +303,11 @@
     "top": [
      [
       "#c9d4c5",
-      888029
+      888051
      ],
      [
       "#2f4f4a",
-      27004
+      26982
      ],
      [
       "#b0413e",
@@ -311,8 +315,8 @@
      ]
     ]
    },
-   "dotsFps": "43.1 fps · 3989 dots",
-   "dotsRender": "rendered 150 frames in 3.8 s (39.1 fps)",
+   "dotsFps": "43.7 fps · 3986 dots",
+   "dotsRender": "rendered 150 frames in 3.9 s (38.4 fps)",
    "dotsProbe": {
     "width": 1280,
     "height": 720,
@@ -331,19 +335,19 @@
     "top": [
      [
       "#919191",
-      374548
+      374526
      ],
      [
       "#b6b6b6",
-      160294
+      160278
      ],
      [
       "#484848",
-      137520
+      137519
      ],
      [
       "#6d6d6d",
-      106230
+      106221
      ],
      [
       "#242424",
@@ -351,15 +355,15 @@
      ],
      [
       "#001a05",
-      46948
+      46957
      ],
      [
       "#dadada",
-      18058
+      18044
      ],
      [
       "#2dff6a",
-      15784
+      15844
      ]
     ]
    },
@@ -372,20 +376,20 @@
    },
    "previewVsExport": {
     "pixels": 921600,
-    "within30": 900957,
-    "pct": 97.76
+    "within30": 901218,
+    "pct": 97.79
    }
   },
   "trackedFast": {
-   "job": "1fe89e5954a3",
+   "job": "92f81d234495",
    "selected": 512,
-   "trackInfo": "tracked 150 frames in 9.9 s (15.2 fps) on MPS coreml · 1 subject",
-   "trackWallSeconds": 10.1,
+   "trackInfo": "tracked 150 frames in 26.5 s (5.7 fps) on MPS torch-compiled · 1 subject",
+   "trackWallSeconds": 27.1,
    "imageSize": 512,
-   "backend": "coreml",
+   "backend": "torch-compiled",
    "doneFrames": 150,
-   "fps": 15.15,
-   "maskBytes": 7260,
+   "fps": 5.66,
+   "maskBytes": 7214,
    "maskSize": [
     1280,
     720
@@ -411,21 +415,21 @@
    }
   },
   "lasso": {
-   "job": "90e8a5c45041",
-   "boxPreviewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12767 px",
+   "job": "f2fdd6d3abfd",
+   "boxPreviewText": "frame 0 · 1 subject in 0.14 s (768 px) · #1 12766 px",
    "boxPreviewWallSeconds": 0.53,
    "boxPreviewOverlay": 1,
    "shapes": [
     27
    ],
    "maskDataURLBytes": 36138,
-   "lassoPreviewText": "frame 0 · 1 subject in 0.11 s (768 px) · #1 12093 px",
-   "lassoPreviewWallSeconds": 0.53,
-   "trackInfo": "tracked 150 frames in 10.0 s (15.0 fps) on MPS coreml · 1 subject",
+   "lassoPreviewText": "frame 0 · 1 subject in 0.19 s (768 px) · #1 12093 px",
+   "lassoPreviewWallSeconds": 0.52,
+   "trackInfo": "tracked 150 frames in 10.1 s (14.9 fps) on MPS torch-compiled · 1 subject",
    "trackWallSeconds": 10.6,
    "doneFrames": 150,
-   "fps": 14.98,
-   "backend": "coreml",
+   "fps": 14.91,
+   "backend": "torch-compiled",
    "promptRecorded": {
     "frame_idx": 0,
     "image_size": 768,
@@ -434,6 +438,7 @@
       "id": 1,
       "points": [],
       "box": null,
+      "frame_idx": 0,
       "mask": true
      }
     ]
@@ -471,8 +476,8 @@
      130,
      140
     ],
-    "mean": 0.9777,
-    "min": 0.9282
+    "mean": 0.9788,
+    "min": 0.9283
    }
   }
  }

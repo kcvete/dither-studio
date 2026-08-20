@@ -1314,11 +1314,14 @@ async function switchEngine(pref) {
     const r = await chooseEngine(pref);
     if (r.warn) { stat.classList.add('err'); stat.textContent = r.warn; }
     else stat.textContent = '';
+    // meta() first, then publish: window.DV_engine() and paintEngine() must
+    // never see an engine whose capabilities have not been read yet
+    const meta = await r.engine.meta();
     savePref(pref);
     S.enginePref = pref;
     const had = S.kind !== 'none';
     S.engine = r.engine;
-    S.meta = await r.engine.meta();
+    S.meta = meta;
     await afterEngine();
     if (had) {
       resetClip();

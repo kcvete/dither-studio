@@ -19,3 +19,6 @@ bench/_res/
 # small and the page needs them to know what it is missing.
 web/models/*.onnx
 web/ort/
+
+# verify-web.mjs re-exports these on every run; the screenshots are the evidence
+docs/w-*-export.*

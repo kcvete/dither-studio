@@ -27,7 +27,9 @@ export { BrowserEngine, RemoteEngine, modelsMissing };
 
 const KEY = 'dither-studio.engine';
 
-/** {mode:'auto'|'browser'|'local'|'custom', url, key} */
+/** {mode:'auto'|'browser'|'local'|'custom', url, key, ep?, fp16?}
+ *  `ep`/`fp16` only reach the browser engine, and exist so a machine with
+ *  broken WebGPU (or a verifier pinning a backend) can force 'wasm'. */
 export function loadPref() {
   try {
     const p = JSON.parse(localStorage.getItem(KEY) || 'null');
@@ -89,19 +91,24 @@ export async function chooseEngine(pref = loadPref()) {
     return { engine: e, probe: p };
   };
 
+  const mkBrowser = () => new BrowserEngine({
+    ...(pref.ep ? { ep: pref.ep } : {}),
+    ...(pref.fp16 === false ? { fp16: false } : {}),
+  });
+
   if (pref.mode === 'browser') {
-    return { engine: new BrowserEngine(), pref, probe: null, tried };
+    return { engine: mkBrowser(), pref, probe: null, tried };
   }
   if (pref.mode === 'custom' && pref.url) {
     const r = await mkRemote(pref.url, pref.key || '', true);
     if (r) return Object.assign(r, { pref, tried });
-    return { engine: new BrowserEngine(), pref, probe: null, tried,
+    return { engine: mkBrowser(), pref, probe: null, tried,
              warn: `could not reach ${pref.url} — running in the browser instead` };
   }
   if (pref.mode === 'local') {
     const r = await mkRemote('', '', false);
     if (r) return Object.assign(r, { pref, tried });
-    return { engine: new BrowserEngine(), pref, probe: null, tried,
+    return { engine: mkBrowser(), pref, probe: null, tried,
              warn: 'no local server on this origin — running in the browser instead' };
   }
 
@@ -115,5 +122,5 @@ export async function chooseEngine(pref = loadPref()) {
     r = await mkRemote(`${location.protocol}//${location.hostname}:8765`, '', false);
   }
   if (r) return Object.assign(r, { pref, tried });
-  return { engine: new BrowserEngine(), pref, probe: null, tried };
+  return { engine: mkBrowser(), pref, probe: null, tried };
 }

@@ -11,6 +11,7 @@ import io
 import json
 import os
 import shutil
+import sys
 import subprocess
 import threading
 import time
@@ -30,6 +31,10 @@ import render as R
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)          # repo root: web/, env/, jobs/ live there
+# coreml/ is model tooling and lives at the repo root, next to onnxexport/,
+# not inside server/ -- so the root has to be importable or the CoreML
+# accelerator silently falls through to torch.
+sys.path.insert(0, ROOT)
 JOBS = os.path.join(ROOT, "jobs")
 WEB = os.path.join(ROOT, "web")
 CKPT = os.path.join(ROOT, "env", "EdgeTAM", "checkpoints", "edgetam.pt")
