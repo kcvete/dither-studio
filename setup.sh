@@ -91,6 +91,67 @@ if "$VENV/bin/python" -c "import coremltools" >/dev/null 2>&1; then
   done
 fi
 
+# ---------------------------------------------------------------- browser engine
+# The same three stages plus the SAM heads, exported to ONNX so the page can
+# track without a server at all. ~130 MB of weights + a 41 MB onnxruntime build,
+# neither committed. Skip with DV_SKIP_WEB_MODELS=1 if you only ever want the
+# server path.
+if [ "${DV_SKIP_WEB_MODELS:-0}" != "1" ]; then
+  WEBM="$HERE/web/models"
+  MAN="$WEBM/manifest.json"
+  NEED=0
+  for g in encoder memattn heads heads_prompt heads_mask; do
+    [ -f "$WEBM/$g.fp16.onnx" ] || NEED=1
+  done
+  [ -f "$WEBM/memenc.onnx" ] || NEED=1
+  [ "$HERE/onnxexport/export_onnx.py" -nt "$MAN" ] && NEED=1
+  [ "$HERE/onnxexport/wrappers_onnx.py" -nt "$MAN" ] && NEED=1
+  [ "$CKPT" -nt "$MAN" ] && NEED=1
+  if [ "$NEED" = "1" ]; then
+    if ! "$VENV/bin/python" -c "import onnx, onnxruntime" >/dev/null 2>&1; then
+      echo "[setup] installing onnx + onnxruntime (for the ONNX export)"
+      "$VENV/bin/pip" install --quiet onnx onnxruntime || true
+    fi
+    if "$VENV/bin/python" -c "import onnx, onnxruntime" >/dev/null 2>&1; then
+      echo "[setup] exporting the ONNX graphs for the browser engine (once, ~90 s)"
+      "$VENV/bin/python" "$HERE/onnxexport/export_onnx.py" --image-size 768 \
+        >/dev/null 2>&1 \
+        && echo "[setup] ONNX export ok" \
+        || echo "[setup] ONNX export failed - the browser engine will say so in the UI"
+    else
+      echo "[setup] no onnx/onnxruntime - skipping the browser engine models"
+    fi
+  fi
+
+  # onnxruntime-web itself. Vendored, not pulled from a CDN at run time, because
+  # the whole point of the browser engine is that the page talks to nobody.
+  ORT="$HERE/web/ort"
+  if [ ! -f "$ORT/ort.all.bundle.min.mjs" ]; then
+    if command -v npm >/dev/null 2>&1; then
+      echo "[setup] fetching onnxruntime-web (once, ~41 MB)"
+      PKG="$ENVD/ortpkg"
+      mkdir -p "$PKG" "$ORT"
+      ( cd "$PKG" && npm install --silent --no-audit --no-fund --prefix "$PKG" \
+          onnxruntime-web@1.27 >/dev/null 2>&1 ) || true
+      D="$PKG/node_modules/onnxruntime-web/dist"
+      if [ -f "$D/ort.all.bundle.min.mjs" ]; then
+        # only the two builds the page can actually load: .jsep is the WebGPU
+        # one, the bare one is the multi-threaded WASM fallback. The asyncify
+        # and jspi variants are another 39 MB nothing here asks for.
+        cp "$D/ort.all.bundle.min.mjs" "$ORT/"
+        for v in "" ".jsep"; do
+          cp "$D/ort-wasm-simd-threaded$v.mjs" "$D/ort-wasm-simd-threaded$v.wasm" "$ORT/"
+        done
+        echo "[setup] onnxruntime-web ok ($(du -sh "$ORT" | cut -f1))"
+      else
+        echo "[setup] onnxruntime-web download failed - see web/README.md"
+      fi
+    else
+      echo "[setup] no npm - skipping onnxruntime-web (see web/README.md)"
+    fi
+  fi
+fi
+
 # the serial dither modes (error diffusion, Riemersma) run a per-pixel loop that
 # would take minutes per frame in Python; this is that loop in C.
 LIB="$ENVD/libcdither.dylib"
