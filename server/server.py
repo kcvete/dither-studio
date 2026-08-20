@@ -504,6 +504,10 @@ def api_meta():
             "extract_progress": True,  # GET /api/extract/<ticket>
             "gc": True,                # GET /api/gc/status, POST /api/gc/run
             "original": True,          # POST /api/jobs/<id>/original
+            # render / original / dots all take an inclusive frame_in..frame_out
+            # window over the frames already on disk -- a trim after the track
+            # costs nothing and re-tracks nothing.
+            "frame_range": True,
             "dots_max_frames": DOTS_MAX_FRAMES,
             "formats": list(R.FORMATS)}
 
@@ -537,6 +541,7 @@ def palettes():
         "extract_progress": True,
         "gc": True,
         "original": True,
+        "frame_range": True,
         "dots_max_frames": DOTS_MAX_FRAMES,
         "jpeg_bytes_per_frame": JPEG_BYTES_PER_FRAME,
         "decode_height": DECODE_HEIGHT,
@@ -1066,6 +1071,30 @@ class RenderReq(BaseModel):
     # alpha formats key the flat background out and leave only the dots.
     format: str = "mp4"
     gif_fps: int | None = None
+    # The frame window, inclusive, as indices into jobs/<id>/frames. Omitted =
+    # the whole clip, which is what every client did before this existed.
+    frame_in: int = 0
+    frame_out: int | None = None
+
+
+def _window(meta, frame_in, frame_out, what="render"):
+    """(in, out, count) for a request's frame window, or a 400 saying why not.
+
+    The window is a view on frames that already exist. It never re-extracts and
+    never re-tracks: masks are numbered by the same index the frames are, so a
+    narrower range is a slice and nothing more.
+    """
+    n = int(meta.get("n_frames") or 0)
+    a = int(frame_in or 0)
+    b = n - 1 if frame_out is None else int(frame_out)
+    if n <= 0:
+        raise HTTPException(400, "this job has no frames")
+    if a < 0 or b >= n or a > b:
+        raise HTTPException(
+            400, "frames %d–%d are outside this clip, which has %d "
+                 "(0–%d). Re-extract to cover a wider range."
+                 % (a, b, n, n - 1))
+    return a, b, b - a + 1
 
 
 @app.post("/api/jobs/{jid}/render")
@@ -1079,13 +1108,14 @@ def start_render(jid: str, req: RenderReq):
         raise HTTPException(400, "the dots look needs at least one tracked subject")
     if req.format not in R.FORMATS:
         raise HTTPException(400, "format must be one of %s" % list(R.FORMATS))
+    f_in, f_out, n_win = _window(meta, req.frame_in, req.frame_out)
 
     with _state_lock:
         st = _jobs.get(jid) or new_status(meta["n_frames"])
         if st["render"]["state"] == "rendering":
             raise HTTPException(409, "already rendering")
         st["render"] = {"state": "rendering", "done_frames": 0,
-                        "n_frames": meta["n_frames"], "elapsed_s": 0.0,
+                        "n_frames": n_win, "elapsed_s": 0.0,
                         "fps": 0.0, "error": None, "format": req.format,
                         "bytes": 0, "stage": "rendering"}
         _jobs[jid] = st
@@ -1097,7 +1127,9 @@ def start_render(jid: str, req: RenderReq):
     threading.Thread(target=_render_worker, args=(jid, d, resolved, params),
                      daemon=True).start()
     return {"job": jid, "state": "rendering", "subjects": len(resolved),
-            "format": req.format, "url": "/api/jobs/%s/output/%s" % (jid, req.format)}
+            "format": req.format, "frame_in": f_in, "frame_out": f_out,
+            "frames": n_win,
+            "url": "/api/jobs/%s/output/%s" % (jid, req.format)}
 
 
 def _render_worker(jid, d, subs, params):
@@ -1136,8 +1168,10 @@ def _render_worker(jid, d, subs, params):
             _jobs[jid]["render"].update(state="done", elapsed_s=round(el, 2),
                                         fps=round(info["frames"] / max(el, 1e-6), 2),
                                         format=fmt, bytes=info.get("bytes", 0))
-        print("[render] %s: %d frames -> %s in %.1fs (%.1f MB)"
-              % (jid, info["frames"], fmt, el, info.get("bytes", 0) / 1e6), flush=True)
+        print("[render] %s: %d frames (%d–%d) -> %s in %.1fs (%.1f MB)"
+              % (jid, info["frames"], info.get("first_frame", 0),
+                 info.get("last_frame", info["frames"] - 1), fmt, el,
+                 info.get("bytes", 0) / 1e6), flush=True)
     except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
@@ -1158,6 +1192,10 @@ class OriginalReq(BaseModel):
     format: str = "mp4"
     fps: int | None = None
     expect_frames: int | None = None
+    # the same window the render used; the pair is only a pair if both files
+    # were cut from the same frames
+    frame_in: int = 0
+    frame_out: int | None = None
 
 
 @app.post("/api/jobs/{jid}/original")
@@ -1173,23 +1211,27 @@ def export_original(jid: str, req: OriginalReq):
     if req.format not in R.FORMATS:
         raise HTTPException(400, "format must be one of %s" % list(R.FORMATS))
     frames_dir = os.path.join(d, "frames")
-    have = R.count_frames(frames_dir) if os.path.isdir(frames_dir) else 0
-    if not have:
+    if not os.path.isdir(frames_dir) or not R.count_frames(frames_dir):
         raise HTTPException(404, "this job has no frames to cut from")
+    f_in, f_out, have = _window(meta, req.frame_in, req.frame_out, "original cut")
     if req.expect_frames is not None and int(req.expect_frames) != have:
-        raise HTTPException(409, "the render used %d frames and the clip has %d — "
-                                 "the original cut would not line up"
-                                 % (int(req.expect_frames), have))
+        raise HTTPException(409, "the render used %d frames and frames %d–%d are "
+                                 "%d — the original cut would not line up"
+                                 % (int(req.expect_frames), f_in, f_out, have))
     fps = int(req.fps or meta.get("fps", 30))
     fmt = R.original_format(req.format)
     out = os.path.join(d, R.original_file(req.format))
     t0 = time.perf_counter()
-    info = R.render_original(frames_dir, out, {"format": req.format, "fps": fps})
+    info = R.render_original(frames_dir, out, {"format": req.format, "fps": fps,
+                                               "frame_in": f_in,
+                                               "frame_out": f_out})
     el = time.perf_counter() - t0
-    print("[original] %s: %d frames -> %s in %.1fs (%.1f MB)"
-          % (jid, info["frames"], fmt, el, info.get("bytes", 0) / 1e6), flush=True)
+    print("[original] %s: %d frames (%d–%d) -> %s in %.1fs (%.1f MB)"
+          % (jid, info["frames"], f_in, f_out, fmt, el,
+             info.get("bytes", 0) / 1e6), flush=True)
     return {"job": jid, "frames": info["frames"], "w": info["w"], "h": info["h"],
             "fps": fps, "format": fmt, "ext": R.FORMATS[fmt]["ext"],
+            "frame_in": f_in, "frame_out": f_out,
             "bytes": info["bytes"], "elapsed_s": round(el, 2),
             "matched": fmt == req.format,
             "url": "/api/jobs/%s/original/%s" % (jid, fmt)}
@@ -1227,6 +1269,8 @@ class DotsReq(BaseModel):
     seed: int = 7
     bg: str = "#c9d4c5"
     fps: int | None = None
+    frame_in: int = 0
+    frame_out: int | None = None
     json: bool = False          # also write the readable .dots.json variant
 
 
@@ -1242,6 +1286,7 @@ def export_dots(jid: str, req: DotsReq):
     subs = _resolve_subjects(jid, d, req.subjects)
     if not subs:
         raise HTTPException(400, "dot data needs at least one tracked subject")
+    f_in, f_out, _ = _window(meta, req.frame_in, req.frame_out, "dot export")
     params = req.model_dump()
     params.pop("subjects", None)
     params.pop("json", None)
@@ -1255,6 +1300,7 @@ def export_dots(jid: str, req: DotsReq):
         f.write(gz)
     counts = [int(sum(len(x) for x in fr)) for fr in doc["frames"]]
     res = {"job": jid, "frames": len(doc["frames"]), "bytes": len(gz),
+           "frame_in": f_in, "frame_out": f_out,
            "raw_bytes": len(DT.encode(doc)), "w": doc["w"], "h": doc["h"],
            "fps": doc["fps"], "dotpx": doc["dotpx"], "subjects": len(doc["subjects"]),
            "palette": doc["palette"],
@@ -1267,8 +1313,9 @@ def export_dots(jid: str, req: DotsReq):
             json.dump(DT.to_json(doc), f)
         res["json_bytes"] = os.path.getsize(jp)
         res["json_url"] = "/api/jobs/%s/out.dots.json" % jid
-    print("[dots] %s: %d frames, %.1f dots/frame, %d B gz in %.1fs"
-          % (jid, res["frames"], res["dots_mean"], res["bytes"], res["elapsed_s"]),
+    print("[dots] %s: %d frames (%d–%d), %.1f dots/frame, %d B gz in %.1fs"
+          % (jid, res["frames"], f_in, f_out, res["dots_mean"], res["bytes"],
+             res["elapsed_s"]),
           flush=True)
     return res
 

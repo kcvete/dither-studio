@@ -15,6 +15,10 @@
  *   E  clip    -> frame-0 preview, then a polygon mask prompt -> tracked
  *   O  clip    -> a dithered render AND the original cut to the same frames,
  *                 compared frame for frame against jobs/<id>/frames/
+ *   R  clip    -> tracked, THEN trimmed: a narrower range renders, exports,
+ *                 cuts its original and writes its .dots.gz out of the frames
+ *                 and masks already on disk, with no second track; a wider one
+ *                 is offered rather than silently re-cut
  *   P  clip    -> a tracked subject with MASK POLISH on: the motion gate, the
  *                 tab's polished mask against the server's byte for byte, the
  *                 wipe, and preview-vs-export
@@ -961,6 +965,210 @@ function frameFile(job, n) {
   return path.join(d, String(n).padStart(pad, '0') + '.jpg');
 }
 
+/* ---------- R: the range, AFTER the track ---------------------------------
+ * The bug this closes: dragging the trim after tracking used to re-extract the
+ * clip into a new job, which threw the masks away and forced a second track.
+ *
+ * The frames and the per-frame masks are on disk under one job id and neither
+ * moves, so a narrower range is a WINDOW on them. What this proves:
+ *
+ *   - narrowing fires no /track, no /reextract and no /upload at all, and the
+ *     job id and frame count on the page do not change
+ *   - the render, the matched original cut and the .dots.gz all come out at
+ *     the window's length, and frame 0 of the original IS jobs/<id>/frames/
+ *     <in>.jpg -- the frame-exactness the matched cut promises, for a trim
+ *   - the .dots.gz of the window is byte-for-byte the same slice of the dot
+ *     positions the whole clip gives, which is the mask offset being right
+ *   - a range that runs PAST what was extracted is not silently re-cut: the
+ *     page names the frames that are not tracked yet and waits, and only a
+ *     click on the offer costs a track
+ */
+async function runRange(page) {
+  const r = {};
+  const seen = [];
+  const tap = (rq) => seen.push(rq.method() + ' ' + rq.url().replace(BASE, ''));
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  // 2 s of the 5 s clip, so there is room to widen later as well as narrow
+  await page.evaluate(() => window.DV_limit(2));
+  await page.setInputFiles('#file', CLIP);
+  await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+  r.job = await page.evaluate(() => window.DV.job);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  if (r.nFrames !== 60) throw new Error('the 2 s window gave ' + r.nFrames + ' frames');
+
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(700);
+  await prompt(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.track = await waitText(page, '#tinfo', /tracked|failed/, 600000);
+  if (/failed/.test(r.track)) throw new Error(r.track);
+  r.maskFiles = fs.readdirSync(path.join(HERE, 'jobs', r.job, 'masks', '1')).length;
+  if (r.maskFiles !== r.nFrames) {
+    throw new Error(`${r.maskFiles} mask files for ${r.nFrames} frames`);
+  }
+  r.rangeBefore = await page.evaluate(() => window.DV_range.label());
+
+  /* --- narrow. Nothing may go over the wire but frames and masks. --- */
+  page.on('request', tap);
+  await page.evaluate(() => window.DV_range.seconds(0.5, 1.5));
+  await sleep(400);
+  r.range = await page.evaluate(() => window.DV_range.get());
+  r.rangeLabel = await page.evaluate(() => window.DV_range.label());
+  r.resetOffered = await page.evaluate(() => window.DV_range.resetShown());
+  r.narrowRequests = seen.slice();
+  r.retracked = seen.filter((x) => /\/(track|reextract|upload)/.test(x));
+  if (r.range.in !== 15 || r.range.out !== 44 || r.range.n !== 30) {
+    throw new Error('0.5–1.5 s of a 30 fps clip gave ' + JSON.stringify(r.range));
+  }
+  if (r.retracked.length) {
+    throw new Error('narrowing the trim fired ' + r.retracked.join(', '));
+  }
+  if ((await page.evaluate(() => window.DV.job)) !== r.job) {
+    throw new Error('narrowing the trim moved the clip to another job');
+  }
+  if ((await page.evaluate(() => window.DV.nFrames)) !== r.nFrames) {
+    throw new Error('narrowing the trim changed the frame count on disk');
+  }
+  if (!/15–44 of 60/.test(r.rangeLabel)) throw new Error('range label: ' + r.rangeLabel);
+  if (!r.resetOffered) throw new Error('no way back to the whole clip');
+  await page.screenshot({ path: path.join(DOCS, 'r-range-narrowed.png') });
+
+  /* --- render + matched cut, both cut to the window --- */
+  await setMode(page, 'dots');
+  await openStep(page, 'st5');
+  await page.evaluate((x) => window.DV_setFormat(x), 'mp4');
+  await page.check('#cOrig');
+  await page.click('#bExport');
+  r.export = await waitText(page, '#rinfo', /original cut|failed/, 300000);
+  if (/failed/.test(r.export)) throw new Error(r.export);
+  const dith = path.join(HERE, 'jobs', r.job, 'out.mp4');
+  const orig = path.join(HERE, 'jobs', r.job, 'out.original.mp4');
+  r.dithered = ffprobeFull(dith);
+  r.original = ffprobeFull(orig);
+  for (const k of ['nb_read_frames', 'width', 'height', 'r_frame_rate']) {
+    if (String(r.dithered[k]) !== String(r.original[k])) {
+      throw new Error(`the pair disagrees on ${k}: ${r.dithered[k]} vs ${r.original[k]}`);
+    }
+  }
+  if (+r.dithered.nb_read_frames !== r.range.n) {
+    throw new Error(`the render has ${r.dithered.nb_read_frames} frames for a `
+      + `${r.range.n}-frame range`);
+  }
+
+  /* frame k of the matched cut IS jobs/<id>/frames/<in + k>.jpg */
+  const rawRGB = (args) => execFileSync('ffmpeg', ['-v', 'error'].concat(args),
+                                        { maxBuffer: 1 << 28 });
+  const meanAbs = (a, b) => {
+    if (a.length !== b.length) throw new Error('frame sizes differ');
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return +(d / a.length).toFixed(3);
+  };
+  const fromCut = (k) => rawRGB(['-i', orig, '-vf', `select=eq(n\\,${k})`,
+    '-vframes', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']);
+  const fromDisk = (n) => rawRGB(['-i', frameFile(r.job, n), '-pix_fmt', 'rgb24',
+    '-f', 'rawvideo', '-']);
+  r.frameMeanAbsDiff = {};
+  for (const k of [0, r.range.n >> 1, r.range.n - 1]) {
+    const d = meanAbs(fromCut(k), fromDisk(r.range.in + k));
+    r.frameMeanAbsDiff[`${k} vs frames/${r.range.in + k}`] = d;
+    if (d >= 2) {
+      throw new Error(`cut frame ${k} is not the clip's frame ${r.range.in + k} `
+        + `(mean abs diff ${d})`);
+    }
+  }
+  // the control: it must NOT be frame 0 of the clip, or the check proves nothing
+  r.controlMeanAbsDiff = meanAbs(fromCut(0), fromDisk(0));
+  if (r.controlMeanAbsDiff < 2) {
+    throw new Error('the cut starts at frame 0 — the window was ignored');
+  }
+
+  /* --- the dots, as data: the window is the slice --- */
+  const dots = async (body) => {
+    const res = await page.request.post(`${BASE}/api/jobs/${r.job}/dots`,
+      { data: Object.assign({ subjects: [{ id: 1 }], json: true }, body),
+        timeout: 300000 });
+    if (!res.ok()) throw new Error('dots: ' + res.status() + ' ' + await res.text());
+    const j = await res.json();
+    return { stats: j,
+             doc: JSON.parse(fs.readFileSync(path.join(HERE, 'jobs', r.job,
+                                                       'out.dots.json'), 'utf8')) };
+  };
+  const win = await dots({ frame_in: r.range.in, frame_out: r.range.out });
+  const all = await dots({});
+  r.dotsWindow = { frames: win.stats.frames, bytes: win.stats.bytes,
+                   frame_in: win.stats.frame_in, frame_out: win.stats.frame_out };
+  r.dotsWhole = { frames: all.stats.frames, bytes: all.stats.bytes };
+  if (win.stats.frames !== r.range.n) {
+    throw new Error(`the .dots.gz has ${win.stats.frames} frames for a `
+      + `${r.range.n}-frame range`);
+  }
+  r.dotsIsTheSlice = win.doc.frames.every(
+    (f, i) => JSON.stringify(f) === JSON.stringify(all.doc.frames[r.range.in + i]));
+  if (!r.dotsIsTheSlice) {
+    throw new Error('the windowed dot positions are not the whole clip\'s slice '
+      + '— the masks are being read at the wrong offset');
+  }
+
+  /* --- back to the whole clip, in one click --- */
+  await page.evaluate(() => window.DV_range.full());
+  await sleep(300);
+  r.afterReset = await page.evaluate(() => window.DV_range.get());
+  if (!r.afterReset.whole || r.afterReset.n !== r.nFrames) {
+    throw new Error('"full clip" did not restore the whole range');
+  }
+
+  /* --- wider than what is on disk: an offer, not a silent re-cut --- */
+  seen.length = 0;
+  await page.evaluate(() => window.DV_range.seconds(0, 4));
+  await sleep(400);
+  r.offer = await page.evaluate(() => window.DV_range.offer());
+  r.offerVisible = await page.locator('#trimoffer').isVisible();
+  r.offerRequests = seen.filter((x) => /\/(track|reextract|upload)/.test(x));
+  if (!r.offer) throw new Error('a range past the end did not raise the offer');
+  if (!r.offerVisible) throw new Error('the offer is in the DOM but not on screen');
+  if (r.offerRequests.length) {
+    throw new Error('the offer alone fired ' + r.offerRequests.join(', '));
+  }
+  if (JSON.stringify(r.offer.missing) !== JSON.stringify([[60, 119]])) {
+    throw new Error('the offer names ' + JSON.stringify(r.offer.missing)
+      + ', not frames 60–119');
+  }
+  if ((await page.evaluate(() => window.DV.job)) !== r.job) {
+    throw new Error('the offer moved the clip before anyone accepted it');
+  }
+  await page.locator('#trimoffer').scrollIntoViewIfNeeded();
+  await sleep(200);
+  await page.screenshot({ path: path.join(DOCS, 'r-range-offer.png') });
+
+  /* --- and only now does it cost a track --- */
+  await page.click('#bExtend');
+  await page.waitForFunction((old) => window.DV.job && window.DV.job !== old,
+                             r.job, { timeout: 300000 });
+  r.extendTrack = await waitText(page, '#tinfo', /tracked 120|failed/, 900000);
+  if (/failed/.test(r.extendTrack)) throw new Error(r.extendTrack);
+  r.afterExtend = await page.evaluate(() => ({
+    job: window.DV.job, nFrames: window.DV.nFrames, tracked: window.DV.tracked,
+    promptFrames: window.DV.subjects.map((s) => s.promptFrame),
+    range: window.DV_range.get(),
+  }));
+  r.extendRequests = seen.filter((x) => /\/(track|reextract)/.test(x));
+  if (r.afterExtend.nFrames !== 120) {
+    throw new Error('the wider range came back as ' + r.afterExtend.nFrames
+      + ' frames, not 120');
+  }
+  if (!r.afterExtend.tracked) throw new Error('the wider range is not tracked');
+  if (!r.afterExtend.range.whole) throw new Error('the new clip opened trimmed');
+  r.extendMasks = fs.readdirSync(
+    path.join(HERE, 'jobs', r.afterExtend.job, 'masks', '1')).length;
+  if (r.extendMasks !== 120) {
+    throw new Error(`${r.extendMasks} masks for 120 frames after the extend`);
+  }
+  page.removeListener('request', tap);
+  return r;
+}
+
 /* ---------- G: dot data and sequences, server side ------------------------
  * The dots as positions rather than pixels, the .dots.gz they pack into, and
  * the route that turns a finished sequence back into a video. The identity
@@ -1374,6 +1582,7 @@ try {
   // read the job the PAGE still has open, so a run that navigates -- this one,
   // and the three below it -- has to come after them.
   await run('original', runOriginal);
+  await run('range', runRange);
   await run('lasso', runLasso);
   await run('polish', runPolish);
   await run('gc', runGC);

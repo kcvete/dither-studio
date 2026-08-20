@@ -47,6 +47,11 @@ export class RemoteEngine {
       // without the dither. Older servers say nothing and the page hides the
       // checkbox rather than offering a button that 404s.
       original: false,
+      // render / original / dots take an inclusive frame_in..frame_out window
+      // over the frames already extracted, so narrowing the trim after a track
+      // costs nothing. An older server ignores the fields and renders the whole
+      // clip, which is why the page checks before it narrows.
+      frameRange: false,
       // filled in from /api/palettes; this is what a server too old to
       // advertise formats can be assumed to do
       formats: [{ id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', mime: 'video/mp4',
@@ -87,6 +92,7 @@ export class RemoteEngine {
     this.supports.extractProgress = !!this.probe.extract_progress;
     this.supports.uncapped = !!this.probe.uncapped;
     this.supports.original = !!this.probe.original;
+    this.supports.frameRange = !!this.probe.frame_range;
     return this;
   }
 
@@ -96,6 +102,7 @@ export class RemoteEngine {
     if (m.reextract !== undefined) this.supports.reextract = !!m.reextract;
     if (m.uncapped !== undefined) this.supports.uncapped = !!m.uncapped;
     if (m.original !== undefined) this.supports.original = !!m.original;
+    if (m.frame_range !== undefined) this.supports.frameRange = !!m.frame_range;
     if (m.extract_progress !== undefined) {
       this.supports.extractProgress = !!m.extract_progress;
     }
@@ -356,7 +363,10 @@ export class RemoteEngine {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ format: params.format || 'mp4',
                              fps: params.fps || null,
-                             expect_frames: params.expect_frames || null }),
+                             expect_frames: params.expect_frames || null,
+                             frame_in: params.frame_in | 0,
+                             frame_out: params.frame_out === undefined
+                               ? null : params.frame_out }),
     });
     const path = this.jobPath('/original/' + r.format);
     let url = this.url(path) + '?t=' + Date.now();
@@ -365,7 +375,8 @@ export class RemoteEngine {
     return { url, ext: r.ext, mime: (this.supports.formats.find((f) => f.id === r.format)
                                      || {}).mime || 'video/mp4',
              frames: r.frames, bytes: r.bytes, elapsedS: r.elapsed_s,
-             w: r.w, h: r.h, fps: r.fps, format: r.format, matched: !!r.matched };
+             w: r.w, h: r.h, fps: r.fps, format: r.format, matched: !!r.matched,
+             frameIn: r.frame_in | 0, frameOut: r.frame_out | 0 };
   }
 
   /* --------------------------------------------------------- dot data */

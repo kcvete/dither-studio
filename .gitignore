@@ -32,6 +32,11 @@ docs/o-original-cut.mp4
 docs/w-original-cut.webm
 docs/w-original-dithered.webm
 docs/w-original-ref-*.png
+# the range run's pair and its reference frames, same reasoning
+docs/w-range-dithered.webm
+docs/w-range-original.webm
+docs/w-range-ref-*.png
+docs/w-range-dots.gz
 docs/seq-item-look-*.dots.gz
 docs/seq-item-look.mp4
 docs/seq-particle.dots.gz

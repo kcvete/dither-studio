@@ -163,6 +163,7 @@ in the tab. The chip in the header names the winner and switches it by hand:
 | multiple subjects | one pass each, so N subjects cost N x | one batched propagate pass |
 | video export | WebM (VP9) via MediaRecorder | H.264 MP4 via ffmpeg |
 | the matched cut | the decoded frames back through the same recorder, WebM | `jobs/<id>/frames/*.jpg` re-encoded, MP4 (WebM beside a WebM render) |
+| a trim after the track | a window on the frames and mask logits already in memory — nothing re-decoded | `frame_in`/`frame_out` on `/render`, `/original` and `/dots`, a slice of the frames and masks already on disk |
 | frames | never leave the tab | uploaded, decoded to JPEG under `jobs/` |
 | still export | PNG (RGBA when you ask for a transparent background), in the tab | the same, in the tab |
 | subject in a still | one frame through `encoder` + `heads_prompt`, nothing uploaded | `POST /api/upload_image`, then one `/preview` per click |

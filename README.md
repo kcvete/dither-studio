@@ -193,15 +193,81 @@ that runs off the end clamped to the 30 frames that are there, the same 5 s clip
 looped to 30 s arriving as all **900** frames, and the trimmed clip's frame 0
 byte-for-byte the frame ffmpeg gives for `-ss 2.0` (mean abs diff 0.000).
 
-**Changing your mind is free.** Trimming again after a clip is already open does
-not re-upload it and does not ask for the file a second time. The server keeps
-`jobs/<id>/source.mp4`, so *use this range* is one `POST /api/jobs/<id>/reextract`
-— a fresh job hard-linked to the same source bytes, no second copy on disk. The
-browser engine keeps the `File` handle and re-decodes from it. Measured: cutting
-30–45 s out of a 90 s clip already on the server took **0.5 s end to end**
-through the UI, produced 450 frames, and its frame 0 is byte-identical to
-`ffmpeg -ss 30` (mean abs diff 0.000). The status line says
-*re-cut, nothing re-uploaded*.
+**Changing your mind is free.** Trimming again *before* anything is tracked does
+not re-upload the clip and does not ask for the file a second time. The server
+keeps `jobs/<id>/source.mp4`, so *use this range* is one
+`POST /api/jobs/<id>/reextract` — a fresh job hard-linked to the same source
+bytes, no second copy on disk. The browser engine keeps the `File` handle and
+re-decodes from it. Measured: cutting 30–45 s out of a 90 s clip already on the
+server took **0.5 s end to end** through the UI, produced 450 frames, and its
+frame 0 is byte-identical to `ffmpeg -ss 30` (mean abs diff 0.000). The status
+line says *re-cut, nothing re-uploaded*.
+
+<a id="trimming-after-the-track"></a>
+#### Trimming after the track: a window, not a second track
+
+Re-extracting is the right answer *before* a track — tracking frames you are
+going to throw away is wasted time. After a track it is the wrong one, because
+it throws the masks away with the frames. So once a clip is tracked, the trim
+bar means something different.
+
+The frames of a clip live in `jobs/<id>/frames/` and the tracker writes one mask
+file per frame per subject beside them in `jobs/<id>/masks/<obj>/`. Both are
+numbered from 0, and neither moves. A narrower range is therefore a **window**
+on what is already there:
+
+* **narrower than the tracked clip** — the trim bar sets an in/out pair of frame
+  indices and nothing else happens. No ffmpeg, no upload, no propagation. The
+  transport says `frames 15–44 of 60` with a *full clip ↺* beside it, and the
+  preview plays that range.
+* **wider than the tracked clip** — nothing is silently re-cut. The panel names
+  the frames that do not exist yet (*frames 60–119 aren't tracked yet…*), states
+  what getting them costs, and waits for one of two buttons.
+
+Everything downstream reads that window: the preview, the render, all five
+export containers, the matched original cut, `.dots.gz`, and the in/out that
+*add to the sequence* seeds a strip entry with (the pool item still holds every
+tracked frame, so the entry can be widened again in the inspector).
+
+On the wire it is two integers. `POST /api/jobs/<id>/render`,
+`/original` and `/dots` all take `frame_in` and `frame_out`, inclusive, indices
+into the frames directory; omitting them means the whole clip, so a client that
+never heard of them behaves exactly as before. `GET /api/meta` advertises
+`"frame_range": true`. `server/render.py:frame_range()` slices the file list and
+hands the renderers the offset the masks have to be read at — frame *k* of the
+output is `frames/(in+k).jpg` and `masks/<obj>/(in+k).png`. The browser engine
+walks the same absolute indices over the blobs and mask logits it already holds.
+
+Measured in `verify.mjs` (flow **R**) and `verify-web.mjs` (**W2c**), a tracked
+60-frame clip narrowed to 0.5–1.5 s:
+
+| | server engine | browser engine |
+|---|---|---|
+| requests fired by the narrowing | one frame + one mask (the preview redraw) — **no** `/track`, `/reextract` or `/upload` | **none at all** |
+| job id / frames on disk | unchanged | unchanged |
+| render | 30 frames | 30 frames |
+| matched original cut | 30 frames, same w/h/rate as the render | 30 frames, same w/h as the render |
+| cut frame 0 vs `frames/0015.jpg` | mean abs diff **0.647** | **3.035** vs the tab's frame 15 (VP9) |
+| cut frame 0 vs `frames/0000.jpg` (control) | **19.99** — it is not frame 0 | **20.52** |
+| `.dots.gz` | 30 frames, byte-identical to frames 15–44 of the whole clip's document | 30 frames |
+| strip entry seeded by *add to the sequence* | in 15, out 44, 30 frames long, pool item still 60 | same |
+
+![the active range, stated next to the transport](docs/w-range-narrowed.png)
+
+![a range past what was tracked: what is missing, and what it costs](docs/r-range-offer.png)
+
+**What the extend actually does — say it plainly.** Taking the offer re-extracts
+the wider range and tracks it **in full**, carrying the prompts you already
+placed across (their frame numbers shift by however much the range's start
+moved). It does *not* propagate only the missing tail out of the existing memory
+bank, because there is no memory bank left to propagate from: EdgeTAM's
+inference state is built by `predictor.init_state()` over the whole frames
+directory at the start of every `/track` and torn down at the end of it
+(`server/server.py`, `_track_worker`), and the browser engine's tracker is reset
+the same way. Keeping one alive across requests is a different piece of work.
+The panel says the number rather than implying the cheap thing happened —
+measured: 60 → 120 frames re-extracted and re-tracked in **8.0 s** on the server
+engine, **12.8 s** in the tab, one subject.
 
 <a id="length-consent-not-caps"></a>
 #### Length: consent, not caps
@@ -1273,10 +1339,10 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | engine parity, kernels | **110/110 byte-identical**, and 110/110 again through a mask |
 | engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
 | engine parity, polish | **27/27 float-identical** (3 strengths × 9 frames); crop shortcut vs whole frame, max difference **0** |
-| `verify.mjs` | 12 flows, **0 console errors** |
+| `verify.mjs` | 14 flows, **0 console errors** |
 | `jobsgc_check.py` | **29/29**, six cases, no server and no real jobs/ |
 | jobs/ janitor, live | a stale job deleted, a fresh one kept, a `camera-` job trimmed to `source.webm` + `meta.json`; **12 sweeps** fired through a real track → render and it finished untouched |
-| `verify-web.mjs` | 18 flows, **225/225 assertions**, **0 console errors** |
+| `verify-web.mjs` | 20 flows, **263/263 assertions**, **0 console errors** |
 | sequence: an item's look | item 2 through all 7 modes, a palette, cell 6, gamma 1.4 and polish 70 — items 1 and 3 **hash identically** before and after (`c7b68293`, `a9e6316d`), item 2 goes `c7b68293` → `2853216c` and back again |
 | sequence: pixel modes | a cell-1 Bayer photograph is **484,508 dots a frame**; its morph flies **3,773** mid-air and lands on 711, the subject's own count |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
@@ -1301,6 +1367,11 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | sequence: colours | 4 item colours + background survive into the `.dots.gz` palette |
 | sequence: MP4 | **243/243 frames** ffprobed off `/api/sequence`, 1.6 MB H.264 |
 | sequence: replay | the 338 KB `.dots.gz` plays back at **120 fps**, 1.5 ms a frame |
+| range: narrowing after a track | server engine fires **no** `/track`, `/reextract` or `/upload`; browser engine touches **no API at all**; job id and frame count unchanged |
+| range: what the window exports | render **30/30**, matched cut **30/30**, `.dots.gz` **30 frames** — for a 60-frame tracked clip windowed to frames 15–44 |
+| range: frame-exactness | cut frame 0 vs `frames/0015.jpg` mean abs diff **0.647** (control against `frames/0000.jpg`: **19.99**); the tab's pair **3.035** vs its own frame 15 through VP9 |
+| range: dot positions | the window's `.dots.gz` is byte-identical to frames 15–44 of the whole clip's document — the mask offset is right |
+| range: widening | the offer names **frames 60–119**, fires nothing until it is taken, then re-extracts and re-tracks 120 frames in **8.0 s** (server) / **12.8 s** (tab) |
 | `DV_API_KEY` | bare 401 · wrong key 401 · right key 200 · the page still 200 |
 
 The remaining 2.2 % of the preview-vs-export comparison is not an engine
@@ -1692,7 +1763,15 @@ why the setting exists rather than a silently lowered default.
   under a minute loads whole immediately so a drop is never blocked on a second
   click; a longer one states its cost and waits. Either way *use this range*
   afterwards re-cuts from bytes that are already here: the server's kept
-  `source.mp4`, or the tab's `File` handle.
+  `source.mp4`, or the tab's `File` handle. Once a clip is **tracked** it does
+  not re-decode at all — the trim becomes a window on the frames and masks on
+  disk (see [Trimming after the track](#trimming-after-the-track)).
+* **Widening a tracked range costs a full re-track.** Narrowing is free;
+  extending past what was extracted re-extracts and tracks the wider range from
+  scratch, with your prompts carried over. Only the tail is missing, but the
+  tracker's memory bank does not survive between `/track` calls on either
+  engine, so there is nothing to walk forward from. The page states the cost and
+  waits for a click rather than doing it behind your back.
 * **The camera needs a secure context.** `getUserMedia` exists on `https://` and
   on `localhost`, and nowhere else — a page served over plain http from another
   machine will not see it. No audio is recorded, ever.

@@ -18,6 +18,10 @@
  *   W2  browser · a clip, whole frame -> WebM
  *   W2b browser · a clip exported as a PAIR: the dithered WebM and the same
  *       frames undithered, checked against the frames the tab drew
+ *   W2c browser · a clip tracked, THEN trimmed: the narrower range renders,
+ *       exports its pair and writes its .dots.gz out of frames and masks that
+ *       are already in the tab, with no second track and no network at all;
+ *       a wider range is offered rather than silently re-decoded
  *   W3  browser · a clip, one tracked subject, frame-0 preview -> dots -> WebM,
  *       with the mask polish on for the export and off again afterwards
  *   W4  browser · a polygon mask prompt (the heads_mask graph) -> tracked
@@ -658,6 +662,183 @@ async function runOriginalBrowser() {
   await sleep(500);
   r.hiddenInSequence = await page.locator('#origui').isHidden();
   check('the sequence view does not offer a matched cut', r.hiddenInSequence);
+  await ctx.close();
+  return r;
+}
+
+/* ======= W2c: the range, after the track — in the tab =====================
+ * The same claim the server run makes (verify.mjs, flow R), on the engine that
+ * has no server at all: once a clip is tracked, narrowing the trim is a window
+ * on the frames and mask logits already in memory. It re-decodes nothing,
+ * re-tracks nothing, and every export follows it.
+ */
+async function runRangeBrowser() {
+  const r = {};
+  const { ctx, page } = await newPage(browserPref());
+  const seen = [];
+  page.on('request', (rq) => seen.push(rq.method() + ' ' + rq.url().replace(BASE, '')));
+  // 2 s of the clip, so there is room to widen as well as narrow
+  await loadClip(page, CLIP, 2);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  check('range · the tab opened a 2 s window', r.nFrames === 60, String(r.nFrames));
+
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+  await promptBoxPoint(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.track = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('range · the clip tracks in the tab', !/failed/.test(r.track), r.track);
+
+  /* --- narrow: no network, no re-track, same frames --- */
+  seen.length = 0;
+  await page.evaluate(() => window.DV_range.seconds(0.5, 1.5));
+  await sleep(400);
+  r.range = await page.evaluate(() => window.DV_range.get());
+  r.label = await page.evaluate(() => window.DV_range.label());
+  r.apiCalls = seen.filter((x) => /\/api\//.test(x));
+  check('range · 0.5–1.5 s of a 30 fps clip is frames 15–44',
+        r.range.in === 15 && r.range.out === 44 && r.range.n === 30,
+        JSON.stringify(r.range));
+  check('range · the transport states the range',
+        /15–44 of 60/.test(r.label), r.label);
+  check('range · the reset is offered',
+        await page.evaluate(() => window.DV_range.resetShown()));
+  check('range · narrowing after a track touches no API at all',
+        r.apiCalls.length === 0, JSON.stringify(r.apiCalls));
+  check('range · the decoded frames stay where they were',
+        (await page.evaluate(() => window.DV.nFrames)) === r.nFrames);
+  await page.screenshot({ path: path.join(DOCS, 'w-range-narrowed.png') });
+
+  /* --- the pair, cut to the window --- */
+  await setMode(page, 'dots');
+  await openStep(page, 'st5');
+  await page.check('#cOrig');
+  await page.click('#bExport');
+  r.export = await waitText(page, '#rinfo', /original cut|failed/, 900000);
+  check('range · a trimmed clip exports as a pair', !/failed/.test(r.export), r.export);
+  check('range · the render says which frames it used',
+        /frames 15–44 of 60/.test(r.export), r.export);
+  const dith = path.join(DOCS, 'w-range-dithered.webm');
+  const orig = path.join(DOCS, 'w-range-original.webm');
+  r.ditheredBytes = await saveDownload(page, dith);
+  const [d2] = await Promise.all([
+    page.waitForEvent('download', { timeout: 60000 }),
+    page.click('#dlorig'),
+  ]);
+  await d2.saveAs(orig);
+  r.dithered = probe(dith);
+  r.original = probe(orig);
+  check('range · the render is the window, not the clip',
+        +r.dithered.nb_read_frames === r.range.n,
+        `${r.dithered.nb_read_frames} != ${r.range.n}`);
+  check('range · the matched cut is the same window',
+        +r.original.nb_read_frames === r.range.n,
+        `${r.original.nb_read_frames} != ${r.range.n}`);
+
+  /* frame k of the cut is the tab's frame in+k, and NOT its frame k */
+  const rawRGB = (args) => execFileSync('ffmpeg', ['-v', 'error'].concat(args),
+                                        { maxBuffer: 1 << 28 });
+  const meanAbs = (a, b) => {
+    if (a.length !== b.length) throw new Error('frame sizes differ');
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
+    return +(d / a.length).toFixed(3);
+  };
+  const tabFrame = async (n) => {
+    const b64 = await page.evaluate(async (i) => {
+      const img = await window.DV_originalAt(i);
+      const cv = document.createElement('canvas');
+      cv.width = img.width; cv.height = img.height;
+      cv.getContext('2d').putImageData(img, 0, 0);
+      return cv.toDataURL('image/png').split(',')[1];
+    }, n);
+    const f = path.join(DOCS, `w-range-ref-${n}.png`);
+    fs.writeFileSync(f, Buffer.from(b64, 'base64'));
+    return rawRGB(['-i', f, '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']);
+  };
+  const cutFrame = (k) => rawRGB(['-i', orig, '-vf', `select=eq(n\\,${k})`,
+    '-vframes', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']);
+  r.frameMeanAbsDiff = {};
+  for (const k of [0, r.range.n - 1]) {
+    const d = meanAbs(cutFrame(k), await tabFrame(r.range.in + k));
+    r.frameMeanAbsDiff[`${k} vs tab ${r.range.in + k}`] = d;
+    check(`range · cut frame ${k} is the tab's frame ${r.range.in + k}`,
+          d < 4, 'mean abs diff ' + d);
+  }
+  r.controlMeanAbsDiff = meanAbs(cutFrame(0), await tabFrame(0));
+  check('range · and it is NOT the tab\'s frame 0',
+        r.controlMeanAbsDiff > 4, 'mean abs diff ' + r.controlMeanAbsDiff);
+
+  /* --- the .dots.gz follows the window too --- */
+  const gz = path.join(DOCS, 'w-range-dots.gz');
+  const [d3] = await Promise.all([
+    page.waitForEvent('download', { timeout: 300000 }),
+    page.click('#bDots'),
+  ]);
+  await d3.saveAs(gz);
+  const P = await import(path.join(HERE, 'web', 'player', 'dither-player.mjs'));
+  const doc = await P.unpack(new Uint8Array(fs.readFileSync(gz)));
+  r.dotsFrames = doc.frames.length;
+  check('range · the .dots.gz is the window', r.dotsFrames === r.range.n,
+        `${r.dotsFrames} != ${r.range.n}`);
+
+  /* --- the sequence seeds an entry's in/out from the range, and keeps the
+         whole clip in the pool so the entry can be widened again --- */
+  await page.evaluate(() => window.DV_seq.add('clip'));
+  await page.waitForFunction(() => window.DV_seq.strip().length > 0,
+                             null, { timeout: 300000 });
+  await sleep(500);
+  r.strip = await page.evaluate(() => window.DV_seq.strip()[0]);
+  r.lib = await page.evaluate(() => window.DV_seq.library()[0]);
+  check('range · the strip entry starts at the studio\'s range',
+        r.strip.in === r.range.in && r.strip.out === r.range.out,
+        JSON.stringify([r.strip.in, r.strip.out]));
+  check('range · the entry is the range long', r.strip.frames === r.range.n,
+        String(r.strip.frames));
+  check('range · the pool item still holds every tracked frame',
+        r.lib.nFrames === r.nFrames, String(r.lib.nFrames));
+  await page.evaluate(() => window.DV_seq.view('studio'));
+  await sleep(400);
+
+  /* --- wider than what was decoded: the offer, and nothing else --- */
+  await openStep(page, 'st1');
+  await page.evaluate(() => window.DV_range.seconds(0, 4));
+  await sleep(400);
+  r.offer = await page.evaluate(() => window.DV_range.offer());
+  check('range · a range past the decode raises the offer', !!r.offer,
+        JSON.stringify(r.offer));
+  check('range · the offer names the frames that are not tracked',
+        r.offer && JSON.stringify(r.offer.missing) === JSON.stringify([[60, 119]]),
+        r.offer && JSON.stringify(r.offer.missing));
+  check('range · the offer is on screen',
+        await page.locator('#trimoffer').isVisible());
+  check('range · the clip is not re-decoded until the offer is taken',
+        (await page.evaluate(() => window.DV.nFrames)) === r.nFrames,
+        String(await page.evaluate(() => window.DV.nFrames)));
+  await page.locator('#trimoffer').scrollIntoViewIfNeeded();
+  await sleep(200);
+  await page.screenshot({ path: path.join(DOCS, 'w-range-offer.png') });
+
+  /* --- and taking it re-decodes and re-tracks, prompts carried across --- */
+  await page.click('#bExtend');
+  await page.waitForFunction(() => window.DV.nFrames === 120,
+                             null, { timeout: 600000 });
+  r.extendTrack = await waitText(page, '#tinfo', /tracked 120|failed/, 900000);
+  check('range · taking the offer tracks the wider range',
+        !/failed/.test(r.extendTrack), r.extendTrack);
+  r.afterExtend = await page.evaluate(() => ({
+    nFrames: window.DV.nFrames, tracked: window.DV.tracked,
+    subjects: window.DV.subjects.length,
+    promptFrames: window.DV.subjects.map((s) => s.promptFrame),
+    range: window.DV_range.get(),
+  }));
+  check('range · the wider clip is 120 frames and tracked',
+        r.afterExtend.nFrames === 120 && r.afterExtend.tracked,
+        JSON.stringify(r.afterExtend));
+  check('range · the prompts came across',
+        r.afterExtend.subjects === 1 && r.afterExtend.promptFrames[0] === 0,
+        JSON.stringify(r.afterExtend.promptFrames));
+  check('range · the re-cut clip opens at its full length',
+        r.afterExtend.range.whole);
   await ctx.close();
   return r;
 }
@@ -2008,6 +2189,7 @@ try {
   await run('stillSubjectRemote', runStillSubject, 'remote');
   await run('whole', runWhole);
   await run('original', runOriginalBrowser);
+  await run('range', runRangeBrowser);
   await run('tracked', runTracked);
   await run('lasso', runLasso);
   await run('cameraRemote', runCamera, 'remote', true);

@@ -41,6 +41,12 @@ DEFAULTS = dict(
     n=8000, cell=4, dotpx=3, fill=0.7, stray=0.02, band=9,
     # output
     fps=30, seed=7,
+    # the frame window this render covers, as INDICES into the job's frames
+    # directory (which is also how the mask files are numbered). Both are
+    # inclusive; frame_out=None means "to the last frame there is". The
+    # defaults are the whole clip, so a caller that never heard of a range
+    # gets exactly what it always got.
+    frame_in=0, frame_out=None,
     # container: see FORMATS. 'format' picks the encoder, gif_fps only bites for GIF.
     format="mp4", gif_fps=None,
 )
@@ -226,6 +232,25 @@ def upscale(a, p, h, w):
 # --------------------------------------------------------------- I/O bits
 def _list_frames(d):
     return sorted(f for f in os.listdir(d) if f.lower().endswith(('.jpg', '.png')))
+
+
+def frame_range(files, a):
+    """(the files this render covers, the index of the first one).
+
+    A trim after the tracking is a WINDOW on frames that already exist, not a
+    new extraction: jobs/<id>/frames/ and jobs/<id>/masks/<obj>/ are both
+    numbered from 0 and stay exactly as they were. So everything a narrowed
+    range needs is a slice plus the offset the masks have to be read at --
+    frame k of the output is frames[base + k] and masks/<obj>/(base + k).png.
+    """
+    n = len(files)
+    i0 = max(0, int(a.get("frame_in") or 0))
+    i1 = a.get("frame_out")
+    i1 = n - 1 if i1 is None else min(n - 1, int(i1))
+    if i0 > i1:
+        raise RuntimeError("empty frame range: %d..%s of %d frames"
+                           % (i0, i1, n))
+    return files[i0:i1 + 1], i0
 
 
 def _load_mask(mdir, i, h, w, last):
@@ -431,6 +456,7 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
     files = _list_frames(frames_dir)
     if not files:
         raise RuntimeError('no frames in ' + frames_dir)
+    files, base = frame_range(files, a)
     if a['mode'] == 'dots' and not subjects:
         raise RuntimeError('the dots look needs at least one tracked subject')
 
@@ -462,7 +488,7 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
             rgb = np.asarray(Image.open(os.path.join(frames_dir, fn)).convert('RGB'))
             masks = []
             for k, s in enumerate(subjects):
-                last[k] = _load_mask(s['masks'], i, H, W, last[k])
+                last[k] = _load_mask(s['masks'], base + i, H, W, last[k])
                 masks.append(last[k])
             if a['mode'] == 'dots':
                 canvas = _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha)
@@ -480,6 +506,7 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
     if p.wait() != 0:
         raise RuntimeError('ffmpeg failed: ' + err[-800:])
     return {'out': out_path, 'frames': total, 'w': W, 'h': H, 'format': fmt,
+            'first_frame': base, 'last_frame': base + total - 1,
             'bytes': os.path.getsize(out_path)}
 
 
@@ -511,9 +538,16 @@ def original_file(fmt):
     return FORMATS[original_format(fmt)]["file"].replace("out.", "out.original.", 1)
 
 
-def count_frames(frames_dir):
-    """How many frames render() would consume from this directory."""
-    return len(_list_frames(frames_dir))
+def count_frames(frames_dir, params=None):
+    """How many frames render() would consume from this directory.
+
+    With `params` carrying a frame_in/frame_out window, this is the length of
+    that window -- which is what the matched cut has to agree with.
+    """
+    files = _list_frames(frames_dir)
+    if not files or params is None:
+        return len(files)
+    return len(frame_range(files, _params(params))[0])
 
 
 def _numbered_run(frames_dir, files):
@@ -582,6 +616,7 @@ def render_original(frames_dir, out_path, params=None, progress=None):
     files = _list_frames(frames_dir)
     if not files:
         raise RuntimeError('no frames in ' + frames_dir)
+    files, base = frame_range(files, a)
     fmt = original_format(a.get('format'))
     fps = int(a['fps'])
     H, W = np.asarray(Image.open(os.path.join(frames_dir, files[0]))
@@ -592,6 +627,10 @@ def render_original(frames_dir, out_path, params=None, progress=None):
     if run:
         cmd = ffmpeg_cmd(fmt, W, H, fps, out_path,
                          input_args=["-framerate", str(fps)] + run)
+        # -start_number only says where to BEGIN; the image2 demuxer would
+        # happily read past the window's last frame to the end of the
+        # directory, so the count is pinned on the output side too.
+        cmd = cmd[:-1] + ["-frames:v", str(total)] + cmd[-1:]
         wrote = _run_counting(cmd, total, progress)
         if wrote != total:
             raise RuntimeError('the original cut got %d frames, the render had %d'
@@ -617,6 +656,7 @@ def render_original(frames_dir, out_path, params=None, progress=None):
         if p.wait() != 0:
             raise RuntimeError('ffmpeg failed: ' + err[-800:])
     return {'out': out_path, 'frames': total, 'w': W, 'h': H, 'format': fmt,
+            'first_frame': base, 'last_frame': base + total - 1,
             'bytes': os.path.getsize(out_path)}
 
 # ---------------------------------------------------------- dots as data
@@ -632,6 +672,7 @@ def render_dots(frames_dir, subjects, params=None, progress=None):
     files = _list_frames(frames_dir)
     if not files:
         raise RuntimeError('no frames in ' + frames_dir)
+    files, base = frame_range(files, a)
     if not subjects:
         raise RuntimeError('the dots look needs at least one tracked subject')
     H, W = np.asarray(Image.open(os.path.join(frames_dir, files[0])).convert('RGB')).shape[:2]
@@ -647,13 +688,13 @@ def render_dots(frames_dir, subjects, params=None, progress=None):
         rgb = np.asarray(Image.open(os.path.join(frames_dir, fn)).convert('RGB'))
         masks = []
         for k, s in enumerate(subjects):
-            last[k] = _load_mask(s['masks'], i, H, W, last[k])
+            last[k] = _load_mask(s['masks'], base + i, H, W, last[k])
             masks.append(last[k])
         frames.append([dot_positions(on, F) for on in dots_on(rgb, masks, a, F)])
         if progress:
             progress(i + 1, total)
     return dict(w=W, h=H, fps=int(a['fps']), dotpx=int(a['dotpx']),
-                palette=[bg] + cols, bg=bg, bg_index=0,
+                palette=[bg] + cols, bg=bg, bg_index=0, first_frame=base,
                 subjects=[{'color': c} for c in cols], frames=frames)
 
 

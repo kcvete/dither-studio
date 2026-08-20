@@ -87,6 +87,15 @@
             <button class="btn" id="bTrimAll">whole clip</button>
           </div>
           <div class="note" id="trimnote"></div>
+          <!-- a range that runs past the frames on disk: what is missing, what
+               getting it costs, and the two answers. Never a refusal. -->
+          <div id="trimoffer" hidden>
+            <div class="note warn" id="trimoffernote"></div>
+            <div class="row">
+              <button class="btn go" id="bExtend">re-cut and track</button>
+              <button class="btn" id="bExtendNo">keep the tracked range</button>
+            </div>
+          </div>
         </div>
         <div id="upstat" class="stat" hidden></div>
       </div>
@@ -414,6 +423,10 @@
         <button class="chip" id="bPlay" aria-pressed="false" hidden>play</button>
         <input type="range" id="sFrame" min="0" max="0" step="1" value="0" hidden>
         <span class="mono" id="fcount" hidden>0 / 0</span>
+        <!-- the active range: which frames the preview, the render and every
+             export are working on, and one click back to all of them -->
+        <span class="mono" id="rangelbl" hidden></span>
+        <button class="chip" id="bRangeAll" hidden title="use every tracked frame again">full clip ↺</button>
         <span class="mono" id="fps">–</span>
         <button class="chip" id="bCmp" aria-pressed="false">compare</button>
       </div>

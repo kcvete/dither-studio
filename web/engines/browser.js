@@ -716,6 +716,23 @@ export class BrowserEngine {
    * a different size, or the only thing in the session), but it is exactly the
    * same job of "call renderFrame(i) and feed an encoder".
    */
+  /** The frames one export covers: [first, count].
+   *
+   *  `params.frame_in` / `params.frame_out` are INCLUSIVE indices into the
+   *  clip that is open -- the same window server/render.frame_range() slices.
+   *  A trim after the tracking narrows this and nothing else: the decoded
+   *  frames and the mask logits stay exactly where they are, and renderFrame
+   *  is still called with absolute indices. Omitted = the whole clip, which is
+   *  what the sequence exports (which bring their own `source`) always want.
+   */
+  static window(params, src) {
+    const n = src.nFrames;
+    const a = Math.max(0, Math.min(n - 1, params.frame_in | 0));
+    const b = params.frame_out === undefined || params.frame_out === null
+      ? n - 1 : Math.max(a, Math.min(n - 1, params.frame_out | 0));
+    return [a, b - a + 1];
+  }
+
   async exportClip(params, onProgress, renderFrame) {
     const fmt = params.format || 'webm';
     const f = (this.supports.formats || []).find((x) => x.id === fmt);
@@ -739,7 +756,9 @@ export class BrowserEngine {
   async exportOriginal(params, onProgress, renderFrame) {
     const r = await this.exportWebM(Object.assign({}, params, { format: 'webm' }),
                                     onProgress, renderFrame, false);
-    const { w, h, nFrames, fps } = params.source || this.clip;
+    const src = params.source || this.clip;
+    const { w, h, fps } = src;
+    const [, nFrames] = BrowserEngine.window(params, src);
     return Object.assign(r, {
       w, h, fps, format: 'webm', matched: (params.format || 'webm') === 'webm',
       note: `${nFrames} frames, undithered — the tab writes WebM only`,
@@ -752,7 +771,9 @@ export class BrowserEngine {
   async exportGIF(params, onProgress, renderFrame) {
     await import('../vendor/gifenc.js');
     const G = globalThis.GifEnc;
-    const { w, h, nFrames, fps } = params.source || this.clip;
+    const src = params.source || this.clip;
+    const { w, h, fps } = src;
+    const [from, nFrames] = BrowserEngine.window(params, src);
     const gfps = Math.max(1, Math.min(50, params.gif_fps || 15));
     // keep every k-th frame so the GIF runs at the asked-for rate in real time
     const step = Math.max(1, Math.round(fps / gfps));
@@ -761,7 +782,7 @@ export class BrowserEngine {
     const frames = [];
     const t0 = performance.now();
     for (let i = 0; i < nFrames; i += step) {
-      const img = await renderFrame(i, w, h);
+      const img = await renderFrame(from + i, w, h);
       frames.push(G.indexFrame(img.data, w, h, palette, cache));
       if (onProgress) {
         onProgress({ done: i + 1, total: nFrames,
@@ -798,7 +819,9 @@ export class BrowserEngine {
    * tracker itself. The server engine writes MP4.
    */
   async exportWebM(params, onProgress, renderFrame, alpha) {
-    const { w, h, nFrames, fps } = params.source || this.clip;
+    const src = params.source || this.clip;
+    const { w, h, fps } = src;
+    const [from, nFrames] = BrowserEngine.window(params, src);
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
     const g = cv.getContext('2d', { alpha: !!alpha });
@@ -829,7 +852,7 @@ export class BrowserEngine {
     const dt = Math.max(1, +params.pace_ms || 1000 / fps);
     for (let i = 0; i < nFrames; i++) {
       const fs = performance.now();
-      const img = await renderFrame(i, w, h);     // ImageData from app.js
+      const img = await renderFrame(from + i, w, h);   // ImageData from app.js
       if (alpha) g.clearRect(0, 0, w, h);
       g.putImageData(img, 0, 0);
       vtrack.requestFrame();

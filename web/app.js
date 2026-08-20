@@ -51,6 +51,15 @@ const S = {
   // the job the current frames were extracted from, so a second trim can be
   // re-cut from the source the server already holds
   srcJob: null,
+  /* THE ACTIVE RANGE. `range` is an inclusive [in, out] pair of frame indices
+   * into the clip that is open -- null means the whole of it. A trim dragged
+   * AFTER the tracking sets this instead of re-extracting: the frames and the
+   * per-frame masks on disk do not move, so a narrower range is a window on
+   * them and costs nothing. `jobStart` is where those frames begin in the
+   * SOURCE file's own seconds, which is what turns the trim bar's seconds into
+   * frame indices. `extend` holds a range the user asked for that runs past
+   * what was extracted -- the offer, not a refusal. */
+  range: null, jobStart: 0, extend: null,
   // clip
   job: null, nFrames: 0, W: 0, H: 0, fps: 30,
   // `promptFrame` is where the SCRUBBER is. Each subject remembers the frame it
@@ -374,18 +383,195 @@ function dragHandle(el, which) {
 dragHandle($('#hIn'), 'in');
 dragHandle($('#hOut'), 'out');
 
+/* ============================================ the range, after the track ===
+ * The frames of a clip are extracted once, and the tracker writes one mask
+ * file per frame beside them. Both are numbered from 0 and neither moves. So
+ * once a clip is tracked, "trim it" does not mean "extract a different clip"
+ * -- it means "use frames a..b of the ones that are already here", which needs
+ * no ffmpeg, no upload, and above all no second track.
+ *
+ * That is the whole feature: below, the trim bar decides which of the two
+ * things it is being asked for.
+ *
+ *   nothing tracked yet   re-extract, exactly as before -- there is nothing to
+ *                         lose, and tracking fewer frames is cheaper than
+ *                         tracking frames you are going to throw away
+ *   tracked, narrower     set S.range. No network call at all.
+ *   tracked, wider        say which frames are not tracked, and offer to do it
+ *
+ * Everything downstream -- the preview, the render, every export format, the
+ * matched original cut, the .dots.gz, and what "add to the sequence" seeds an
+ * item's in/out with -- reads activeRange().
+ */
+
+/** The active window, resolved and clamped: {in, out, n, whole}. */
+function activeRange() {
+  const n = S.kind === 'video' ? (S.nFrames | 0) : 0;
+  if (n <= 0) return { in: 0, out: 0, n: 0, whole: true };
+  const r = S.range || { in: 0, out: n - 1 };
+  const a = clamp(r.in | 0, 0, n - 1);
+  const b = clamp(r.out | 0, a, n - 1);
+  return { in: a, out: b, n: b - a + 1, whole: a === 0 && b === n - 1 };
+}
+
+/** Seconds of the SOURCE file that the extracted frames cover. */
+function jobWindow() {
+  const span = (S.nFrames | 0) / Math.max(1, S.fps);
+  return { start: S.jobStart || 0, end: (S.jobStart || 0) + span };
+}
+
+/** Set the window and repaint everything that depends on it. */
+function setRange(a, b) {
+  const n = S.nFrames | 0;
+  if (n <= 0) return activeRange();
+  const lo = clamp(a | 0, 0, n - 1);
+  const hi = clamp(b | 0, lo, n - 1);
+  S.range = (lo === 0 && hi === n - 1) ? null : { in: lo, out: hi };
+  S.extend = null;
+  DOTS_CACHE = null;                 // the dots doc is per range
+  const r = activeRange();
+  paintRange(); paintTrimOffer();
+  if (S.cur < r.in || S.cur > r.out) { stop(); draw(r.in); }
+  return r;
+}
+
+/** Whether this engine can render a window out of frames it already has.
+ *  The browser one always can; a server older than the frame_range field
+ *  cannot, and then a trim has to go back to being a re-extract. */
+const canWindow = () => !!(E() && (E().id === 'browser'
+  || (E().supports && E().supports.frameRange)));
+
+/** What the trim bar is actually being asked for, given what is on disk. */
+function trimPlan(t) {
+  if (S.kind !== 'video' || !S.job || !S.nFrames) return { kind: 'open' };
+  // nothing tracked: re-extracting is both cheaper downstream and lossless
+  if (!S.tracked || !S.subjects.length || !canWindow()) return { kind: 'open' };
+  const j = jobWindow();
+  const eps = 0.5 / Math.max(1, S.fps);         // half a frame of slack
+  const a = clamp(Math.round((t.start - j.start) * S.fps), 0, S.nFrames - 1);
+  const b = clamp(Math.round((t.end - j.start) * S.fps) - 1, a, S.nFrames - 1);
+  if (t.start < j.start - eps || t.end > j.end + eps) {
+    /* The frames of the range being ASKED for, numbered as the re-extraction
+     * would number them, so the message can name the ones that do not exist
+     * yet rather than gesturing at seconds. */
+    const total = Math.max(1, Math.round((t.end - t.start) * S.fps));
+    const off = Math.round((j.start - t.start) * S.fps);   // where the tracked
+    const head = Math.max(0, off);                         // part lands
+    const tail = Math.min(total - 1, off + S.nFrames - 1);
+    return { kind: 'extend', job: j, total,
+             missing: [].concat(head > 0 ? [[0, head - 1]] : [],
+                                tail < total - 1 ? [[tail + 1, total - 1]] : []) };
+  }
+  return { kind: 'window', in: a, out: b };
+}
+
+/** "use this range" / "whole clip", once a clip is open. */
+function applyTrim(t0) {
+  if (!S.srcFile || !t0) return;
+  // the source is as long as it is: a range that runs off the end asks for
+  // the end, exactly as ffmpeg's -t already clamps it
+  const dur = S.srcDuration || 0;
+  const t = dur > 0
+    ? { start: clamp(t0.start, 0, dur), end: clamp(t0.end, 0, dur) }
+    : { start: t0.start, end: t0.end };
+  const plan = trimPlan(t);
+  if (plan.kind === 'open') {
+    return uploadClip(S.srcFile, { start: t.start, end: t.end },
+                      { recut: S.kind === 'video' && !!S.job });
+  }
+  if (plan.kind === 'window') {
+    const r = setRange(plan.in, plan.out);
+    const box = $('#upstat'); box.hidden = false; box.classList.remove('err');
+    box.textContent = r.whole
+      ? `the whole clip · ${S.nFrames} frames · nothing re-tracked`
+      : `frames ${r.in}–${r.out} of ${S.nFrames} · ${(r.n / Math.max(1, S.fps)).toFixed(1)} s`
+        + ' · same frames, same masks, nothing re-tracked';
+    toast(r.whole ? 'back to the whole tracked clip'
+      : `${r.n} frames — the tracking is untouched`);
+    return Promise.resolve(r);
+  }
+  S.extend = Object.assign({ trim: { start: t.start, end: t.end } }, plan);
+  paintTrimOffer();
+  // the offer lives next to the trim bar, so make sure that step is open --
+  // a panel nobody can see is the same as no panel
+  openStep(1);
+  $('#trimui').hidden = false;
+  return Promise.resolve(null);
+}
+
 $('#bTrim').addEventListener('click', () => {
   if (!S.srcFile || !S.trim) return;
-  uploadClip(S.srcFile, { start: S.trim.start, end: S.trim.end },
-             { recut: S.kind === 'video' && !!S.job });
+  applyTrim({ start: S.trim.start, end: S.trim.end });
 });
 $('#bTrimAll').addEventListener('click', () => {
   if (!S.srcFile) return;
-  const recut = S.kind === 'video' && !!S.job;
   S.trim = { start: 0, end: S.srcDuration || 0 };
   paintTrim();
-  uploadClip(S.srcFile, S.trim, { recut });
+  applyTrim(S.trim);
 });
+
+/* ---- the offer -------------------------------------------------------
+ * A range that runs past what was extracted cannot be served out of frames
+ * that do not exist. Rather than silently re-cutting (which is what threw the
+ * tracking away in the first place), the page says which frames are missing
+ * and what getting them costs, and waits.
+ *
+ * WHAT IS SHIPPED HERE IS A FULL RE-TRACK of the wider range, not a tail
+ * propagated out of the existing memory. EdgeTAM's inference state is built by
+ * predictor.init_state() over the whole frames directory and is torn down at
+ * the end of every /track call (server/server.py, _track_worker) -- there is no
+ * memory bank left to walk forward from, on either engine. Keeping one alive
+ * across requests is a different piece of work; pretending the cheap thing
+ * happened would be worse than saying the number.
+ */
+function paintTrimOffer() {
+  const box = $('#trimoffer');
+  if (!box) return;
+  const x = S.extend;
+  box.hidden = !x;
+  if (!x) return;
+  const e = clipEstimate();          // S.trim is already the asked-for range
+  const one = x.missing.length === 1 && x.missing[0][0] === x.missing[0][1];
+  const list = x.missing.map(([a, b]) => (a === b ? `frame ${a}`
+    : `frames ${a}–${b}`)).join(' and ');
+  $('#trimoffernote').textContent =
+    `${list} ${one ? "isn't" : "aren't"} tracked yet. The clip on disk covers `
+    + `${x.job.start.toFixed(1)}–${x.job.end.toFixed(1)} s (${S.nFrames} frames); `
+    + `this range is ${x.total}. The tracker keeps no memory between runs, so `
+    + `the wider range is re-extracted and tracked in full — about `
+    + `${fmtDur(e.trackS)} for ${S.subjects.length} subject`
+    + `${S.subjects.length > 1 ? 's' : ''}, with the prompts you already placed.`;
+  $('#bExtend').textContent = `re-cut and track ${x.total} frames`;
+}
+
+$('#bExtendNo').addEventListener('click', () => {
+  S.extend = null;
+  paintTrimOffer();
+  const r = activeRange();
+  S.trim = { start: jobWindow().start + r.in / Math.max(1, S.fps),
+             end: jobWindow().start + (r.out + 1) / Math.max(1, S.fps) };
+  paintTrim();
+});
+$('#bExtend').addEventListener('click', () => extendAndTrack());
+
+/** Take the wider range and track it, carrying the prompts across.
+ *
+ *  The prompts are clip-pixel coordinates on a numbered frame. The pixels do
+ *  not move (the decode height is fixed), but the numbering does: a range that
+ *  starts earlier pushes every old index forward by the difference. */
+async function extendAndTrack() {
+  const x = S.extend;
+  if (!x || !S.srcFile) return;
+  S.extend = null; paintTrimOffer();
+  const shift = Math.round((jobWindow().start - x.trim.start) * S.fps);
+  const keep = S.subjects.map((s) => Object.assign({}, s, {
+    promptFrame: s.promptFrame === null ? null : s.promptFrame + shift,
+  }));
+  await uploadClip(S.srcFile, x.trim, { recut: !!S.job, keep });
+  if (!S.subjects.length || S.kind !== 'video') return;
+  setScope('track');
+  await track();
+}
 
 /* ============================================================== camera ===
  * getUserMedia -> live preview -> MediaRecorder -> a WebM blob that goes
@@ -547,6 +733,7 @@ async function loadStill(f) {
     showSteps('image');
     showStage('result');
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = true;
+    S.range = null; S.extend = null; paintRange(); paintTrimOffer();
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
     $('#outimg').hidden = true; $('#pvinfo').hidden = true; $('#tinfo').hidden = true;
     $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
@@ -597,6 +784,21 @@ async function uploadClip(f, trim, opts = {}) {
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.cur = 0; S.promptFrame = 0;
     S.scope = 'whole';
+    /* Where these frames start in the source file's own seconds. It is what
+     * lets the trim bar (which speaks seconds) address frames on disk, so a
+     * later trim can be a window instead of a second extraction. */
+    S.jobStart = +j.trimStart || 0;
+    S.range = null; S.extend = null;
+    /* A re-cut that is carrying prompts forward: same subjects, same marks,
+     * frame numbers moved by however much the range's start moved. */
+    if (opts.keep && opts.keep.length) {
+      S.subjects = opts.keep.map((s) => Object.assign({}, s, {
+        promptFrame: s.promptFrame === null ? null
+          : clamp(s.promptFrame, 0, j.nFrames - 1),
+      }));
+      S.nextId = Math.max(...S.subjects.map((s) => s.id | 0)) + 1;
+      S.scope = 'track';
+    }
     dropCache();
     box.textContent = `${j.nFrames} frames · ${j.w}×${j.h} · ${j.fps} fps`
       + ` · ${(j.nFrames / Math.max(1, j.fps)).toFixed(1)} s`
@@ -613,8 +815,9 @@ async function uploadClip(f, trim, opts = {}) {
     $('#outimg').hidden = true; $('#dlorig').hidden = true;
     buildFormats();
     if (S.P.mode === 'dots') setMode('bluenoise');
-    showSteps('video'); setScope('whole');
-    buildTargets(); renderModes(); openStep(2);
+    showSteps('video'); setScope(S.scope);
+    buildTargets(); renderModes(); renderSubjects(); paintRange(); paintTrimOffer();
+    openStep(2);
     await draw();
   } catch (err) {
     box.classList.add('err');
@@ -1888,12 +2091,35 @@ async function draw(i) {
   S.cur = idx;
   $('#fcount').textContent = `${idx} / ${S.nFrames - 1}`;
   $('#sFrame').value = idx;
+  paintRange();
   $('#fps').textContent = `${(1000 / Math.max(r.ms, 0.01)).toFixed(1)} fps`
     + (S.P.mode === 'dots' ? ` · ${r.lit} dots` : '');
   return r.lit;
 }
 
 /* ------------------------------------------------------------- transport */
+/** The active range, stated beside the frame counter. `full clip ↺` only
+ *  appears when there is something to go back to. */
+function paintRange() {
+  const lbl = $('#rangelbl'), btn = $('#bRangeAll');
+  if (!lbl || !btn) return;
+  if (S.kind !== 'video' || !S.nFrames) {
+    lbl.hidden = true; btn.hidden = true; return;
+  }
+  const r = activeRange();
+  lbl.hidden = false;
+  lbl.textContent = `frames ${r.in}–${r.out} of ${S.nFrames}`;
+  lbl.classList.toggle('on', !r.whole);
+  btn.hidden = r.whole;
+}
+$('#bRangeAll').addEventListener('click', () => {
+  if (S.kind !== 'video' || !S.nFrames) return;
+  setRange(0, S.nFrames - 1);
+  S.trim = { start: jobWindow().start, end: jobWindow().end };
+  paintTrim();
+  toast('the whole tracked clip again');
+});
+
 const wipe = $('#wipe');
 function setSplit(v) {
   S.split = clamp(v, 0, 1);
@@ -1934,8 +2160,13 @@ function play() {
 async function loop() {
   while (S.playing) {
     const t0 = performance.now();
-    const next = (S.cur + 1) % S.nFrames;
-    for (let k = 1; k <= 3; k++) frameAt((next + k) % S.nFrames);
+    // the preview plays the range, not the clip -- that is what makes a trim
+    // after the track something you can watch before you export it
+    const r = activeRange();
+    const next = (S.cur + 1 > r.out || S.cur + 1 < r.in) ? r.in : S.cur + 1;
+    for (let k = 1; k <= 3; k++) {
+      frameAt(next + k > r.out ? r.in + ((next + k - r.in) % r.n) : next + k);
+    }
     await draw(next);
     await sleep(Math.max(0, 1000 / S.fps - (performance.now() - t0)));
   }
@@ -2450,9 +2681,13 @@ async function exportClip() {
   stop();
   try {
     const fmt = currentFormat();
+    const rng = activeRange();
     const params = Object.assign({}, S.P, {
       bg: S.bg, palette: S.palette, fps: S.fps,
       format: fmt.id, gif_fps: S.gifFps,
+      // the window, on both engines: server/render.frame_range slices the
+      // frames directory, the browser engine walks the same indices
+      frame_in: rng.in, frame_out: rng.out,
       subjects: usingSubjects()
         ? S.subjects.map((s) => ({ id: s.id, palette: s.palette,
                                    polish: s.polish | 0 })) : [],
@@ -2473,6 +2708,7 @@ async function exportClip() {
     const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
     box.textContent = `rendered ${r.frames} frames in ${r.elapsedS.toFixed(1)} s `
       + `(${r.fps.toFixed(1)} fps)`
+      + (rng.whole ? '' : ` · frames ${rng.in}–${rng.out} of ${S.nFrames}`)
       + (r.bytes ? ` · ${(r.bytes / 1e6).toFixed(1)} MB` : '')
       + (r.note ? ` · ${r.note}` : '');
     $('#s5sum').textContent = 'ready';
@@ -2496,7 +2732,8 @@ async function exportClip() {
  *  server is told the same number and refuses on its side too.
  */
 async function exportOriginalCut(params, r, prog, bar, lab) {
-  const want = S.nFrames;                 // the frames the render consumed
+  // the frames the render consumed: the active range, not the whole clip
+  const want = activeRange().n;
   /* If the dither ran slower than real time the tab's recorder wrote a file at
    * that slower rate (exportWebM says so in its note). The pair is only usable
    * if both files carry the same rate, so the original is handed over at the
@@ -2566,11 +2803,13 @@ async function playerLib() {
 
 const dotsReady = () => S.kind === 'video' && usingSubjects();
 
-function dotsParams() {
+function dotsParams(rng) {
+  const r = rng || activeRange();
   return {
     cell: S.P.cell, dotpx: S.P.dotpx, n: S.P.n, fill: S.P.fill,
     stray: S.P.stray, band: S.P.band, gamma: S.P.gamma, invert: S.P.invert,
     seed: S.P.seed, bg: S.bg, fps: S.fps,
+    frame_in: r.in, frame_out: r.out,
     subjects: S.subjects.map((x) => ({ id: x.id, palette: x.palette,
                                       polish: x.polish | 0 })),
   };
@@ -2609,10 +2848,13 @@ async function dotsDocStill(whole) {
 /** The current clip as a dots document, cached against the look it was made
  *  with — the sequence step asks for this repeatedly. A still short-circuits:
  *  one frame, nothing to cache against. */
-async function dotsDoc(onProgress) {
+async function dotsDoc(onProgress, rng) {
   if (S.kind === 'image') return dotsDocStill();
   const P = await playerLib();
-  const params = dotsParams();
+  // the active range by default; the sequence asks for the whole clip, because
+  // a strip entry carries its own in/out and can be widened later
+  const R0 = rng || activeRange();
+  const params = dotsParams(R0);
   const key = JSON.stringify([E().id, S.job, S.nFrames, params]);
   if (DOTS_CACHE && DOTS_CACHE.key === key) return DOTS_CACHE;
   let bytes, doc;
@@ -2622,7 +2864,7 @@ async function dotsDoc(onProgress) {
     doc = await P.unpack(bytes);
   } else {
     const frames = [];
-    for (let i = 0; i < S.nFrames; i++) {
+    for (let i = R0.in; i <= R0.out; i++) {
       const rec = await frameAt(i);
       const c = ctx2d(S.W, S.H, 'exp');
       c.clearRect(0, 0, S.W, S.H);
@@ -2631,8 +2873,8 @@ async function dotsDoc(onProgress) {
       const masks = await masksFor(i, rec, 'x');
       const r = dotsOn(src, S.W, S.H, masks, S.P, BLUE);
       frames.push(r.on.map((o) => dotXY(r.F, o)));
-      if (onProgress) onProgress({ done: i + 1, total: S.nFrames,
-                                   text: `${i + 1}/${S.nFrames}` });
+      if (onProgress) onProgress({ done: frames.length, total: R0.n,
+                                   text: `${frames.length}/${R0.n}` });
       if (i % 8 === 0) await sleep(0);
     }
     const cols = S.subjects.map((x) => x.palette[x.palette.length - 1]);
@@ -2893,7 +3135,12 @@ async function deriveRangeNow(item, look, from, to, onProgress) {
 /* ------------------------------------------------------------- the pool */
 /** Everything the current source could contribute, as pool items. */
 async function captureClip() {
-  const { doc } = await dotsDoc((pr) => seqInfo('reading dot positions ' + pr.text));
+  // the whole tracked clip, whatever the studio's range is: the item is the
+  // material, and stripAdd() seeds the ENTRY's in/out from the active range
+  const whole = { in: 0, out: Math.max(0, S.nFrames - 1),
+                  n: Math.max(1, S.nFrames), whole: true };
+  const { doc } = await dotsDoc((pr) => seqInfo('reading dot positions ' + pr.text),
+                                whole);
   const source = E().snapshot ? E().snapshot() : null;
   if (!source) throw new Error('this engine has no handle on that clip');
   const subs = doc.subjects.map((sub, k) => ({
@@ -3213,10 +3460,14 @@ function seqCandidates() {
   const out = [];
   const name = S.fileName || 'this picture';
   if (S.kind === 'video' && dotsReady()) {
+    const r = activeRange();
     out.push({ id: 'clip', label: 'this clip · '
-      + S.subjects.length + ' subject' + (S.subjects.length > 1 ? 's' : ''),
+      + S.subjects.length + ' subject' + (S.subjects.length > 1 ? 's' : '')
+      + (r.whole ? '' : ` · frames ${r.in}–${r.out}`),
       note: 'the tracked subjects of ' + (S.fileName || 'this clip')
-        + ', at the current look' });
+        + ', at the current look'
+        + (r.whole ? '' : `. The entry starts trimmed to frames ${r.in}–${r.out}`
+          + ' — the item keeps all ' + S.nFrames + '.') });
   }
   if (S.kind === 'image') {
     const cut = usingSubjects();
@@ -3244,8 +3495,13 @@ async function seqAdd(what, arg) {
   busy(true);
   try {
     let item, opts = null;
-    if (what === 'clip') item = await captureClip();
-    else if (what === 'still') {
+    if (what === 'clip') {
+      item = await captureClip();
+      // the studio's active range becomes the entry's in/out. The item itself
+      // holds every tracked frame, so the inspector can widen it again.
+      const r = activeRange();
+      opts = { in: r.in, out: r.out };
+    } else if (what === 'still') {
       item = await captureStill(arg);
       if (arg && arg.subject !== undefined) opts = { subject: arg.subject };
     } else if (what === 'shape') item = await addShape(arg);
@@ -4121,6 +4377,8 @@ function resetClip() {
   $('#outimg').hidden = true; $('#fmtui').hidden = true; $('#trimui').hidden = true;
   S.srcFile = null; S.trim = null; S.srcDuration = 0;
   S.srcW = 0; S.srcH = 0; S.srcJob = null;
+  S.range = null; S.extend = null; S.jobStart = 0;
+  paintRange(); paintTrimOffer();
   $('#vidopts').hidden = true;
   showStage('empty');
   showSteps('none');
@@ -4293,6 +4551,29 @@ async function checkModels() {
     return $('#bTrim').click();
   };
   window.DV_wholeClip = () => $('#bTrimAll').click();
+  /* The range, callable. `set` takes FRAME indices (what the exports use);
+   * `seconds` takes the trim bar's own seconds and goes through exactly the
+   * button's decision, so a test can prove that narrowing after a track fires
+   * no /track and no /reextract. `offer` is what the extend panel is saying. */
+  window.DV_range = {
+    get: () => Object.assign(activeRange(), { jobStart: S.jobStart,
+                                              nFrames: S.nFrames,
+                                              fps: S.fps }),
+    set: (a, b) => setRange(a, b),
+    full: () => { $('#bRangeAll').click(); return activeRange(); },
+    seconds: (start, end) => { S.trim = { start, end }; paintTrim();
+                               return applyTrim(S.trim); },
+    plan: (start, end) => trimPlan({ start, end }),
+    offer: () => ($('#trimoffer').hidden ? null : {
+      note: $('#trimoffernote').textContent,
+      button: $('#bExtend').textContent,
+      missing: S.extend ? S.extend.missing : null,
+      total: S.extend ? S.extend.total : 0,
+    }),
+    extend: () => extendAndTrack(),
+    label: () => ($('#rangelbl').hidden ? '' : $('#rangelbl').textContent),
+    resetShown: () => !$('#bRangeAll').hidden,
+  };
   window.DV_dots = { doc: dotsDoc, params: dotsParams, lib: playerLib,
                      library: () => S.library, build: buildSeq,
                      preview: seqPreview, player: () => PLAYER };
