@@ -33,6 +33,8 @@ const S = {
   kind: 'none',                // none | image | video
   // still
   bitmap: null, natW: 0, natH: 0, fileName: '',
+  // source file + trim (video only) — kept so a trim can re-open the same file
+  srcFile: null, srcDuration: 0, trim: null, recordedS: 0, photo: null,
   // clip
   job: null, nFrames: 0, W: 0, H: 0, fps: 30,
   // `promptFrame` is where the SCRUBBER is. Each subject remembers the frame it
@@ -98,13 +100,263 @@ document.addEventListener('paste', (e) => {
   const it = Array.from(e.clipboardData.files)[0];
   if (it) take(it);
 });
-$('#sSec').addEventListener('input', (e) => { $('#vSec').textContent = e.target.value + ' s'; });
+$('#sSec').addEventListener('input', (e) => {
+  $('#vSec').textContent = e.target.value + ' s';
+  paintTrim();
+});
 
 function take(f) {
-  const isVid = /^video\//.test(f.type) || /\.(mp4|mov|m4v)$/i.test(f.name);
+  const isVid = /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name);
   $('#vidopts').hidden = !isVid;
-  return isVid ? uploadClip(f) : loadStill(f);
+  $('#trimui').hidden = true;
+  if (!isVid) { S.srcFile = null; return loadStill(f); }
+  // The clip loads whole, immediately, and the trim bar appears next to it:
+  // making every drop wait for a second click would be worse than the one
+  // extra decode a trim costs.
+  S.srcFile = f;
+  S.trim = null;
+  const done = uploadClip(f);
+  buildStrip(f);
+  return done;
 }
+
+/* ======================================================= trim: filmstrip
+ * Twelve thumbnails, two handles, and a "use this range" that re-opens the
+ * same file over the chosen seconds. The browser engine decodes only that
+ * range; the server engine hands ffmpeg -ss/-t. Nothing else in the app
+ * knows a trim happened — the clip that comes back is just shorter.
+ */
+const STRIP_N = 12;
+let stripSeq = 0;
+
+async function buildStrip(file) {
+  const seq = ++stripSeq;
+  const cv = $('#stripcv'), g = cv.getContext('2d');
+  g.fillStyle = '#0a1310'; g.fillRect(0, 0, cv.width, cv.height);
+  $('#trimui').hidden = false;
+  $('#trimnote').textContent = 'reading the clip…';
+  const url = URL.createObjectURL(file);
+  const v = document.createElement('video');
+  v.preload = 'auto'; v.muted = true; v.playsInline = true; v.src = url;
+  try {
+    await new Promise((ok, no) => {
+      v.onloadedmetadata = ok;
+      v.onerror = () => no(new Error('cannot read that clip'));
+      setTimeout(() => no(new Error('timed out reading the header')), 20000);
+    });
+    let dur = v.duration;
+    if (!isFinite(dur) || dur <= 0) {
+      // MediaRecorder WebM has no duration in its header until it has been
+      // played through; seeking past the end is the usual way to find it out
+      dur = await probeDuration(v);
+    }
+    S.srcDuration = dur;
+    S.trim = { start: 0, end: dur };
+    paintTrim();
+    const tw = Math.floor(cv.width / STRIP_N), th = cv.height;
+    for (let i = 0; i < STRIP_N; i++) {
+      if (seq !== stripSeq) return;
+      const t = (i + 0.5) / STRIP_N * dur;
+      try { await seekTo(v, Math.min(t, Math.max(0, dur - 0.05))); } catch (e) { break; }
+      const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
+      const k = Math.max(tw / vw, th / vh);
+      g.drawImage(v, (tw - vw * k) / 2 + i * tw, (th - vh * k) / 2, vw * k, vh * k);
+    }
+    $('#trimnote').textContent = '';
+  } catch (err) {
+    $('#trimnote').textContent = 'no filmstrip for this file (' + err.message
+      + ') — the trim handles still work';
+  } finally {
+    v.src = ''; v.load?.();
+    URL.revokeObjectURL(url);
+  }
+}
+
+function seekTo(v, t) {
+  return new Promise((ok, no) => {
+    const done = () => { v.removeEventListener('seeked', done); clearTimeout(bail); ok(); };
+    const bail = setTimeout(() => { v.removeEventListener('seeked', done);
+      no(new Error('seek stalled')); }, 8000);
+    v.addEventListener('seeked', done);
+    v.currentTime = Math.max(0, t);
+  });
+}
+
+/** Duration of a stream whose header does not carry one (MediaRecorder WebM). */
+function probeDuration(v) {
+  return new Promise((ok) => {
+    const done = () => {
+      v.removeEventListener('durationchange', done);
+      ok(isFinite(v.duration) && v.duration > 0 ? v.duration : 0);
+    };
+    v.addEventListener('durationchange', done);
+    setTimeout(done, 3000);
+    try { v.currentTime = 1e6; } catch (e) { done(); }
+  });
+}
+
+function paintTrim() {
+  if (!S.trim) return;
+  const { start, end } = S.trim, dur = S.srcDuration || 1;
+  const a = clamp(start / dur, 0, 1), b = clamp(end / dur, 0, 1);
+  $('#trimdim').style.left = '0'; $('#trimdim').style.width = (a * 100) + '%';
+  $('#trimdim2').style.right = '0'; $('#trimdim2').style.width = ((1 - b) * 100) + '%';
+  $('#hIn').style.left = (a * 100) + '%';
+  $('#hOut').style.left = (b * 100) + '%';
+  const cap = Math.min(+$('#sSec').value, end - start);
+  $('#vTrim').textContent = `${start.toFixed(1)} – ${end.toFixed(1)} s · `
+    + `${(end - start).toFixed(1)} s`
+    + (cap < end - start ? ` (first ${cap.toFixed(1)} s used)` : '');
+}
+
+function dragHandle(el, which) {
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    const strip = $('#strip');
+    const move = (ev) => {
+      const r = strip.getBoundingClientRect();
+      const t = clamp((ev.clientX - r.left) / r.width, 0, 1) * (S.srcDuration || 1);
+      if (which === 'in') S.trim.start = Math.min(t, S.trim.end - 0.1);
+      else S.trim.end = Math.max(t, S.trim.start + 0.1);
+      paintTrim();
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    move(e);
+  });
+}
+dragHandle($('#hIn'), 'in');
+dragHandle($('#hOut'), 'out');
+
+$('#bTrim').addEventListener('click', () => {
+  if (!S.srcFile || !S.trim) return;
+  uploadClip(S.srcFile, { start: S.trim.start, end: S.trim.end });
+});
+$('#bTrimAll').addEventListener('click', () => {
+  if (!S.srcFile) return;
+  S.trim = { start: 0, end: S.srcDuration || 0 };
+  paintTrim();
+  uploadClip(S.srcFile);
+});
+
+/* ============================================================== camera ===
+ * getUserMedia -> live preview -> MediaRecorder -> a WebM blob that goes
+ * through exactly the same path a dropped file does. Which means it works on
+ * both engines: the browser one decodes the blob, the server one uploads it
+ * (server.py already accepts .webm, and ffmpeg reads what Chrome writes).
+ */
+const CAM = { stream: null, rec: null, chunks: [], t0: 0, timer: 0 };
+const CAM_MAX_S = 30;
+
+async function camOpen() {
+  if (CAM.stream) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('this browser has no camera API', true); return;
+  }
+  try {
+    CAM.stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false,
+    });
+  } catch (err) {
+    toast('no camera: ' + (err.message || err.name), true);
+    return;
+  }
+  const v = $('#camvid');
+  v.srcObject = CAM.stream;
+  await v.play().catch(() => {});
+  const t = CAM.stream.getVideoTracks()[0].getSettings();
+  $('#camnote').textContent = `${t.width || '?'}×${t.height || '?'}`
+    + (t.frameRate ? ` · ${Math.round(t.frameRate)} fps` : '')
+    + ` · up to ${CAM_MAX_S} s · nothing leaves the tab until you export`;
+  $('#camui').hidden = false;
+  $('#camwrap').hidden = false;
+  $('#pwrap').hidden = true; $('#vwrap').hidden = true; $('#empty').hidden = true;
+  $('#bCam').textContent = 'camera on';
+}
+
+function camClose() {
+  camStop(true);
+  if (CAM.stream) CAM.stream.getTracks().forEach((t) => t.stop());
+  CAM.stream = null;
+  $('#camvid').srcObject = null;
+  $('#camui').hidden = true;
+  $('#camwrap').hidden = true;
+  $('#bCam').textContent = 'record from camera';
+  $('#empty').hidden = S.kind !== 'none';
+  $('#pwrap').hidden = !(S.kind === 'video' && S.scope === 'track' && !S.tracked);
+  $('#vwrap').hidden = S.kind === 'none' || !$('#pwrap').hidden;
+}
+
+/** A photo: the frame the preview is showing, at the camera's own resolution,
+ *  handed to the still flow as a PNG. Same path an uploaded image takes, so it
+ *  dithers, re-palettes and exports client-side like any other still. */
+async function camSnap() {
+  if (!CAM.stream) return;
+  const v = $('#camvid');
+  const t = CAM.stream.getVideoTracks()[0].getSettings();
+  const w = v.videoWidth || t.width || 1280, h = v.videoHeight || t.height || 720;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(v, 0, 0, w, h);
+  const blob = await new Promise((ok) => c.toBlob(ok, 'image/png'));
+  if (!blob) { toast('the camera frame could not be read', true); return; }
+  const name = `photo-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.png`;
+  S.photo = { w, h, bytes: blob.size };
+  camClose();
+  take(new File([blob], name, { type: 'image/png' }));
+  toast(`photo ${w}\u00d7${h} — the camera is off`);
+}
+
+function camStart() {
+  if (!CAM.stream || CAM.rec) return;
+  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mime = types.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!mime) { toast('this browser cannot record WebM', true); return; }
+  CAM.chunks = [];
+  CAM.rec = new MediaRecorder(CAM.stream, { mimeType: mime, videoBitsPerSecond: 8e6 });
+  CAM.rec.ondataavailable = (e) => { if (e.data && e.data.size) CAM.chunks.push(e.data); };
+  CAM.rec.onstop = () => {
+    const blob = new Blob(CAM.chunks, { type: 'video/webm' });
+    CAM.rec = null;
+    const secs = (performance.now() - CAM.t0) / 1000;
+    const f = new File([blob], `camera-${new Date().toISOString().slice(11, 19)
+      .replace(/:/g, '')}.webm`, { type: 'video/webm' });
+    camClose();
+    $('#upstat').hidden = false;
+    $('#upstat').textContent = `recorded ${secs.toFixed(1)} s · `
+      + `${(blob.size / 1e6).toFixed(1)} MB · trim it below`;
+    S.recordedS = +secs.toFixed(2);
+    take(f);
+  };
+  CAM.rec.start(200);
+  CAM.t0 = performance.now();
+  $('#camdot').hidden = false;
+  $('#bRec').textContent = 'stop';
+  CAM.timer = setInterval(() => {
+    const s = (performance.now() - CAM.t0) / 1000;
+    $('#camtime').textContent = s.toFixed(1) + ' s';
+    if (s >= CAM_MAX_S) camStop();
+  }, 100);
+}
+
+function camStop(silent) {
+  clearInterval(CAM.timer); CAM.timer = 0;
+  $('#camdot').hidden = true;
+  $('#bRec').textContent = 'record';
+  if (!CAM.rec) return;
+  if (silent) { CAM.rec.onstop = null; CAM.rec.stop(); CAM.rec = null; return; }
+  CAM.rec.stop();
+}
+
+$('#bSnap').addEventListener('click', camSnap);
+$('#bCam').addEventListener('click', () => (CAM.stream ? camClose() : camOpen()));
+$('#bRec').addEventListener('click', () => (CAM.rec ? camStop() : camStart()));
+$('#bCamOff').addEventListener('click', camClose);
 
 function showSteps(kind) {
   $('#st2').hidden = kind !== 'video';
@@ -134,7 +386,7 @@ async function loadStill(f) {
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
     $('#outimg').hidden = true;
     $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
-    $('#fmtui').hidden = true;
+    $('#fmtui').hidden = true; $('#trimui').hidden = true;
     $('#offframe').hidden = true;
     buildTargets(); renderModes(); openStep(3);
     await draw();
@@ -143,21 +395,27 @@ async function loadStill(f) {
   }
 }
 
-async function uploadClip(f) {
+async function uploadClip(f, trim) {
   const box = $('#upstat'); box.hidden = false; box.classList.remove('err');
   box.textContent = (E().id === 'browser' ? 'decoding ' : 'uploading ') + f.name + '…';
   busy(true);
+  const t = trim || S.trim || null;
+  const cut = t && (t.start > 0.05 || (S.srcDuration && t.end < S.srcDuration - 0.05));
   try {
     const j = await E().open(f, {
       maxSeconds: +$('#sSec').value,
+      trimStart: cut ? t.start : 0,
+      trimEnd: cut ? t.end : null,
       onProgress: (p) => { if (p.text) box.textContent = p.text; },
     });
+    S.trim = t;
     S.kind = 'video'; S.job = j.job; S.nFrames = j.nFrames; S.W = j.w; S.H = j.h; S.fps = j.fps;
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.cur = 0; S.promptFrame = 0;
     S.scope = 'whole';
     dropCache();
     box.textContent = `${j.nFrames} frames · ${j.w}×${j.h} · ${j.fps} fps`
+      + (cut ? ` · trimmed ${t.start.toFixed(1)}–${t.end.toFixed(1)} s` : '')
       + (E().id === 'browser' ? ' · stays in this tab' : '');
     $('#s1sum').textContent = `${j.nFrames}f`;
     $('#sPF').max = j.nFrames - 1; $('#sPF').value = 0; $('#vPF').textContent = '0';
@@ -1401,7 +1659,8 @@ function resetClip() {
   dropCache();
   $('#upstat').hidden = true; $('#tinfo').hidden = true; $('#rinfo').hidden = true;
   $('#dl').hidden = true; $('#outvid').hidden = true; $('#pvinfo').hidden = true;
-  $('#outimg').hidden = true; $('#fmtui').hidden = true;
+  $('#outimg').hidden = true; $('#fmtui').hidden = true; $('#trimui').hidden = true;
+  S.srcFile = null; S.trim = null; S.srcDuration = 0;
   $('#pwrap').hidden = true; $('#vwrap').hidden = true;
   showSteps('none');
 }
@@ -1488,6 +1747,18 @@ async function checkModels() {
   window.DV_switchEngine = switchEngine;
   window.DV_composeAt = composeAt;
   window.DV_formats = engineFormats;
+  window.DV_camera = { open: camOpen, start: camStart, stop: camStop,
+                       close: camClose, snap: camSnap,
+                       state: () => ({
+                         live: !!CAM.stream, recording: !!CAM.rec,
+                         recordedS: S.recordedS, photo: S.photo || null,
+                         track: CAM.stream
+                           ? CAM.stream.getVideoTracks()[0].getSettings() : null,
+                       }) };
+  window.DV_trim = (start, end) => {
+    S.trim = { start, end }; paintTrim();
+    return { start, end, duration: S.srcDuration };
+  };
   window.DV_setFormat = (id) => {
     S.format = id; $('#sFmt').value = id; paintFormat();
     return currentFormat();

@@ -75,7 +75,8 @@ export function blueNoiseTile(n = 64, seed = 7, iters = 40, sigma = 1.6) {
  * ffmpeg `-r 30` produces, so both engines index the same picture as frame 42.
  */
 async function decodeClip(file, { fps = 30, maxSeconds = 10, maxFrames = 300,
-                                  maxHeight = 720, onProgress } = {}) {
+                                  maxHeight = 720, trimStart = 0, trimEnd = null,
+                                  onProgress } = {}) {
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
   v.preload = 'auto'; v.muted = true; v.playsInline = true; v.src = url;
@@ -85,7 +86,14 @@ async function decodeClip(file, { fps = 30, maxSeconds = 10, maxFrames = 300,
       v.onerror = () => no(new Error('this browser cannot decode that file'));
       setTimeout(() => no(new Error('timed out reading the video header')), 30000);
     });
-    const dur = Math.min(v.duration || maxSeconds, maxSeconds);
+    // MediaRecorder WebM (a camera recording) carries no duration until it has
+    // been seeked past its end; do that before deciding how many frames there are
+    let full = v.duration;
+    if (!isFinite(full) || full <= 0) full = await probeDuration(v);
+    const t0 = Math.max(0, trimStart || 0);
+    const avail = Math.max(0, (full || maxSeconds) - t0);
+    const want = trimEnd ? Math.max(0, trimEnd - t0) : avail;
+    const dur = Math.min(want, avail, maxSeconds);
     if (!isFinite(dur) || dur <= 0) throw new Error('the clip has no duration');
     const n = Math.max(1, Math.min(maxFrames, Math.floor(dur * fps)));
     const scale = Math.min(1, maxHeight / (v.videoHeight || maxHeight));
@@ -98,7 +106,7 @@ async function decodeClip(file, { fps = 30, maxSeconds = 10, maxFrames = 300,
     for (let i = 0; i < n; i++) {
       // + half a frame: land in the middle of frame i's display interval so a
       // seek never lands on the boundary and returns i-1
-      await seek(v, (i + 0.5) / fps);
+      await seek(v, t0 + (i + 0.5) / fps);
       g.drawImage(v, 0, 0, w, h);
       frames.push(await cv.convertToBlob({ type: 'image/jpeg', quality: 0.92 }));
       if (onProgress && (i % 5 === 0 || i === n - 1)) {
@@ -106,11 +114,24 @@ async function decodeClip(file, { fps = 30, maxSeconds = 10, maxFrames = 300,
                      text: `decoding ${i + 1}/${n} frames…` });
       }
     }
-    return { frames, w, h, fps, nFrames: frames.length };
+    return { frames, w, h, fps, nFrames: frames.length, trimStart: t0, seconds: dur };
   } finally {
     v.src = ''; v.load?.();
     URL.revokeObjectURL(url);
   }
+}
+
+/** A stream whose header has no duration: seek past the end and read it back. */
+function probeDuration(v) {
+  return new Promise((ok) => {
+    const done = () => {
+      v.removeEventListener('durationchange', done);
+      ok(isFinite(v.duration) && v.duration > 0 ? v.duration : 0);
+    };
+    v.addEventListener('durationchange', done);
+    setTimeout(done, 3000);
+    try { v.currentTime = 1e6; } catch (e) { done(); }
+  });
 }
 
 function seek(v, t) {
@@ -296,7 +317,8 @@ export class BrowserEngine {
     const c = await decodeClip(file, opts);
     this.clip = c;
     this.masks.clear(); this.promptFrames.clear();
-    return { job: 'local', nFrames: c.nFrames, w: c.w, h: c.h, fps: c.fps };
+    return { job: 'local', nFrames: c.nFrames, w: c.w, h: c.h, fps: c.fps,
+             trimStart: c.trimStart, seconds: c.seconds };
   }
 
   async frame(i) {

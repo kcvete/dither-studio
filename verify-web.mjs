@@ -111,10 +111,12 @@ let BR;   // {browser, how, ep, seconds}
 let EXPECTED = null;
 const expected = (t) => EXPECTED && t.includes(EXPECTED);
 
-async function newPage(pref) {
-  const ctx = await BR.browser.newContext({
+async function newPage(pref, opts = {}) {
+  const br = opts.browser || BR.browser;
+  const ctx = await br.newContext({
     viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
     acceptDownloads: true,
+    ...(opts.permissions ? { permissions: opts.permissions } : {}),
   });
   await ctx.addInitScript((p) => {
     try { localStorage.setItem('dither-studio.engine', JSON.stringify(p)); }
@@ -607,6 +609,159 @@ async function runEntry(engineId) {
   return r;
 }
 
+/* ============ W6: the camera, the trim bar, and both engines behind them =====
+ * Chromium's fake capture device stands in for a webcam: --use-fake-device
+ * generates a moving test pattern, --use-fake-ui answers the permission prompt.
+ * The recording that comes out is a real MediaRecorder WebM and goes down
+ * exactly the path a dropped file does, which is the point of the test.
+ */
+async function runCamera(engineId, deep) {
+  const r = { engine: engineId };
+  // channel:'chromium' is the new headless mode. The old headless shell has no
+  // media-capture stack at all -- getUserMedia there answers NotSupportedError
+  // however many fake-device flags you pass it.
+  const br = await chromium.launch({
+    headless: true, channel: 'chromium',
+    args: GPU_ARGS.concat(['--use-fake-device-for-media-capture',
+                           '--use-fake-ui-for-media-capture']),
+  });
+  try {
+    const pref = engineId === 'browser' ? browserPref() : { mode: 'local', url: '', key: '' };
+    const { ctx, page } = await newPage(pref, { browser: br, permissions: ['camera'] });
+    r.engineId = (await page.evaluate(() => window.DV_engine())).id;
+    check(`${engineId} · engine is live for the camera run`,
+          r.engineId === (engineId === 'browser' ? 'browser' : 'remote'), r.engineId);
+
+    await page.click('#bCam');
+    await page.waitForFunction(() => window.DV_camera.state().live, null, { timeout: 20000 });
+    r.cameraTrack = await page.evaluate(() => window.DV_camera.state().track);
+    check(`${engineId} · the camera is live at the resolution it asked for`,
+          r.cameraTrack && r.cameraTrack.width >= 640,
+          JSON.stringify(r.cameraTrack));
+    // --- a photo first: the same feed, straight into the still flow
+    await page.click('#bSnap');
+    await page.waitForFunction(() => window.DV.kind === 'image', null, { timeout: 60000 });
+    await sleep(600);
+    r.photo = await page.evaluate(() => ({
+      photo: window.DV_camera.state().photo, natW: window.DV.natW,
+      natH: window.DV.natH, source: document.querySelector('#upstat').textContent,
+    }));
+    check(`${engineId} · a photo comes back at the camera's resolution`,
+          r.photo.natW >= 640 && r.photo.natW === (r.photo.photo || {}).w,
+          JSON.stringify(r.photo));
+    check(`${engineId} · the photo closed the camera`,
+          !(await page.evaluate(() => window.DV_camera.state().live)));
+    await setMode(page, 'bluenoise');
+    await openStep(page, 'st4');
+    await page.click('#pals .chip:nth-child(2)');            // Sage
+    await sleep(600);
+    r.photoCensus = await census(page);
+    check(`${engineId} · the photo dithers`, r.photoCensus.distinctColours === 2,
+          JSON.stringify(r.photoCensus));
+    await page.screenshot({ path: path.join(DOCS, `w-camera-photo-${engineId}.png`) });
+    await openStep(page, 'st5');
+    await page.click('#bExport');
+    r.photoExport = await waitText(page, '#rinfo', /PNG|failed/, 60000);
+    check(`${engineId} · the photo exports a PNG`, !/failed/.test(r.photoExport),
+          r.photoExport);
+    const png = path.join(DOCS, `w-camera-photo-${engineId}.export.png`);
+    r.photoBytes = await saveDownload(page, png);
+    r.photoProbe = probe(png);
+    check(`${engineId} · the exported PNG is the camera's own resolution`,
+          r.photoProbe.width === r.photo.natW && r.photoProbe.height === r.photo.natH,
+          JSON.stringify(r.photoProbe));
+
+    // --- and now the recording
+    await openStep(page, 'st1');
+    await page.click('#bCam');
+    await page.waitForFunction(() => window.DV_camera.state().live, null, { timeout: 20000 });
+    await page.click('#bRec');
+    await page.waitForFunction(() => window.DV_camera.state().recording, null, { timeout: 15000 });
+    await sleep(600);
+    await page.screenshot({ path: path.join(DOCS, `w-camera-live-${engineId}.png`) });
+    await sleep(2600);                                  // ~3.2 s of recording
+    await page.click('#bRec');
+    await page.waitForFunction(() => window.DV.kind === 'video', null, { timeout: 180000 });
+    await sleep(400);
+    r.recordedS = await page.evaluate(() => window.DV.recordedS);
+    r.wholeFrames = await page.evaluate(() => window.DV.nFrames);
+    check(`${engineId} · about three seconds were recorded`,
+          r.recordedS >= 2.5 && r.recordedS <= 4.5, String(r.recordedS));
+    check(`${engineId} · the recording became a clip`, r.wholeFrames > 50,
+          String(r.wholeFrames));
+
+    // the filmstrip has to have actually drawn something
+    await page.waitForFunction(() => window.DV.srcDuration > 0, null, { timeout: 60000 });
+    r.srcDuration = await page.evaluate(() => window.DV.srcDuration);
+    await sleep(2500);
+    r.strip = await page.evaluate(() => {
+      const c = document.querySelector('#stripcv');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const seen = new Set();
+      for (let i = 0; i < d.length; i += 4) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+      return { colours: seen.size, w: c.width, h: c.height };
+    });
+    check(`${engineId} · the filmstrip has thumbnails on it`, r.strip.colours > 8,
+          JSON.stringify(r.strip));
+    await page.screenshot({ path: path.join(DOCS, `w-camera-trim-${engineId}.png`) });
+
+    // trim to the middle two seconds and re-open. Loading a clip hands the
+    // panel to step 2, so the trim bar is behind its own header again.
+    await openStep(page, 'st1');
+    const mid = r.srcDuration / 2;
+    r.range = await page.evaluate(([a, b]) => window.DV_trim(a, b),
+                                  [Math.max(0, mid - 1), mid + 1]);
+    await page.click('#bTrim');
+    await page.waitForFunction((n) => window.DV.nFrames !== n && window.DV.kind === 'video',
+                               r.wholeFrames, { timeout: 180000 });
+    await sleep(400);
+    r.trimmedFrames = await page.evaluate(() => window.DV.nFrames);
+    r.upstat = (await page.textContent('#upstat')).trim();
+    check(`${engineId} · the trim really shortened the clip`,
+          r.trimmedFrames >= 50 && r.trimmedFrames <= 66,
+          `${r.trimmedFrames} frames for a 2 s range (whole clip was ${r.wholeFrames})`);
+    check(`${engineId} · the trim is stated in the source line`,
+          /trimmed/.test(r.upstat), r.upstat);
+
+    if (deep) {
+      // one subject on the test pattern, tracked and rendered end to end
+      await page.click('#scope .chip[data-scope="track"]'); await sleep(700);
+      const box = await page.evaluate(() => {
+        const c = document.querySelector('#pov');
+        return { w: c.width, h: c.height };
+      });
+      await promptBoxPoint(page, {
+        box: [box.w * 0.3, box.h * 0.3, box.w * 0.7, box.h * 0.75],
+        point: [box.w * 0.5, box.h * 0.5],
+      });
+      const t0 = Date.now();
+      await page.click('#bTrack');
+      r.trackText = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+      r.trackSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+      check(`${engineId} · a camera clip tracks`, !/failed/.test(r.trackText), r.trackText);
+      await setMode(page, 'dots');
+      await page.evaluate(() => window.DV_draw(10)); await sleep(500);
+      r.dots = await page.textContent('#fps');
+      await openStep(page, 'st5');
+      await page.click('#bExport');
+      r.render = await waitText(page, '#rinfo', /rendered|failed/, 600000);
+      check(`${engineId} · a camera clip renders`, !/failed/.test(r.render), r.render);
+      const ext = engineId === 'browser' ? 'webm' : 'mp4';
+      const out = path.join(DOCS, `w-camera-export.${ext}`);
+      r.bytes = await saveDownload(page, out);
+      r.probe = probe(out);
+      check(`${engineId} · the render has the trimmed frame count`,
+            Math.abs(+r.probe.nb_read_frames - r.trimmedFrames) <= 1,
+            `${r.probe.nb_read_frames} vs ${r.trimmedFrames}`);
+      await page.screenshot({ path: path.join(DOCS, `w-camera-render-${engineId}.png`) });
+    }
+    await ctx.close();
+  } finally {
+    await br.close();
+  }
+  return r;
+}
+
 /* ================================== K: the optional bearer-token gate ======== */
 async function runApiKey() {
   const r = {};
@@ -680,6 +835,8 @@ try {
   R.runs.whole = await runWhole();
   R.runs.tracked = await runTracked();
   R.runs.lasso = await runLasso();
+  R.runs.cameraRemote = await runCamera('remote', true);
+  R.runs.cameraBrowser = await runCamera('browser', false);
   R.runs.entryBrowser = await runEntry('browser');
   R.runs.entryRemote = await runEntry('remote');
   R.runs.apiKey = await runApiKey();

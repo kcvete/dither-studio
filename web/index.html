@@ -44,11 +44,39 @@
           <b>drop an image or a clip</b>
           <span>png · jpg · webp · mp4 · mov &nbsp;·&nbsp; or click, or paste</span>
         </div>
-        <input type="file" id="file" accept="image/*,video/mp4,video/quicktime,.mp4,.mov" hidden>
+        <input type="file" id="file" accept="image/*,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm" hidden>
+        <div class="row">
+          <button class="btn" id="bCam">record from camera</button>
+        </div>
+        <div id="camui" hidden>
+          <div class="row">
+            <button class="btn" id="bSnap">photo</button>
+            <button class="btn go" id="bRec">record</button>
+            <button class="btn" id="bCamOff">close camera</button>
+          </div>
+          <div class="note" id="camnote">Up to 30 s, 1280×720 if the camera has it.
+            A photo becomes a still to dither; a recording lands in the trim bar
+            like any other clip.</div>
+        </div>
         <div id="vidopts" hidden>
           <div class="lbl"><span>Max length</span><span id="vSec">10 s</span></div>
           <input type="range" id="sSec" min="1" max="10" step="1" value="10">
           <div class="note">Clips are decoded to 720p / 30 fps, capped at 300 frames.</div>
+        </div>
+        <div id="trimui" hidden>
+          <div class="lbl"><span>Trim</span><span id="vTrim"></span></div>
+          <div id="strip">
+            <canvas id="stripcv" width="960" height="80"></canvas>
+            <div id="trimdim" class="dim l"></div>
+            <div id="trimdim2" class="dim r"></div>
+            <button id="hIn" class="hand" aria-label="trim in"></button>
+            <button id="hOut" class="hand" aria-label="trim out"></button>
+          </div>
+          <div class="row">
+            <button class="btn" id="bTrim">use this range</button>
+            <button class="btn" id="bTrimAll">whole clip</button>
+          </div>
+          <div class="note" id="trimnote"></div>
         </div>
         <div id="upstat" class="stat" hidden></div>
       </div>
@@ -222,6 +250,13 @@
            that gets dithered.</p>
         <button class="btn go" id="bPick">choose a file</button>
       </div>
+    </div>
+
+    <div id="camwrap" hidden>
+      <div id="camstage"><video id="camvid" muted playsinline autoplay></video>
+        <b id="camdot" hidden></b><em id="camtime">0.0 s</em></div>
+      <div class="hint">the camera feed stays in this tab until you press record —
+        and after that it is a clip like any other</div>
     </div>
 
     <div id="pwrap" hidden>

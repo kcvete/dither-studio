@@ -564,6 +564,50 @@ async function runFormats(page) {
   return r;
 }
 
+/* ---------- T: trim, at the API level -------------------------------------
+ * The UI half of this is verify-web.mjs's camera run (record, drag the handles,
+ * re-open). This is the server's own arithmetic: -ss/-t, and the 10 s cap
+ * applying AFTER the trim rather than instead of it.
+ */
+async function runTrim(page) {
+  const r = {};
+  const post = async (fields) => {
+    const res = await page.request.post(`${BASE}/api/upload`, {
+      multipart: Object.assign({
+        file: { name: path.basename(CLIP), mimeType: 'video/mp4',
+                buffer: fs.readFileSync(CLIP) },
+      }, fields),
+      timeout: 120000,
+    });
+    if (!res.ok()) throw new Error('upload failed: ' + res.status() + ' ' + await res.text());
+    return res.json();
+  };
+  r.whole = await post({ max_seconds: '10' });
+  r.middle = await post({ max_seconds: '10', trim_start: '2.0', trim_end: '4.0' });
+  r.capped = await post({ max_seconds: '1', trim_start: '1.0', trim_end: '4.0' });
+  if (r.whole.n_frames !== 150) throw new Error('whole clip: ' + r.whole.n_frames + ' frames');
+  if (r.middle.n_frames !== 60) throw new Error('2 s trim: ' + r.middle.n_frames + ' frames');
+  if (r.capped.n_frames !== 30) {
+    throw new Error('a 3 s trim under a 1 s cap gave ' + r.capped.n_frames + ' frames');
+  }
+  // and the trimmed clip really starts where it was told to
+  const ref = path.join(DOCS, 't-trim-ref.jpg');
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-ss', '2.0', '-i', CLIP,
+    '-frames:v', '1', '-vf', 'scale=-2:720', '-q:v', '3', ref]);
+  const got = path.join(HERE, 'jobs', r.middle.job, 'frames', '0000.jpg');
+  const raw = (f) => execFileSync('ffmpeg', ['-v', 'error', '-i', f, '-f', 'rawvideo',
+    '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 });
+  const a = raw(ref), b = raw(got);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+  r.firstFrameMeanAbsDiff = +(diff / a.length).toFixed(3);
+  if (r.firstFrameMeanAbsDiff > 0.5) {
+    throw new Error('the trimmed clip does not start at 2 s (mean abs diff '
+      + r.firstFrameMeanAbsDiff + ')');
+  }
+  return r;
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -583,6 +627,7 @@ try {
   R.runs.tracked = await runTracked(page);
   R.runs.trackedFast = await runTrackedFast(page);
   R.runs.formats = await runFormats(page);
+  R.runs.trim = await runTrim(page);
   R.runs.lasso = await runLasso(page);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);

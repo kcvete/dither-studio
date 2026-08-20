@@ -145,6 +145,40 @@ in the browser engine by a `<video>` seek loop into JPEG blobs, on the server by
 ffmpeg into `jobs/<id>/frames/`. Both produce the same frame grid, so frame 42
 is the same picture either way.
 
+**Record from camera** opens `getUserMedia` (1280×720 if the camera has it) with
+a live preview on the stage and two buttons:
+
+* **photo** grabs the frame on screen at the camera's own resolution and hands it
+  to the still flow as a PNG — dither look, palette, PNG export, all client-side,
+  exactly as if you had dropped an image.
+* **record** runs `MediaRecorder` with a 30 s ceiling and a running clock. What
+  comes out is a WebM blob that goes down exactly the same path a dropped file
+  does — the browser engine decodes it, the server engine uploads it — so a
+  camera clip is a clip, with nothing special downstream of the recorder.
+
+Either one closes the camera afterwards; the button reopens it.
+
+**Trim** appears under the drop zone after any clip, recorded or dropped: twelve
+thumbnails, two draggable handles, a duration readout and *use this range*. The
+range is not a crop of an already-decoded clip; it re-opens the source over those
+seconds, so only that part is ever decoded:
+
+* **browser** — the seek loop starts at `trimStart` and asks for
+  `min(trimEnd − trimStart, max length)` seconds.
+* **server** — `-ss` before `-i` and `-t` after it, i.e. ffmpeg seeks rather than
+  decoding and discarding.
+
+The 10 s / 300 frame cap applies **after** the trim: a 2 s window out of a 30 s
+clip is 2 s of frames, and a 25 s window is still the first 10 s of it. Measured
+in `verify.mjs`: whole clip 150 frames, a 2 s trim 60 frames, a 3 s trim under a
+1 s cap 30 frames, and the trimmed clip's frame 0 is byte-for-byte the frame
+ffmpeg gives for `-ss 2.0` (mean abs diff 0.000).
+
+A camera recording has one wrinkle worth knowing: `MediaRecorder` WebM carries no
+duration in its header until it has been seeked past its end, so both the
+filmstrip and the browser decoder ask for it that way before deciding how many
+frames there are.
+
 ### 2 · Subjects — clips only
 Two choices:
 
@@ -795,7 +829,14 @@ why the setting exists rather than a silently lowered default.
 * **Error diffusion and Riemersma flicker on video.** That is inherent, not a bug
   — the UI marks them. Use dots / blue noise / Bayer / halftone for stable
   motion.
-* **Short clips.** 720p / 30 fps, 300 frames / 10 s by default.
+* **Short clips.** 720p / 30 fps, 300 frames / 10 s by default. The camera
+  records up to 30 s, and the trim bar is how you get from one to the other.
+* **Trimming re-decodes.** The clip loads whole first so a drop is never blocked
+  on a second click; *use this range* then opens the same file again over the
+  chosen seconds. That is one extra decode, deliberately.
+* **The camera needs a secure context.** `getUserMedia` exists on `https://` and
+  on `localhost`, and nowhere else — a page served over plain http from another
+  machine will not see it. No audio is recorded, ever.
 * **Objects cost time**, and track times swing up to 1.7× run to run under
   sustained load (thermals), which is why `bench/bench.py` interleaves.
 * **Tracking quality is EdgeTAM's.** Fast motion, blur and occlusion make masks

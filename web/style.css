@@ -99,10 +99,27 @@ body.dragging #drop b{opacity:1}
 .hero p{font-size:12.5px;line-height:1.65;opacity:.5;margin:0 0 18px}
 .hero p b{opacity:.85;font-weight:600}
 .hero .btn{display:inline-block;flex:none;padding:9px 22px}
-#pwrap,#vwrap{display:flex;flex-direction:column;align-items:center;gap:12px;
+#pwrap,#vwrap,#camwrap{display:flex;flex-direction:column;align-items:center;gap:12px;
   width:100%;height:100%;min-height:0;justify-content:center}
-#pstage,#vstage{position:relative;line-height:0;border:1px solid var(--line);border-radius:6px;
+#pstage,#vstage,#camstage{position:relative;line-height:0;border:1px solid var(--line);border-radius:6px;
   overflow:hidden;box-shadow:0 14px 60px #000a;background:#0a1310;max-width:100%;max-height:100%}
+#camvid{display:block;max-width:100%;max-height:70vh}
+/* the recording light and the running clock, over the feed */
+#camstage b{position:absolute;left:12px;top:12px;width:11px;height:11px;border-radius:50%;
+  background:var(--warn);animation:blink 1s steps(2,end) infinite}
+#camstage em{position:absolute;right:12px;top:10px;font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-style:normal;color:var(--ink);background:#0a1310cc;border-radius:6px;padding:2px 7px}
+@keyframes blink{50%{opacity:.15}}
+
+/* ---- trim bar: a filmstrip with two handles over it -------------------- */
+#strip{position:relative;margin-top:6px;border:1px solid var(--line);border-radius:7px;
+  overflow:hidden;line-height:0;touch-action:none;user-select:none}
+#stripcv{display:block;width:100%;height:56px;object-fit:cover}
+#strip .dim{position:absolute;top:0;bottom:0;background:#0a1310cc;pointer-events:none}
+#strip .hand{position:absolute;top:0;bottom:0;width:11px;margin-left:-5px;padding:0;
+  background:var(--ink);border:0;border-radius:3px;cursor:ew-resize;opacity:.9}
+#strip .hand:after{content:'';position:absolute;left:4px;top:50%;width:3px;height:14px;
+  margin-top:-7px;background:#0a1310;border-radius:2px}
 #pimg{display:block;max-width:100%;max-height:100%}
 #pov{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
 #vcv{display:block;max-width:100%;max-height:100%;image-rendering:pixelated}

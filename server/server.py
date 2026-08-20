@@ -187,14 +187,28 @@ def ffprobe_json(path):
     return json.loads(out.stdout)
 
 
-def extract_frames(src, frames_dir, max_seconds, fps, max_frames):
+def extract_frames(src, frames_dir, max_seconds, fps, max_frames,
+                   trim_start=0.0, trim_end=None):
+    """Decode the clip to frames, optionally only a slice of it.
+
+    `-ss` goes before `-i` so ffmpeg seeks instead of decoding-and-throwing-away;
+    modern ffmpeg is frame accurate there. The 10 s / 300 frame cap still
+    applies AFTER the trim, so a 4 s window out of a 30 s clip is 4 s of frames,
+    and a 25 s window is still the first 10 s of it.
+    """
     os.makedirs(frames_dir, exist_ok=True)
-    cmd = ["ffmpeg", "-v", "error", "-y", "-i", src,
-           "-t", str(max_seconds),
-           "-vf", "scale=-2:720,fps=%d" % fps,
-           "-frames:v", str(max_frames),
-           "-q:v", "3", "-start_number", "0",
-           os.path.join(frames_dir, "%04d.jpg")]
+    t0 = max(0.0, float(trim_start or 0.0))
+    span = max_seconds if not trim_end else max(0.05, float(trim_end) - t0)
+    dur = min(float(max_seconds), span)
+    cmd = ["ffmpeg", "-v", "error", "-y"]
+    if t0 > 0.01:
+        cmd += ["-ss", "%.3f" % t0]
+    cmd += ["-i", src,
+            "-t", "%.3f" % dur,
+            "-vf", "scale=-2:720,fps=%d" % fps,
+            "-frames:v", str(max_frames),
+            "-q:v", "3", "-start_number", "0",
+            os.path.join(frames_dir, "%04d.jpg")]
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode != 0:
         raise HTTPException(400, "ffmpeg failed: " + p.stderr[-600:])
@@ -383,10 +397,11 @@ def palettes():
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), max_seconds: float = Form(10.0),
-                 fps: int = Form(30), max_frames: int = Form(300)):
+                 fps: int = Form(30), max_frames: int = Form(300),
+                 trim_start: float = Form(0.0), trim_end: float | None = Form(None)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in (".mp4", ".mov", ".m4v", ".webm"):
-        raise HTTPException(400, "expected .mp4 / .mov")
+        raise HTTPException(400, "expected .mp4 / .mov / .webm")
     jid = uuid.uuid4().hex[:12]
     d = os.path.join(JOBS, jid)
     os.makedirs(d, exist_ok=True)
@@ -395,7 +410,8 @@ async def upload(file: UploadFile = File(...), max_seconds: float = Form(10.0),
         shutil.copyfileobj(file.file, f)
 
     probe = ffprobe_json(src)
-    files = extract_frames(src, os.path.join(d, "frames"), max_seconds, fps, max_frames)
+    files = extract_frames(src, os.path.join(d, "frames"), max_seconds, fps,
+                           max_frames, trim_start, trim_end)
     if not files:
         raise HTTPException(400, "no frames extracted")
     w, h = Image.open(os.path.join(d, "frames", files[0])).size
@@ -403,13 +419,17 @@ async def upload(file: UploadFile = File(...), max_seconds: float = Form(10.0),
         "job": jid, "source": os.path.basename(src), "filename": file.filename,
         "n_frames": len(files), "w": w, "h": h, "fps": fps,
         "source_duration_s": float(probe.get("format", {}).get("duration") or 0),
+        "trim_start": float(trim_start or 0.0),
+        "trim_end": float(trim_end) if trim_end else None,
         "created": time.time(),
     }
     write_meta(jid, meta)
     with _state_lock:
         _jobs[jid] = new_status(len(files))
     return {"job": jid, "n_frames": len(files), "w": w, "h": h, "fps": fps,
-            "source_duration_s": meta["source_duration_s"]}
+            "source_duration_s": meta["source_duration_s"],
+            "trim_start": meta["trim_start"], "trim_end": meta["trim_end"],
+            "seconds": round(len(files) / max(1, fps), 3)}
 
 
 @app.get("/api/jobs/{jid}/meta")

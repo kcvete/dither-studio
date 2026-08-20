@@ -94,15 +94,21 @@ export class RemoteEngine {
   }
 
   /* --------------------------------------------------------------- clip */
-  async open(file, { maxSeconds = 10, onProgress } = {}) {
+  async open(file, { maxSeconds = 10, trimStart = 0, trimEnd = null,
+                    onProgress } = {}) {
     if (onProgress) onProgress({ phase: 'upload', text: 'uploading ' + file.name + '…' });
     const fd = new FormData();
     fd.append('file', file);
     fd.append('max_seconds', String(maxSeconds));
+    // the whole file goes up either way; the trim is ffmpeg's -ss/-t, so the
+    // frames the server keeps are the ones the handles picked
+    fd.append('trim_start', String(trimStart || 0));
+    if (trimEnd) fd.append('trim_end', String(trimEnd));
     const j = await this.api('/api/upload', {
       method: 'POST', body: fd, headers: this.headers(),
     });
-    this.clip = { job: j.job, nFrames: j.n_frames, w: j.w, h: j.h, fps: j.fps };
+    this.clip = { job: j.job, nFrames: j.n_frames, w: j.w, h: j.h, fps: j.fps,
+                  trimStart: j.trim_start || 0, seconds: j.seconds };
     return this.clip;
   }
 
