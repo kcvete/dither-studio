@@ -210,6 +210,16 @@ body.dragging #drop b{opacity:1}
 /* the offer, when a trim asks for frames that were never extracted */
 #trimoffer{margin-top:8px;border-left:2px solid var(--warn);padding-left:10px}
 #trimoffer .row{margin-top:6px}
+/* the coach: one floating pill over the canvas, one moment at a time */
+#coach{position:absolute;left:50%;top:26px;transform:translateX(-50%);
+  background:#0a1310ee;border:1px solid var(--line);border-radius:99px;
+  padding:8px 16px;font-size:11px;z-index:9;max-width:82%;cursor:pointer;
+  box-shadow:0 6px 30px #0008;animation:coachin .3s ease}
+@keyframes coachin{from{opacity:0;transform:translate(-50%,-6px)}}
+/* floating ✓ / ✕ for an open traced shape (touch has no enter / esc) */
+#pathbtns{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);
+  display:flex;gap:8px;z-index:5}
+#pathbtns .chip{background:#0a1310ee;padding:9px 16px;font-size:12px}
 #toast{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);
   background:#0a1310ee;border:1px solid var(--line);border-radius:8px;padding:8px 14px;
   font-size:11px;z-index:9;max-width:80%}

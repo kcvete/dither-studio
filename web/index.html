@@ -454,7 +454,12 @@
     </div>
 
     <div id="pwrap" hidden>
-      <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas></div>
+      <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas>
+        <div id="pathbtns" hidden>
+          <button class="chip" id="bPathOk" title="close the shape">&#10003; done</button>
+          <button class="chip" id="bPathNo" title="throw the shape away">&#10005;</button>
+        </div>
+      </div>
       <div class="hint" id="phint">click what you want &middot; shift-click what you don't &middot; drag a box</div>
     </div>
 
@@ -487,6 +492,7 @@
         <button class="chip" id="bCmp" aria-pressed="false">compare</button>
       </div>
     </div>
+    <div id="coach" hidden></div>
     <div id="toast" hidden></div>
     <div id="busy" hidden><i></i></div>
   </main>

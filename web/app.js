@@ -68,6 +68,8 @@ const S = {
   // on frame 0, so one prompt frame per clip was never enough.
   scope: 'whole', subjects: [], active: 0, nextId: 1, promptFrame: 0,
   tool: 'point', curPath: null, hoverXY: null, previewMasks: null,
+  promptMode: 'add',                 // ⊕ keep / ⊖ remove — the visible polarity
+  coachSeen: null,                   // which coach moments have fired (per source)
   trackSize: 1024, tracked: false, playing: false, cur: 0,
   // look
   P: {
@@ -751,7 +753,7 @@ async function loadStill(f) {
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.scope = 'whole';
     S.promptFrame = 0; S.previewMasks = null; S.curPath = null;
-    S.paletteTouched = false; S.dotsTuned = false;
+    S.paletteTouched = false; S.dotsTuned = false; S.coachSeen = null;
     dropStill();
     S.stillFile = f;
     S.stillURL = URL.createObjectURL(f);
@@ -816,7 +818,7 @@ async function uploadClip(f, trim, opts = {}) {
     S.kind = 'video'; S.job = j.job; S.nFrames = j.nFrames; S.W = j.w; S.H = j.h; S.fps = j.fps;
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.cur = 0; S.promptFrame = 0;
-    S.scope = 'whole';
+    S.scope = 'whole'; S.coachSeen = null;
     /* Where these frames start in the source file's own seconds. It is what
      * lets the trim bar (which speaks seconds) address frames on disk, so a
      * later trim can be a window instead of a second extraction. */
@@ -880,6 +882,8 @@ function setScope(v) {
       showStage(S.tracked ? 'result' : 'prompt');
       if (!S.tracked) showPromptFrame(S.promptFrame);
     }
+    coach('start', (COARSE ? 'tap' : 'click')
+      + ' the thing you want — the outline appears as you do');
   } else {
     showStage('result');
     draw();
@@ -1114,9 +1118,17 @@ function drawOverlay() {
       pctx.setLineDash([]);
     }
     s.points.forEach((p) => {
-      pctx.beginPath(); pctx.arc(p[0], p[1], 7, 0, Math.PI * 2);
-      pctx.fillStyle = p[2] ? col : '#0f1f18'; pctx.fill();
-      pctx.lineWidth = 2.5; pctx.strokeStyle = p[2] ? '#ffffffcc' : col; pctx.stroke();
+      // SAM-style marker glyphs: shape carries the meaning, colour reinforces.
+      // keep = subject colour, white ring, white +; remove = red, white ring, −
+      const keep = !!p[2], R = 8;
+      pctx.beginPath(); pctx.arc(p[0], p[1], R, 0, Math.PI * 2);
+      pctx.fillStyle = keep ? col : '#E6193B'; pctx.fill();
+      pctx.lineWidth = 2; pctx.strokeStyle = '#ffffffdd'; pctx.stroke();
+      pctx.strokeStyle = '#fff'; pctx.lineWidth = 2.4; pctx.lineCap = 'round';
+      pctx.beginPath();
+      pctx.moveTo(p[0] - 3.6, p[1]); pctx.lineTo(p[0] + 3.6, p[1]);
+      if (keep) { pctx.moveTo(p[0], p[1] - 3.6); pctx.lineTo(p[0], p[1] + 3.6); }
+      pctx.stroke();
     });
     pctx.globalAlpha = 1;
   });
@@ -1158,7 +1170,17 @@ function strokeShape(p, col, open, hover) {
   pctx.restore();
 }
 
+function paintPathButtons() {
+  const box = $('#pathbtns');
+  if (!box) return;
+  box.hidden = !(S.curPath && S.tool === 'poly');
+}
+$('#bPathOk') && $('#bPathOk').addEventListener('click', () => commitPath());
+$('#bPathNo') && $('#bPathNo').addEventListener('click', () => {
+  S.curPath = null; S.hoverXY = null; drawOverlay();
+});
 function drawPaths() {
+  paintPathButtons();
   S.subjects.forEach((s, i) => {
     if (!onThisFrame(s)) return;
     const col = s.palette[s.palette.length - 1];
@@ -1232,6 +1254,53 @@ function subjectMaskDataURL(s) {
   return c.toDataURL('image/png');
 }
 
+/* ---- ⊕ / ⊖: the visible polarity ---------------------------------------
+ * The taught path on every pointer. Shift/alt still mean "the opposite of ⊕"
+ * for pointer-fine muscle memory; on touch, a tap that lands INSIDE the tinted
+ * mask subtracts implicitly (Roboflow's smart default) so one hand is enough. */
+function paintPolarity() {
+  $$('#polarity .chip').forEach((c) => c.setAttribute(
+    'aria-pressed', String(c.dataset.polarity === S.promptMode)));
+  $('#vPolarity').textContent = S.promptMode === 'sub' ? 'remove' : 'keep';
+}
+$$('#polarity .chip').forEach((c) => c.addEventListener('click', () => {
+  S.promptMode = c.dataset.polarity;
+  paintPolarity();
+}));
+paintPolarity();
+
+/** Is (x, y) — prompt-canvas pixels — inside the active subject's live mask? */
+function maskHit(x, y) {
+  const s = S.subjects[S.active];
+  if (!s) return false;
+  const im = S.kind === 'image' ? S.stillMasks.get(s.id)
+    : (S.previewMasks || {})[String(s.id)];
+  if (!im || im.complete === false) return false;
+  try {
+    const c = ctx2d(S.W, S.H, 'hit');
+    c.clearRect(0, 0, S.W, S.H);
+    c.drawImage(im, 0, 0, S.W, S.H);
+    return c.getImageData(x | 0, y | 0, 1, 1).data[0] > 127;
+  } catch (e) { return false; }
+}
+
+/* ---- the coach: one floating pill over the canvas ------------------------
+ * Fires once per moment per source, never a modal, dies on tap or on its own.
+ * The SAM 2 pattern, with remove.bg's failure copy for the empty-mask case. */
+function coach(id, msg, again) {
+  if (!S.coachSeen) S.coachSeen = new Set();
+  if (S.coachSeen.has(id) && !again) return;
+  S.coachSeen.add(id);
+  const el = $('#coach');
+  if (!el) return;
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(coach._t);
+  coach._t = setTimeout(() => { el.hidden = true; }, 7000);
+}
+document.addEventListener('DOMContentLoaded', () => {});
+$('#coach') && $('#coach').addEventListener('click', () => { $('#coach').hidden = true; });
+
 function povXY(e) {
   const r = pov.getBoundingClientRect();
   return [clamp((e.clientX - r.left) / r.width * S.W, 0, S.W - 1),
@@ -1258,10 +1327,11 @@ pov.addEventListener('pointerdown', (e) => {
       + 'jump back to it, or add a new subject for this frame', true);
     return;
   }
-  const p = povXY(e), neg = e.shiftKey || e.altKey;
+  const p = povXY(e);
+  const neg = e.shiftKey || e.altKey || S.promptMode === 'sub';
   if (S.tool === 'point') {
     pov.setPointerCapture(e.pointerId);
-    down = { xy: p, moved: false, neg };
+    down = { xy: p, moved: false, neg, touch: e.pointerType === 'touch' };
     return;
   }
   if (S.tool === 'lasso') {
@@ -1295,9 +1365,24 @@ pov.addEventListener('pointerup', (e) => {
   if (!down) return;
   if (down.lasso) { down = null; commitPath(); return; }
   const p = povXY(e), s = S.subjects[S.active];
-  claimFrame(s);
-  if (down.moved && S.dragBox) s.box = S.dragBox.map(Math.round);
-  else s.points.push([Math.round(p[0]), Math.round(p[1]), down.neg ? 0 : 1]);
+  if (down.moved && S.dragBox) {
+    claimFrame(s);
+    s.box = S.dragBox.map(Math.round);
+  } else {
+    // a tap on an existing marker deletes it (SAM 2) — the outline re-cuts
+    const near = s.points.findIndex((q) =>
+      Math.hypot(q[0] - p[0], q[1] - p[1]) < 10);
+    if (near >= 0) {
+      s.points.splice(near, 1);
+    } else {
+      claimFrame(s);
+      // touch default: a tap inside the tinted mask means "not this bit" —
+      // no toggle to remember, one-handed refinement (⊕/⊖ stays the override)
+      const neg = down.neg
+        || (down.touch && S.promptMode === 'add' && maskHit(p[0], p[1]));
+      s.points.push([Math.round(p[0]), Math.round(p[1]), neg ? 0 : 1]);
+    }
+  }
   down = null; S.dragBox = null; S.previewMasks = null;
   renderSubjects(); drawOverlay();
   afterPromptEdit();
@@ -1444,6 +1529,7 @@ async function ensureStillJob() {
  *  while an inference is in flight schedules exactly one more run. */
 function afterPromptEdit() {
   if (S.kind === 'image' && S.scope === 'track') segmentStill();
+  else if (S.kind === 'video' && S.scope === 'track') autoPreview();
 }
 
 async function segmentStill() {
@@ -1487,6 +1573,7 @@ async function segmentStill() {
       + `in ${r.elapsedS.toFixed(2)} s (${r.imageSize} px) · `
       + r.objects.map((o) => '#' + o.id + ' ' + o.area + ' px').join(' · ')
       + (r.note ? ' · ' + r.note : '');
+    coachOnMasks(r.objects);
     buildTargets(); renderModes(); paintCompose(); paintAlphaUI();
     drawOverlay(); paintScopeSummary();
     DOTS_CACHE = null;
@@ -1512,20 +1599,31 @@ function useStillSelection() {
   draw();
 }
 
-/* ---- preview: the first-frame prediction only, no propagation ---- */
-$('#bPrev').addEventListener('click', previewFrame);
-async function previewFrame() {
-  if (S.curPath) commitPath();
-  backToPrompt();
-  // one frame, so only the subjects that were actually prompted on it
-  const here = S.subjects.filter((s) => hasPrompt(s) && onThisFrame(s));
-  if (!here.length) {
-    toast('nothing is prompted on frame ' + S.promptFrame + ' yet', true);
-    return;
+/* ---- the live mask on a clip -------------------------------------------
+ * The magic moment, with no extra button: every prompt edit auto-runs the
+ * same single-frame prediction "preview this frame" always ran, and the tint
+ * paints the instant it lands. #bPrev survives as the manual re-check.
+ * Coalesced exactly like the still path: a click that lands while a
+ * prediction is in flight schedules exactly one more run. */
+let pvBusy = false, pvAgain = false;
+
+/** The empty-selection failure branch is a routine outcome, not an exception:
+ *  say so, in remove.bg's words, and keep the number honest in #pvinfo. */
+function coachOnMasks(objects) {
+  const frame = Math.max(1, S.W * S.H);
+  const biggest = objects.reduce((a, o) => Math.max(a, o.area || 0), 0);
+  if (biggest < frame * 0.002) {
+    coach('empty', 'that selection came back almost empty — try tapping the '
+      + 'middle of the thing you want', true);
+  } else {
+    coach('refine', 'not what you expected? add a few more taps until the '
+      + 'whole thing is selected');
   }
-  const btn = $('#bPrev'); btn.disabled = true;
+}
+
+async function runPreview(here) {
   const info = $('#pvinfo'); info.hidden = false; info.classList.remove('err');
-  info.textContent = 'predicting this frame…';
+  if (!info.textContent) info.textContent = 'predicting this frame…';
   try {
     const r = await E().previewFrame({
       frameIdx: S.promptFrame, imageSize: S.trackSize,
@@ -1540,29 +1638,129 @@ async function previewFrame() {
       + `(${r.imageSize} px) · `
       + r.objects.map((o) => '#' + o.id + ' ' + o.area + ' px').join(' · ')
       + (r.note ? ' · ' + r.note : '');
+    coachOnMasks(r.objects);
   } catch (err) {
     info.classList.add('err');
     info.textContent = 'preview failed: ' + why(err);
+    throw err;
   }
+}
+
+/** Auto-run after a prompt edit on a clip. Never toasts, never blocks. */
+async function autoPreview() {
+  if (S.kind !== 'video' || S.scope !== 'track') return;
+  if (S.modelsMissing) return;
+  const here = S.subjects.filter((s) => hasPrompt(s) && onThisFrame(s));
+  if (!here.length) { S.previewMasks = null; drawOverlay(); return; }
+  if (pvBusy) { pvAgain = true; return; }
+  pvBusy = true;
+  try { await runPreview(here); } catch (e) { /* #pvinfo already says */ }
+  pvBusy = false;
+  if (pvAgain) { pvAgain = false; autoPreview(); }
+}
+
+$('#bPrev').addEventListener('click', previewFrame);
+async function previewFrame() {
+  if (S.curPath) commitPath();
+  backToPrompt();
+  // one frame, so only the subjects that were actually prompted on it
+  const here = S.subjects.filter((s) => hasPrompt(s) && onThisFrame(s));
+  if (!here.length) {
+    toast('nothing is prompted on frame ' + S.promptFrame + ' yet', true);
+    return;
+  }
+  if (pvBusy) { pvAgain = true; return; }
+  const btn = $('#bPrev'); btn.disabled = true;
+  pvBusy = true;
+  try { await runPreview(here); } catch (e) { /* said in #pvinfo */ }
+  pvBusy = false;
   btn.disabled = false;
+  if (pvAgain) { pvAgain = false; autoPreview(); }
+}
+
+/* ---- the wait is the show -----------------------------------------------
+ * During Track the stage stops being a frozen prompt frame: on the server
+ * engines the masks stream in as frames complete, and the preview plays them
+ * — the advancing picture IS the progress bar (SAM 2's pattern). The browser
+ * engine keeps its masks private until the run ends, so there the numbers
+ * carry the wait. A wake lock keeps a phone from sleeping through it. */
+let WLOCK = null;
+async function holdWake() {
+  try { WLOCK = navigator.wakeLock ? await navigator.wakeLock.request('screen') : null; }
+  catch (e) { WLOCK = null; }
+}
+function releaseWake() {
+  try { if (WLOCK) WLOCK.release(); } catch (e) { /* released with the tab */ }
+  WLOCK = null;
+}
+
+const TSTREAM = { busy: false, at: 0 };
+async function paintTrackedFrame(i) {
+  if (TSTREAM.busy) return;
+  TSTREAM.busy = true;
+  try {
+    // the frames always exist (extracted up front); a mask may not be on disk
+    // yet for this exact index, and then the raw frame still advances
+    const frame = await E().frame(i);
+    const masks = await Promise.all(S.subjects.map(
+      (x) => E().mask(x.id, i).catch(() => null)));
+    const cv = $('#vcv');
+    if (cv.width !== S.W || cv.height !== S.H) { cv.width = S.W; cv.height = S.H; }
+    const g = cv.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(frame, 0, 0);
+    S.subjects.forEach((x, k) => {
+      if (!masks[k]) return;
+      g.save(); g.globalAlpha = 0.5;
+      g.drawImage(tintedMask(masks[k], x.palette[x.palette.length - 1]),
+                  0, 0, S.W, S.H);
+      g.restore();
+    });
+    $('#fcount').textContent = `${i} / ${S.nFrames - 1}`;
+    $('#sFrame').value = i;
+    frame.close && frame.close();
+    masks.forEach((m) => m && m.close && m.close());
+  } catch (e) { /* a frame mid-extraction — routine */ }
+  TSTREAM.busy = false;
 }
 
 async function track() {
   if (S.curPath) commitPath();
   const bad = S.subjects.filter((s) => !hasPrompt(s));
   if (bad.length) { toast('subject #' + bad[0].id + ' has no prompt yet', true); return; }
+  while (pvBusy || segBusy) await sleep(60);   // one tracker session, one user
   const btn = $('#bTrack'); btn.disabled = true;
+  btn.dataset.running = '1';
+  btn.textContent = 'tracking…';
   $('#tinfo').hidden = true; $('#tinfo').textContent = '';
   const prog = $('#prog'); prog.hidden = false;
   const bar = $('.bar i', prog), lab = $('span', prog);
   bar.style.width = '0%';
   lab.textContent = 'loading model…';
+  holdWake();
+  // masks stream in per frame on the server engines: play them as they land
+  const streamed = E().id !== 'browser';
+  if (streamed) { stop(); showStage('result'); }
+  const t0 = performance.now();
   try {
     const st = await E().track(
       { objects: promptPayload(), imageSize: S.trackSize },
       (p) => {
         bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
-        lab.textContent = p.text;
+        const el = (performance.now() - t0) / 1000;
+        const left = (p.done && p.total && el > 2)
+          ? (p.total - p.done) * (el / p.done) : 0;
+        lab.textContent = (p.text || '')
+          + (left > 1 ? ` · ≈ ${fmtDur(left)} left` : '');
+        btn.textContent = p.total
+          ? `tracking · ${p.done}/${p.total}` : 'tracking…';
+        if (streamed && p.done > 1) {
+          const now = performance.now();
+          if (now - TSTREAM.at > 350) {
+            TSTREAM.at = now;
+            paintTrackedFrame(Math.min(p.done - 1, S.nFrames - 1));
+          }
+        }
       });
     prog.hidden = true; S.tracked = true;
     const spread = new Set(S.subjects.map(frameOf));
@@ -1579,15 +1777,24 @@ async function track() {
     $('#bgui').hidden = S.P.compose !== 'cutout';
     dropCache(); buildTargets(); renderModes(); renderPolish(); openStep(3);
     DOTS_CACHE = null;
+    coach('tracked', 'if the outline slips somewhere, scrub to that frame, '
+      + 'add or remove a tap, and Track again');
     paintToSeq();
     if (S.returnToSeq) toast('tracked — "add to the sequence" is in the header');
-    await draw();
+    if (S.demoRun) { S.demoRun = false; applyDemoLook(); }
+    // the finished result plays itself from the top — the reveal, unasked
+    await draw(activeRange().in);
+    play();
   } catch (err) {
     prog.hidden = true;
     const box = $('#tinfo'); box.hidden = false; box.classList.add('err');
     box.textContent = 'track failed: ' + why(err);
+    backToPrompt();
   }
+  releaseWake();
   btn.disabled = false;
+  delete btn.dataset.running;
+  paintTrackCTA();
 }
 
 /* ===================================================== frames + masks cache */
@@ -2833,6 +3040,13 @@ const LOOKS = [
 ];
 let APPLYING_LOOK = false;
 
+/** The 30-second demo script's payoff: the Solvd look, applied for you. */
+function applyDemoLook() {
+  const solvd = LOOKS[0];
+  try { applyLook(solvd); } catch (e) { /* the preset row is still there */ }
+  toast('the Solvd look — everything in Look updates live');
+}
+
 /** Any manual change to a look control makes the look "Custom". */
 function markCustom() {
   if (APPLYING_LOOK || S.lookPreset === 'custom') return;
@@ -3458,6 +3672,7 @@ async function exportClip() {
   const bar = $('.bar i', prog), lab = $('span', prog);
   bar.style.width = '0%'; lab.textContent = 'starting…';
   stop();
+  holdWake();
   try {
     const fmt = currentFormat();
     const rng = activeRange();
@@ -3516,6 +3731,7 @@ async function exportClip() {
     const box = $('#rinfo'); box.hidden = false; box.classList.add('err');
     box.textContent = 'render failed: ' + why(err);
   }
+  releaseWake();
   btn.disabled = false;
 }
 
@@ -5400,7 +5616,9 @@ async function checkModels() {
   renderSeq();
   window.DV = S;
   window.DV_maskURL = subjectMaskDataURL;
-  window.DV_draw = draw;
+  // an explicit frame request pauses playback first — scrubbing means pause,
+  // and the verifiers depend on the frame they asked for staying put
+  window.DV_draw = (i) => { if (i !== undefined) stop(); return draw(i); };
   window.DV_engine = () => ({ id: S.engine.id, label: S.engine.label,
                               baseUrl: S.engine.baseUrl || '',
                               supports: S.engine.supports,
