@@ -439,11 +439,27 @@
   <main id="stage">
     <div id="empty">
       <div class="hero">
+        <!-- the landing is already running: a prebaked .dots.gz of the demo
+             clip, played by the shipped player — the actual product output,
+             animating, for the cost of a small image. -->
+        <div id="herowrap"><canvas id="herocv"></canvas></div>
         <h1>Dither Studio</h1>
-        <p>Drop a <b>still</b> to dither it, a <b>clip</b> to dither every frame, or click on
-           whatever you want isolated — in a photograph it is cut out on the spot, in a
-           clip the tracker follows it — and only that gets dithered.</p>
-        <button class="btn go" id="bPick">choose a file</button>
+        <p>Point at anything in a photo or a clip — it is cut out, tracked,
+           and turned into dots. Or dither the whole frame.</p>
+        <div class="row herobtns">
+          <button class="btn go" id="bPick">choose a file</button>
+          <button class="btn" id="bPickCam">use your camera</button>
+        </div>
+        <div id="samplerow">
+          <span>no video? try one of these:</span>
+          <button class="sample" id="dTryClip" title="the demo clip — tap the athlete, watch the tracker follow">
+            <img src="./demo/clip-thumb.jpg" alt="demo clip"></button>
+          <button class="sample" id="dTryStill" title="a photo — the outline is cut the moment you tap">
+            <img src="./demo/still-thumb.jpg" alt="demo photo"></button>
+          <button class="sample" id="dTryShape" title="a dithered ring, straight into the sequence">
+            <canvas id="dShapeCv" width="56" height="56"></canvas></button>
+        </div>
+        <div id="herolooks"></div>
       </div>
     </div>
 
@@ -456,6 +472,7 @@
 
     <div id="pwrap" hidden>
       <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas>
+        <b id="demohint" hidden><i></i><span>tap the athlete</span></b>
         <div id="pathbtns" hidden>
           <button class="chip" id="bPathOk" title="close the shape">&#10003; done</button>
           <button class="chip" id="bPathNo" title="throw the shape away">&#10005;</button>

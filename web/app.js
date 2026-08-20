@@ -137,6 +137,13 @@ function showStage(which) {
   $('#camwrap').hidden = which !== 'camera';
   $('#seqwrap').hidden = which !== 'sequence';
   $('#empty').hidden = which !== 'empty';
+  // the hero demo runs only while the landing is what is on stage
+  if (typeof HERO !== 'undefined' && HERO) {
+    if (which === 'empty'
+        && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      HERO.play();
+    } else HERO.pause();
+  }
 }
 
 /* Only the studio rail accordions: the sequence panel's sections are a
@@ -1320,6 +1327,7 @@ function commitPath() {
   renderSubjects(); drawOverlay();
 }
 pov.addEventListener('pointerdown', (e) => {
+  hideDemoHint();
   if (!S.subjects.length) return;
   const act = S.subjects[S.active];
   if (!onThisFrame(act)) {
@@ -5587,6 +5595,104 @@ async function checkModels() {
   }
 }
 
+/* ============================================== first-run: the demo =======
+ * The landing is already running: a prebaked demo.dots.gz plays in the hero
+ * (the shipped player — no model, no GPU, works in every webview), and the
+ * remove.bg-style sample row skips a first-timer straight into the flow.
+ * The 30-second script: tap the sample clip → one pulsing in-canvas hint →
+ * tap the athlete → instant tint → Track → Solvd applies itself → playing.
+ * Any real action dismisses the hint; nothing here is a modal. (spec §5) */
+let HERO = null;
+const DEMO = { hint: false, at: [545, 205] };   // the athlete, in clip pixels
+
+function showDemoHint() {
+  const el = $('#demohint');
+  if (!el || !DEMO.hint) return;
+  el.style.left = (DEMO.at[0] / (S.W || 1280) * 100) + '%';
+  el.style.top = (DEMO.at[1] / (S.H || 720) * 100) + '%';
+  el.hidden = false;
+}
+function hideDemoHint() {
+  DEMO.hint = false;
+  const el = $('#demohint');
+  if (el) el.hidden = true;
+}
+
+async function tryDemo(kind) {
+  busy(true);
+  try {
+    const name = kind === 'still' ? 'sample.jpg' : 'sample.mp4';
+    const res = await fetch('./demo/' + name);
+    if (!res.ok) throw new Error('the sample is not on this host');
+    const blob = await res.blob();
+    const f = new File([blob], name,
+                       { type: kind === 'still' ? 'image/jpeg' : 'video/mp4' });
+    S.demoRun = kind === 'clip';
+    await take(f);
+    // straight to the subject step, with the one hint — unless the models are
+    // missing, in which case the step's own plain-language note explains
+    if (!S.modelsMissing) {
+      setScope('track');
+      openStep(2);
+      DEMO.hint = true;
+      showDemoHint();
+    }
+  } catch (err) {
+    toast(why(err), true);
+    S.demoRun = false;
+  }
+  busy(false);
+}
+
+function paintHeroLooks() {
+  const wrap = $('#herolooks');
+  if (!wrap || wrap.childElementCount) return;
+  const picks = ['solvd', 'gameboy', 'newsprint', 'blueprint', 'ember', 'terminal'];
+  const tiles = [];
+  picks.forEach((id) => {
+    const l = LOOKS.find((x) => x.id === id);
+    if (!l) return;
+    const fig = document.createElement('figure');
+    const cv = document.createElement('canvas');
+    cv.width = LT.w; cv.height = LT.h;
+    const cap = document.createElement('figcaption');
+    cap.textContent = l.name;
+    fig.append(cv, cap);
+    wrap.append(fig);
+    tiles.push([cv, l]);
+  });
+  lookThumbSource().then((src) => {
+    tiles.forEach(([cv, l]) => renderLookThumb(cv, l, src));
+  }).catch(() => {});
+}
+
+async function initHero() {
+  paintHeroLooks();
+  const ring = $('#dShapeCv');
+  if (ring) drawRing(ring.getContext('2d'), ring.width, ring.height);
+  const hc = $('#herocv');
+  if (!hc) return;
+  try {
+    const res = await fetch('./demo/demo.dots.gz');
+    if (!res.ok) throw new Error('no demo asset');
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const P = await playerLib();
+    const doc = await P.unpack(bytes);
+    HERO = new P.Player(hc, { loop: true });
+    HERO.setDoc(doc);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) HERO.draw(0);
+    else if (!$('#empty').hidden) HERO.play();
+    else HERO.draw(0);
+  } catch (e) {
+    const w = $('#herowrap');
+    if (w) w.hidden = true;      // a static host without the asset: plain hero
+  }
+}
+$('#bPickCam') && $('#bPickCam').addEventListener('click', () => camOpen());
+$('#dTryClip') && $('#dTryClip').addEventListener('click', () => tryDemo('clip'));
+$('#dTryStill') && $('#dTryStill').addEventListener('click', () => tryDemo('still'));
+$('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape', 'ring'));
+
 /* ------------------------------------------------------------------ boot */
 (async function boot() {
   S.enginePref = loadPref();
@@ -5856,6 +5962,7 @@ async function checkModels() {
     S.format = id; $('#sFmt').value = id; paintFormat();
     return currentFormat();
   };
+  initHero();
   window.DV_ready = true;
 })();
 
