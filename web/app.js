@@ -259,6 +259,7 @@ function paintEstimate() {
 }
 
 function take(f) {
+  stop();                       // whatever was playing belongs to the old source
   const isVid = /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name);
   $('#vidopts').hidden = !isVid;
   $('#trimui').hidden = true;
@@ -1724,15 +1725,19 @@ function releaseWake() {
 }
 
 const TSTREAM = { busy: false, at: 0 };
-async function paintTrackedFrame(i) {
+/** One tracked frame painted mid-run. `withMasks` is only true when the mask
+ *  for `i` is guaranteed written (single subject, prompted on frame 0, and we
+ *  stay a couple of frames behind the tracker) — a 404 probe would log a
+ *  console error whatever the JS catches, so we never fetch on a maybe. */
+async function paintTrackedFrame(i, withMasks) {
   if (TSTREAM.busy) return;
   TSTREAM.busy = true;
   try {
-    // the frames always exist (extracted up front); a mask may not be on disk
-    // yet for this exact index, and then the raw frame still advances
     const frame = await E().frame(i);
-    const masks = await Promise.all(S.subjects.map(
-      (x) => E().mask(x.id, i).catch(() => null)));
+    const masks = withMasks
+      ? await Promise.all(S.subjects.map(
+          (x) => E().mask(x.id, i).catch(() => null)))
+      : [];
     const cv = $('#vcv');
     if (cv.width !== S.W || cv.height !== S.H) { cv.width = S.W; cv.height = S.H; }
     const g = cv.getContext('2d');
@@ -1770,8 +1775,12 @@ async function track() {
   if (window.DV_sheet && window.matchMedia('(max-width: 767px)').matches) {
     window.DV_sheet('collapsed');
   }
-  // masks stream in per frame on the server engines: play them as they land
+  // masks stream in per frame on the server engines: play them as they land.
+  // The tint rides along only when the mask files' order is knowable (one
+  // subject, prompted on frame 0) — otherwise the raw frames alone advance.
   const streamed = E().id !== 'browser';
+  const maskStream = streamed && S.subjects.length === 1
+    && frameOf(S.subjects[0]) === 0;
   if (streamed) { stop(); showStage('result'); }
   const t0 = performance.now();
   try {
@@ -1786,11 +1795,13 @@ async function track() {
           + (left > 1 ? ` · ≈ ${fmtDur(left)} left` : '');
         btn.textContent = p.total
           ? `tracking · ${p.done}/${p.total}` : 'tracking…';
-        if (streamed && p.done > 1) {
+        if (streamed && p.done > 2) {
           const now = performance.now();
           if (now - TSTREAM.at > 350) {
             TSTREAM.at = now;
-            paintTrackedFrame(Math.min(p.done - 1, S.nFrames - 1));
+            // two frames behind the tracker: the mask for this index is on
+            // disk before we ask for it
+            paintTrackedFrame(Math.min(p.done - 2, S.nFrames - 1), maskStream);
           }
         }
       });
@@ -2882,11 +2893,15 @@ async function loop() {
     // the preview plays the range, not the clip -- that is what makes a trim
     // after the track something you can watch before you export it
     const r = activeRange();
+    // the clip under this loop can be replaced mid-play (a still, a new
+    // upload, an engine switch): a zero-frame range means stop, not NaN
+    if (S.kind !== 'video' || r.n <= 0) { stop(); return; }
     const next = (S.cur + 1 > r.out || S.cur + 1 < r.in) ? r.in : S.cur + 1;
     for (let k = 1; k <= 3; k++) {
-      frameAt(next + k > r.out ? r.in + ((next + k - r.in) % r.n) : next + k);
+      frameAt(next + k > r.out ? r.in + ((next + k - r.in) % r.n) : next + k)
+        .catch(() => {});       // a prefetch is an optimisation, never an error
     }
-    await draw(next);
+    try { await draw(next); } catch (e) { stop(); return; }
     await sleep(Math.max(0, 1000 / S.fps - (performance.now() - t0)));
   }
 }
@@ -4546,6 +4561,7 @@ function seqTouch(quick) {
 
 /* ------------------------------------------------------------ the view */
 function setView(v, opts) {
+  if (v === 'sequence') stop();       // the studio transport yields the stage
   S.view = v;
   $('#studiopanel').hidden = v !== 'studio';
   $('#seqpanel').hidden = v !== 'sequence';
@@ -5544,6 +5560,7 @@ async function switchEngine(pref) {
 }
 
 function resetClip() {
+  stop();
   S.kind = 'none'; S.job = null; S.bitmap = null; S.tracked = false;
   S.subjects = []; S.nextId = 1; S.scope = 'whole'; S.promptFrame = 0;
   S.previewMasks = null; S.curPath = null;
