@@ -68,6 +68,15 @@ function f32from(t) {
  * pointer tokens. Slots that have no frame yet stay zero and get NEG in the
  * additive mask, which makes a half-full bank attend exactly as a shorter one
  * would — that is what lets the cold-start frames share one fixed-shape graph.
+ *
+ * ONE BANK IS ONE SUBJECT. `cond` holds only the frames THIS subject was
+ * prompted on, because a `WebTracker` never carries more than one, and the
+ * caller (web/engines/browser.js) resets it between subjects. That is why the
+ * browser engine cannot have the bug the server had to be fixed for: there is
+ * no batch to consolidate across, so another subject's prompt frame can never
+ * enter this bank as a conditioning frame holding a "not here" placeholder.
+ * Keep it that way — if a bank ever tracks several subjects at once, the
+ * per-subject conditioning sets have to stay separate.
  */
 export class MemoryBank {
   constructor(man, tpos) {

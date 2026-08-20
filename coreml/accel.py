@@ -189,7 +189,7 @@ def install(predictor, accel=None, directory=DEFAULT_DIR, verbose=True,
     if prefetch and 'encoder' in stages and accel.model('encoder') is not None:
         pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dv-enc')
         futures = {}
-        last = {'idx': -1}
+        last = {'idx': -1, 'dir': 1}
         idt = _in_dtype(accel.model('encoder'), 'image')
 
         def _frame_np(state, i):
@@ -218,10 +218,16 @@ def install(predictor, accel=None, directory=DEFAULT_DIR, verbose=True,
                 cache[frame_idx] = (state['images'][frame_idx].unsqueeze(0),
                                     {'backbone_fpn': fpn,
                                      'vision_pos_enc': _pos_enc()})
-            # queue the next frame in whatever direction we are moving
-            step = -1 if frame_idx < last['idx'] else 1
-            last['idx'] = frame_idx
-            nxt = frame_idx + step
+            # queue the next frame in whatever direction we are moving.
+            # The direction is latched rather than recomputed, because the
+            # per-object tracking loop asks for the same frame once per subject
+            # and a second look at the frame we are already on must not read as
+            # "we turned around" -- that would throw away the prefetch we just
+            # queued and make every reverse pass synchronous.
+            if frame_idx != last['idx']:
+                last['dir'] = -1 if frame_idx < last['idx'] else 1
+                last['idx'] = frame_idx
+            nxt = frame_idx + last['dir']
             nkey = (id(state), nxt)
             if (0 <= nxt < state['num_frames'] and nkey not in futures
                     and nxt not in cache):

@@ -444,15 +444,12 @@ prompted on frame 48, ten frames after she appears.
 | server engine | non-empty on **149/149** frames | empty 0–37, **first mask on frame 38** |
 | browser engine | non-empty on **149/149** frames | empty 0–38, **first mask on frame 39** |
 
-Two subjects over 149 frames took **16.1 s** on the server and **29.5 s** in the
+Two subjects over 149 frames took **16.2 s** on the server and **29.5 s** in the
 browser, which is the one-pass-per-subject cost showing up.
 
-Neither was told when she arrives. The server finds frame 38 because SAM2's
-`max_cond_frames_in_attn` is -1, so a conditioning frame in the *future*
-participates in the memory attention from frame 0 onwards and the object score
-simply stays negative until she is there. The browser gets to the same place from
-the other direction, tracking her backwards out of frame 48 until she leaves.
-One frame apart, from entirely separate code.
+Neither was told when she arrives. Both engines walk her backwards out of her
+own prompt frame until her object score goes negative, and land one frame apart
+from entirely separate code.
 
 The renderer follows: at frame 10 the dot count is the tree's alone — **1346**,
 with not one stray dot where she will be — and at frame 100 it is **1787**, the
@@ -462,11 +459,59 @@ and what the aesthetic wants.
 ![frame 10, before she arrives](docs/w-entry-f10-remote.png)
 ![frame 100, both subjects](docs/w-entry-f100-remote.png)
 
-One real bug fell out of writing that test. SAM2 consolidates *every* prompt
-frame across *every* object before propagation begins, and on frame 48 the tree
-had not been tracked yet — so it got the `NO_OBJ_SCORE` placeholder and vanished
-for exactly one frame at 30 fps. `_fill_foreign_cond_holes` in `server.py` copies
-the neighbouring frame, which is what the browser engine produces anyway.
+### One bank per subject
+
+Two subjects on two prompt frames is also where SAM2's batched video predictor
+breaks, and the park clip only showed the small half of it. `propagate_in_video`
+runs every object through a single `output_dict`, and its pre-pass consolidates
+*every* prompt frame across *every* object before the first frame is tracked. On
+frame 48 the tree had not been tracked yet, so it got the `NO_OBJ_SCORE`
+placeholder — and the tree vanished for exactly one frame at 30 fps.
+
+The visible hole is not the damage. That placeholder is written to a
+**conditioning** frame, the memory encoder is run over it, and
+`max_cond_frames_in_attn` is -1 — so "this object is not here" is attended to on
+every remaining frame of the clip, for a subject that was never prompted there.
+With two subjects and an early prompt it costs one frame. With three subjects and
+a prompt at frame 121 it is fatal: on a 300-frame tennis clip (racket + player
+prompted at 0, ball at 121) the **player's mask went empty from frame 119 to the
+end**, with the player in the middle of the shot the whole time.
+
+The fix is the one upstream SAM 2.1 shipped: give every object its own memory.
+`output_dict_per_obj[i]` already holds exactly object *i*'s conditioning and
+non-conditioning outputs, and `_run_single_frame_inference` already takes the
+output dict and the batch size as arguments, so
+`edgetam_util.propagate_per_object` drives the loop one object at a time against
+its own dict. No object ever sees a conditioning frame it was not prompted on and
+there is no placeholder left to poison anything. Each subject is walked out from
+its own prompt frame in both directions, exactly like the browser engine — two
+passes over the frames, so the image encoder still runs once per frame rather
+than once per subject per frame.
+
+| tennis clip, 3 subjects, 300 frames, 768 px, CoreML | racket @ 0 | player @ 0 | ball @ 121 |
+|---|---|---|---|
+| batched (before) | empty 210–270, 277–284 | **empty 119–299** | empty 0–115, 218–299 |
+| per-object (after) | empty 210–242, 291–299 | **empty on 0 frames** | empty 0–115, 218–299 |
+| each subject tracked alone | empty 210–242, 291–299 | empty on 0 frames | empty 0–115, 218–299 |
+
+The third row is the check that matters: with per-object memory, three subjects
+tracked together produce the same runs as three subjects tracked one at a time.
+The racket's remaining gaps are EdgeTAM losing a thin backlit racket mid-swing —
+it is out of frame for most of 220–240 — and they are identical whether it is
+tracked alone or alongside two other subjects.
+
+![tennis clip, three subjects, after the fix](docs/tennis-fix.png)
+
+It costs time. Both loops run back to back on the same machine, same warm model,
+768 px CoreML: the tennis clip goes **38–43 s → 47 s** (7.9 → 6.4 fps) and the
+park clip **14.0 s → 16.2 s** (10.6 → 9.2 fps), because memory attention, the SAM
+heads and the memory encoder run once per subject at batch 1 instead of once at
+batch N. The image encoder — the expensive part — is unaffected: it is cached per
+frame, so N subjects on one frame still encode it once.
+
+Only jobs whose subjects were prompted on **more than one frame** take this path.
+A single prompt frame cannot produce a foreign conditioning frame, so it keeps
+the batched upstream loop, its numbers and its timings exactly as they were.
 
 ## Licence
 

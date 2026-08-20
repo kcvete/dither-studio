@@ -1,24 +1,24 @@
 {
- "base": "http://127.0.0.1:8790",
+ "base": "http://127.0.0.1:8765",
  "clip": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/clip5s.mp4",
  "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/still.jpg",
  "consoleErrors": [],
  "pageErrors": [],
  "requestFailures": [
   {
-   "url": "http://127.0.0.1:8790/api/jobs/a2d23b734497/out.mp4?t=1787207238016",
+   "url": "http://127.0.0.1:8765/api/jobs/44055ec46157/out.mp4?t=1787211119677",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8790/api/jobs/20051f4e807b/out.mp4?t=1787207262460",
+   "url": "http://127.0.0.1:8765/api/jobs/7a3fdd20c44c/out.mp4?t=1787211143060",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8790/api/jobs/20051f4e807b/out.mp4?t=1787207280787",
+   "url": "http://127.0.0.1:8765/api/jobs/7a3fdd20c44c/out.mp4?t=1787211161346",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8790/api/jobs/20051f4e807b/out.mp4?t=1787207280787",
+   "url": "http://127.0.0.1:8765/api/jobs/7a3fdd20c44c/out.mp4?t=1787211161346",
    "why": "net::ERR_ABORTED"
   }
  ],
@@ -184,7 +184,7 @@
   },
   "whole": {
    "source": "150 frames · 1280×720 · 30 fps",
-   "job": "a2d23b734497",
+   "job": "44055ec46157",
    "preview": {
     "w": 1280,
     "h": 720,
@@ -208,7 +208,7 @@
      ]
     ]
    },
-   "previewFps": "57.1 fps",
+   "previewFps": "58.1 fps",
    "previewFrame20": {
     "w": 1280,
     "h": 720,
@@ -232,7 +232,7 @@
      ]
     ]
    },
-   "render": "rendered 150 frames in 10.3 s (14.5 fps)",
+   "render": "rendered 150 frames in 10.3 s (14.6 fps)",
    "ffprobe": {
     "width": 1280,
     "height": 720,
@@ -241,7 +241,7 @@
    }
   },
   "tracked": {
-   "job": "20051f4e807b",
+   "job": "7a3fdd20c44c",
    "subjectChips": [
     "#1 · 1pt+box @ 0✕",
     "#2 · 1pt+box @ 0✕"
@@ -264,14 +264,14 @@
     }
    ],
    "qualityDefault": 768,
-   "trackInfo": "tracked 150 frames in 14.0 s (10.7 fps) on MPS coreml · 2 subjects",
-   "trackWallSeconds": 14.1,
+   "trackInfo": "tracked 150 frames in 12.5 s (12.0 fps) on MPS coreml · 2 subjects",
+   "trackWallSeconds": 13.1,
    "status": {
     "state": "done",
     "done_frames": 150,
     "n_frames": 150,
-    "elapsed_s": 13.98,
-    "fps": 10.73,
+    "elapsed_s": 12.5,
+    "fps": 12,
     "error": null,
     "device": "mps",
     "backend": "coreml",
@@ -315,8 +315,8 @@
      ]
     ]
    },
-   "dotsFps": "39.7 fps · 3989 dots",
-   "dotsRender": "rendered 150 frames in 3.8 s (39.3 fps)",
+   "dotsFps": "44.2 fps · 3989 dots",
+   "dotsRender": "rendered 150 frames in 3.8 s (39.5 fps)",
    "dotsProbe": {
     "width": 1280,
     "height": 720,
@@ -367,7 +367,7 @@
      ]
     ]
    },
-   "mixedRender": "rendered 150 frames in 12.3 s (12.2 fps)",
+   "mixedRender": "rendered 150 frames in 12.3 s (12.1 fps)",
    "mixedProbe": {
     "width": 1280,
     "height": 720,
@@ -381,14 +381,14 @@
    }
   },
   "trackedFast": {
-   "job": "c1ab38836f1d",
+   "job": "6593bc6f72d1",
    "selected": 512,
-   "trackInfo": "tracked 150 frames in 10.4 s (14.4 fps) on MPS coreml · 1 subject",
-   "trackWallSeconds": 11.1,
+   "trackInfo": "tracked 150 frames in 8.3 s (18.0 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 9.1,
    "imageSize": 512,
    "backend": "coreml",
    "doneFrames": 150,
-   "fps": 14.38,
+   "fps": 18.04,
    "maskBytes": 7260,
    "maskSize": [
     1280,
@@ -415,20 +415,20 @@
    }
   },
   "lasso": {
-   "job": "f9ab99ace330",
-   "boxPreviewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12767 px",
-   "boxPreviewWallSeconds": 0.53,
+   "job": "dbe88de5483b",
+   "boxPreviewText": "frame 0 · 1 subject in 0.21 s (768 px) · #1 12767 px",
+   "boxPreviewWallSeconds": 0.52,
    "boxPreviewOverlay": 1,
    "shapes": [
     27
    ],
    "maskDataURLBytes": 36138,
-   "lassoPreviewText": "frame 0 · 1 subject in 0.10 s (768 px) · #1 12093 px",
-   "lassoPreviewWallSeconds": 0.52,
-   "trackInfo": "tracked 150 frames in 11.0 s (13.6 fps) on MPS coreml · 1 subject",
-   "trackWallSeconds": 11.6,
+   "lassoPreviewText": "frame 0 · 1 subject in 0.11 s (768 px) · #1 12093 px",
+   "lassoPreviewWallSeconds": 0.53,
+   "trackInfo": "tracked 150 frames in 10.1 s (14.9 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 10.6,
    "doneFrames": 150,
-   "fps": 13.61,
+   "fps": 14.86,
    "backend": "coreml",
    "promptRecorded": {
     "frame_idx": 0,

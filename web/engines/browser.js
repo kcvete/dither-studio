@@ -431,14 +431,20 @@ export class BrowserEngine {
    *   forward   own prompt frame -> last frame
    *   backward  own prompt frame -> 0
    *
-   * which is N steps per subject however late the prompt is. That is not how
-   * the server gets its answer — there, every subject shares one inference
-   * state and one propagate pass, and a subject prompted at frame 80 is
-   * attended to from frame 0 onwards because `max_cond_frames_in_attn` is -1
-   * and conditioning frames in the FUTURE still participate. The two agree on
-   * what matters: a subject that is not in the shot yet comes back empty,
-   * because EdgeTAM's object score goes negative and NO_OBJ_SCORE logits
-   * follow, whether the model reaches that frame going forwards or backwards.
+   * which is N steps per subject however late the prompt is. The server reaches
+   * the same answer a cheaper way: one inference state, but a memory bank per
+   * subject inside it, and the image encoder shared across subjects on a frame
+   * (server/edgetam_util.py, `propagate_per_object`). Either way a subject that
+   * is not in the shot yet comes back empty, because EdgeTAM's object score
+   * goes negative and NO_OBJ_SCORE logits follow.
+   *
+   * The bank being per subject is load-bearing, not incidental. SAM2's own
+   * batched loop shares ONE bank across every object and consolidates every
+   * prompt frame before tracking starts, so a frame prompted for subject B
+   * lands in subject A's memory as a CONDITIONING frame holding the NO_OBJ
+   * placeholder — and conditioning frames are attended to forever, so A's track
+   * dies from there on. This loop never had that bug and the server no longer
+   * does; batching subjects together here would reintroduce it.
    */
   async track({ objects, imageSize }, onProgress) {
     const t = await this.loadTracker((s) => onProgress

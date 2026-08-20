@@ -298,12 +298,11 @@ def _decode_mask(data_url, w, h):
 def _apply_prompts(predictor, state, pairs, w, h):
     """Feed prompts to the predictor. `pairs` is [(object, frame_idx)].
 
-    SAM2/EdgeTAM keeps one conditioning frame per *object*, not per state, so
-    subjects prompted on different frames go into a single inference state and
-    one propagate pass each way. On frames before an object's own conditioning
-    frame the consolidation fills that object with NO_OBJ_SCORE, which comes
-    out as an empty mask -- which is the correct answer for a subject that has
-    not entered the shot yet.
+    SAM2/EdgeTAM keeps prompts per *object*, not per state, so subjects
+    prompted on different frames all go into a single inference state --
+    `_track_worker` then decides which propagation loop walks it. A subject
+    that has not entered the shot yet comes back empty from either loop,
+    because its object score stays negative until it is actually there.
     """
     out = None
     for o, frame_idx in pairs:
@@ -512,47 +511,6 @@ def track(jid: str, req: TrackReq):
             "prompt_frames": {str(o.id): fi for o, fi in req.frames()}}
 
 
-def _fill_foreign_cond_holes(mroot, pairs, n_frames):
-    """Patch the one-frame dropout SAM2 leaves on a *foreign* prompt frame.
-
-    `propagate_in_video_preflight` consolidates every prompt frame across every
-    object before the loop runs. On frame F, only the object that was prompted
-    there has a temporary output, and the others have not been tracked yet --
-    so they get the NO_OBJ_SCORE placeholder, and the propagate loop then reuses
-    that consolidated frame instead of running inference on it. The result is a
-    single empty mask for every *other* subject on frame F: subject #1 vanishes
-    for one frame at 30 fps precisely because subject #2 was prompted there.
-
-    There is no prediction to recover -- the model never looked at that object
-    on that frame -- so this copies the nearer neighbouring frame, which is
-    what the tracker produced 33 ms either side. The browser engine, which
-    walks each subject through its own memory bank, never has the hole; this
-    makes the two agree.
-    """
-    frames = {int(fi) for _, fi in pairs}
-    for o, own in pairs:
-        oid = str(o.id)
-        d = os.path.join(mroot, oid)
-        for f in sorted(frames):
-            if f == own:
-                continue
-            p = os.path.join(d, "%04d.png" % f)
-            if not os.path.exists(p):
-                continue
-            if np.asarray(Image.open(p)).max() > 127:
-                continue                      # the subject really is there
-            for n in (f - 1, f + 1, f - 2, f + 2):
-                if not (0 <= n < n_frames):
-                    continue
-                q = os.path.join(d, "%04d.png" % n)
-                if os.path.exists(q) and np.asarray(Image.open(q)).max() > 127:
-                    shutil.copyfile(q, p)
-                    print("[track] patched %s frame %d from %d "
-                          "(prompt frame for another subject)" % (oid, f, n),
-                          flush=True)
-                    break
-
-
 def _set(jid, **kw):
     with _state_lock:
         _jobs[jid].update(kw)
@@ -603,15 +561,29 @@ def _track_worker(jid, d, req):
                         _set(jid, done_frames=len(seen), elapsed_s=round(el, 2),
                              fps=round(len(seen) / el, 2) if el > 0 else 0.0)
 
-                # A click on a middle frame must fill the whole clip, so run
-                # both ways -- from the EARLIEST prompt frame, since later
-                # subjects are simply absent (empty masks) until theirs.
-                if start > 0:
+                # A click on a middle frame must fill the whole clip, so every
+                # subject gets walked out of its prompt frame both ways.
+                #
+                # Which loop does that depends on how many prompt frames there
+                # are. Upstream's batched one shares a single memory bank across
+                # all objects, and its pre-pass consolidates every prompt frame
+                # across every object before tracking starts -- so a frame
+                # prompted for one subject enters the OTHER subjects' memory as
+                # a conditioning frame holding a NO_OBJ placeholder, and kills
+                # their tracks from there on. That can only happen when the
+                # subjects were prompted on more than one frame, so that is
+                # exactly when we swap in the per-object loop (SAM 2.1's fix,
+                # see edgetam_util.propagate_per_object), which does both
+                # directions itself. One prompt frame keeps the batched path
+                # unchanged: reverse from it, then forward from it.
+                if len({fi for _, fi in pairs}) > 1:
+                    drain(EU.propagate_per_object(predictor, state))
+                else:
+                    if start > 0:
+                        drain(predictor.propagate_in_video(
+                            state, start_frame_idx=start, reverse=True))
                     drain(predictor.propagate_in_video(
-                        state, start_frame_idx=start, reverse=True))
-                drain(predictor.propagate_in_video(
-                    state, start_frame_idx=start, reverse=False))
-                _fill_foreign_cond_holes(mroot, pairs, n_frames)
+                        state, start_frame_idx=start, reverse=False))
 
                 del state
             if DEVICE == "mps":
