@@ -411,15 +411,19 @@ export class BrowserEngine {
   /* ----------------------------------------------------------- tracking
    * One WebTracker instance is a single-object memory bank, so subjects are
    * tracked one after another rather than as a batch the way the server does
-   * it. The frame ordering per subject copies the server exactly:
+   * it. Each subject is walked out from ITS OWN prompt frame, both ways:
    *
-   *   start = min(prompt frames)
    *   forward   own prompt frame -> last frame
-   *   backward  own prompt frame -> 0,  ONLY if it owns the earliest prompt
+   *   backward  own prompt frame -> 0
    *
-   * so a ball prompted at frame 80 while a runner is prompted at 0 stays empty
-   * on 0..79 — which is the truth about a ball that is not in the shot yet —
-   * while a lone subject prompted at 80 still fills the whole clip.
+   * which is N steps per subject however late the prompt is. That is not how
+   * the server gets its answer — there, every subject shares one inference
+   * state and one propagate pass, and a subject prompted at frame 80 is
+   * attended to from frame 0 onwards because `max_cond_frames_in_attn` is -1
+   * and conditioning frames in the FUTURE still participate. The two agree on
+   * what matters: a subject that is not in the shot yet comes back empty,
+   * because EdgeTAM's object score goes negative and NO_OBJ_SCORE logits
+   * follow, whether the model reaches that frame going forwards or backwards.
    */
   async track({ objects, imageSize }, onProgress) {
     const t = await this.loadTracker((s) => onProgress
@@ -427,12 +431,10 @@ export class BrowserEngine {
     const S = t.man.image_size;
     const N = this.clip.nFrames;
     const t0 = performance.now();
-    const start = Math.min(...objects.map((o) => o.frameIdx | 0));
     const plans = [];
     for (const o of objects) {
       const fp = Math.max(0, Math.min(N - 1, o.frameIdx | 0));
-      const back = fp === start && fp > 0;
-      plans.push({ o, fp, back, steps: (N - fp) + (back ? fp : 0) });
+      plans.push({ o, fp, back: fp > 0, steps: N });
     }
     const total = plans.reduce((a, p) => a + p.steps, 0);
     let done = 0;

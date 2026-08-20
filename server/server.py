@@ -507,6 +507,47 @@ def track(jid: str, req: TrackReq):
             "prompt_frames": {str(o.id): fi for o, fi in req.frames()}}
 
 
+def _fill_foreign_cond_holes(mroot, pairs, n_frames):
+    """Patch the one-frame dropout SAM2 leaves on a *foreign* prompt frame.
+
+    `propagate_in_video_preflight` consolidates every prompt frame across every
+    object before the loop runs. On frame F, only the object that was prompted
+    there has a temporary output, and the others have not been tracked yet --
+    so they get the NO_OBJ_SCORE placeholder, and the propagate loop then reuses
+    that consolidated frame instead of running inference on it. The result is a
+    single empty mask for every *other* subject on frame F: subject #1 vanishes
+    for one frame at 30 fps precisely because subject #2 was prompted there.
+
+    There is no prediction to recover -- the model never looked at that object
+    on that frame -- so this copies the nearer neighbouring frame, which is
+    what the tracker produced 33 ms either side. The browser engine, which
+    walks each subject through its own memory bank, never has the hole; this
+    makes the two agree.
+    """
+    frames = {int(fi) for _, fi in pairs}
+    for o, own in pairs:
+        oid = str(o.id)
+        d = os.path.join(mroot, oid)
+        for f in sorted(frames):
+            if f == own:
+                continue
+            p = os.path.join(d, "%04d.png" % f)
+            if not os.path.exists(p):
+                continue
+            if np.asarray(Image.open(p)).max() > 127:
+                continue                      # the subject really is there
+            for n in (f - 1, f + 1, f - 2, f + 2):
+                if not (0 <= n < n_frames):
+                    continue
+                q = os.path.join(d, "%04d.png" % n)
+                if os.path.exists(q) and np.asarray(Image.open(q)).max() > 127:
+                    shutil.copyfile(q, p)
+                    print("[track] patched %s frame %d from %d "
+                          "(prompt frame for another subject)" % (oid, f, n),
+                          flush=True)
+                    break
+
+
 def _set(jid, **kw):
     with _state_lock:
         _jobs[jid].update(kw)
@@ -565,6 +606,7 @@ def _track_worker(jid, d, req):
                         state, start_frame_idx=start, reverse=True))
                 drain(predictor.propagate_in_video(
                     state, start_frame_idx=start, reverse=False))
+                _fill_foreign_cond_holes(mroot, pairs, n_frames)
 
                 del state
             if DEVICE == "mps":
