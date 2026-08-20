@@ -118,6 +118,7 @@ verify-web.mjs  headless end-to-end check, browser engine + the engine seam
 env/            venv, EdgeTAM checkout, checkpoint, libcdither, CoreML  (ignored)
 jobs/<id>/      source, frames/, masks/<obj>/, polish/, out.mp4        (ignored)
                 a still is the same thing with one frame in it and no source
+                swept by server/jobsgc.py: 2 GB / 14 days, 48 h grace
 docs/           verification screenshots, reports, the tracking test clip
 ```
 
@@ -1014,6 +1015,59 @@ pass. The browser tracks them one at a time, because a `WebTracker` is a
 single-object memory bank, so N subjects cost N × the time. Two subjects over
 149 frames: 16.1 s on the server, 25.7 s in the browser.
 
+## Storage: jobs/ and the janitor
+
+`jobs/` is the server's scratch directory. Every clip that goes up gets one:
+the source file, `frames/`, `masks/<obj>/`, `polish/` and whatever it was
+rendered to. It is roughly 13 MB per 150-frame clip, and it used to grow
+forever — two days of ordinary use plus the two suites left **5.4 GB across 323
+directories**, most of it throwaways and duplicates of the same five seconds.
+
+`server/jobsgc.py` sweeps it, on startup and every six hours after that:
+
+1. anything untouched past the age limit goes;
+2. then, while `jobs/` is still over budget, the **oldest goes first**, one at a
+   time, until it fits.
+
+```sh
+DV_JOBS_BUDGET_MB=2048     # how much disk jobs/ may hold
+DV_JOBS_MAX_AGE_DAYS=14    # how long an untouched job lives
+DV_JOBS_KEEP_HOURS=48      # a job used this recently is never touched
+DV_JOBS_GC_EVERY_H=6       # how often the sweep runs
+DV_JOBS_GC=0               # turn the whole thing off
+```
+
+Two rules keep it from eating anything that matters.
+
+**Nothing used in the last 48 hours is ever touched**, in either pass. "Used" is
+the newest of the job directory's own mtime and a `.access` stamp the server
+writes on any `/api/jobs/<id>/*` call — reading a frame changes nothing on disk
+otherwise, so a clip someone is looking at right now would look ancient without
+it. Forty-eight hours is orders of magnitude longer than any flow, which is why
+a sweep firing in the middle of a track → render cannot hurt it; `verify.mjs`
+run `gc` fires one every 1.5 s through a whole tracked render to prove it.
+
+**A recording is trimmed, not deleted.** A job whose `filename` starts with
+`camera-` or `photo-` came out of the webcam and exists nowhere else on the
+machine. Past the age limit those lose `frames/`, `masks/`, `polish/`,
+`preview/` and every render — everything `reextract` can rebuild — while
+`meta.json` and the original stay: `source.webm` for a recording, and for a
+photograph `frames/0000.jpg`, which *is* the picture, since a still job has no
+source file. Everything else, `seq-*` rasterise directories included, is deleted
+whole.
+
+The accounting is hard-link aware. `POST /api/jobs/<id>/reextract` links the
+source into the new job rather than copying it, so removing one of two jobs that
+share a clip frees only that job's own bytes, and that is what the numbers say.
+
+```
+GET  /api/gc/status     budget, age limit, current usage, the last sweep
+POST /api/gc/run        sweep now, same policy — what the button calls
+```
+
+In the page, at the foot of the panel: `storage: 592 MB · 70 jobs` and a **clean
+up** button. Server engine only — the browser engine writes nothing to disk.
+
 ## Hosting a paid backend
 
 The seam is built; the billing is not, and this repository is not going to grow
@@ -1055,9 +1109,11 @@ What you would actually have to do:
   torch path, so that is the right backend there. The `_gpu_lock` in `server.py`
   serialises one track at a time per process — run one process per GPU behind
   the proxy rather than trying to share.
-* **Jobs are never garbage collected.** ~13 MB per 150-frame clip (a still job is
-  one JPEG), and they hold the customer's frames. A hosted deployment needs a reaper and a retention
-  policy before it needs a payment form.
+* **Retention.** `jobs/` is swept on a budget and an age limit — see *Storage:
+  jobs/ and the janitor* — but the defaults (2 GB, 14 days) are a laptop's, not
+  a tenant's. A hosted deployment wants `DV_JOBS_BUDGET_MB` sized to the scratch
+  disk, a much shorter `DV_JOBS_MAX_AGE_DAYS`, and a per-customer policy on top:
+  the janitor knows nothing about who owns a job.
 * **Metering.** Count tracked frames, not requests: `POST /track` returns
   immediately and the work is in the worker. `GET /status` already reports
   `done_frames`, `elapsed_s` and `image_size`.
@@ -1093,9 +1149,19 @@ node verify-web.mjs http://127.0.0.1:8765 clip.mp4 docs/entry-clip.mp4 still.jpg
 still dotted whole-image down to a one-frame `.dots.gz`, a still with a clicked
 subject segmented in one frame and exported as a transparent PNG, a whole-frame
 clip, two tracked subjects, one subject at a non-default tracking quality, a
-polygon mask prompt with a frame preview, and **mask polish** — the motion gate
+polygon mask prompt with a frame preview, **mask polish** — the motion gate
 as numbers, the tab's polished mask against the server's own byte for byte, the
-before/after wipe, and preview against the exported MP4.
+before/after wipe, and preview against the exported MP4 — and the **jobs/
+janitor**: fabricated job directories with backdated mtimes (a stale one, a
+fresh one, a `camera-` recording, a `photo-`, a `seq-*`) swept through the live
+`POST /api/gc/run`, then a sweep every 1.5 s through a real track → render to
+show the 48 h grace holds. `server/jobsgc_check.py` checks the same policy — age,
+budget eviction oldest-first, the grace window, the hard-link accounting —
+against temp directories in a second, with no server at all:
+
+```sh
+env/venv/bin/python server/jobsgc_check.py
+```
 
 `verify-web.mjs` drives the **browser engine** and the seam between the two: the
 auto probe and the manual switch, a still, whole-image dots on a still, a still
@@ -1145,7 +1211,9 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | engine parity, kernels | **110/110 byte-identical**, and 110/110 again through a mask |
 | engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
 | engine parity, polish | **27/27 float-identical** (3 strengths × 9 frames); crop shortcut vs whole frame, max difference **0** |
-| `verify.mjs` | 11 flows, **0 console errors** |
+| `verify.mjs` | 12 flows, **0 console errors** |
+| `jobsgc_check.py` | **29/29**, six cases, no server and no real jobs/ |
+| jobs/ janitor, live | a stale job deleted, a fresh one kept, a `camera-` job trimmed to `source.webm` + `meta.json`; **12 sweeps** fired through a real track → render and it finished untouched |
 | `verify-web.mjs` | 18 flows, **225/225 assertions**, **0 console errors** |
 | sequence: an item's look | item 2 through all 7 modes, a palette, cell 6, gamma 1.4 and polish 70 — items 1 and 3 **hash identically** before and after (`c7b68293`, `a9e6316d`), item 2 goes `c7b68293` → `2853216c` and back again |
 | sequence: pixel modes | a cell-1 Bayer photograph is **484,508 dots a frame**; its morph flies **3,773** mid-air and lands on 711, the subject's own count |
@@ -1512,10 +1580,13 @@ why the setting exists rather than a silently lowered default.
   fallback at all.
 * **One track at a time.** A process-wide lock serialises EdgeTAM; a second
   request gets a 409.
-* **Jobs are never garbage collected.** ~13 MB per 150-frame clip, ~160 MB per
+* **`jobs/` is swept, not managed.** ~13 MB per 150-frame clip, ~160 MB per
   90-second one (137 MB of frames + 24 MB of masks per subject), and a re-cut
   adds another job — hard-linked to the same source file, but with its own
-  frames. Delete by hand. A hosted deployment needs a reaper before it needs a payment form.
+  frames. `server/jobsgc.py` keeps that to 2 GB / 14 days and never touches
+  anything used in the last 48 hours, but it is a size cap and a clock, not a
+  library: it cannot tell your work from a suite throwaway, and it will not ask
+  before deleting. Anything you want kept, export.
 * **`DV_API_KEY` is authentication, not authorisation.** One key, all or
   nothing, no accounts, no rate limiting, no metering. Put those in front of it.
 

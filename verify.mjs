@@ -1066,6 +1066,157 @@ async function runPolish(page) {
   return r;
 }
 
+/* ---------- G: the jobs/ janitor, against the real jobs directory ---------
+ * jobs/ grew to 5.4 GB in two days before this existed. server/jobsgc.py has
+ * the policy and server/jobsgc_check.py checks it against fabricated trees in
+ * a temp directory; this checks the same rules through the live HTTP API, on
+ * the real jobs/ -- including the one thing a unit test cannot show: that a
+ * sweep firing in the middle of a track -> render does not eat the clip.
+ */
+function fakeJob(id, { ageDays = 0, filename = 'fake.mp4', source = 'source.webm',
+                       frames = 3, masks = true, render = true } = {}) {
+  const d = path.join(HERE, 'jobs', id);
+  fs.mkdirSync(path.join(d, 'frames'), { recursive: true });
+  for (let i = 0; i < frames; i++) {
+    fs.writeFileSync(path.join(d, 'frames', String(i).padStart(4, '0') + '.jpg'),
+                     Buffer.alloc(64 << 10));
+  }
+  if (masks) {
+    fs.mkdirSync(path.join(d, 'masks', '1'), { recursive: true });
+    fs.writeFileSync(path.join(d, 'masks', '1', '0000.png'), Buffer.alloc(4096));
+  }
+  if (source) fs.writeFileSync(path.join(d, source), Buffer.alloc(256 << 10));
+  if (render) fs.writeFileSync(path.join(d, 'out.mp4'), Buffer.alloc(256 << 10));
+  const meta = { job: id, n_frames: frames, w: 16, h: 16, fps: 30, filename };
+  if (source) meta.source = source;
+  fs.writeFileSync(path.join(d, 'meta.json'), JSON.stringify(meta));
+  const t = new Date(Date.now() - ageDays * 86400e3);
+  for (const sub of ['frames', 'masks/1', 'masks', '']) {
+    const q = path.join(d, sub);
+    if (fs.existsSync(q)) fs.utimesSync(q, t, t);
+  }
+  return d;
+}
+
+async function runGC(page) {
+  const r = {};
+  const has = (p) => fs.existsSync(p);
+  const ids = { old: 'gcfake-old', fresh: 'gcfake-fresh', cam: 'gcfake-cam',
+                photo: 'gcfake-photo', seq: 'seq-gcfake0000' };
+  const wipe = () => Object.values(ids).forEach((id) => fs.rmSync(
+    path.join(HERE, 'jobs', id), { recursive: true, force: true }));
+  wipe();
+  try {
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+
+    r.status = await (await page.request.get(`${BASE}/api/gc/status`)).json();
+    for (const k of ['budget_mb', 'max_age_days', 'keep_hours', 'usage_mb', 'jobs']) {
+      if (typeof r.status[k] !== 'number') throw new Error('gc status has no ' + k);
+    }
+    r.line = await page.textContent('#gcuse');
+    r.barVisible = await page.isVisible('#gcbar');
+    if (!r.barVisible || !/^storage: /.test(r.line || '')) {
+      throw new Error('the storage line is not showing: ' + JSON.stringify(r.line));
+    }
+
+    // fabricate: one stale normal job, one fresh one, one stale camera
+    // recording, one stale photo, one stale seq-* rasterise directory
+    const age = r.status.max_age_days + 2;
+    const d = {};
+    d.old = fakeJob(ids.old, { ageDays: age });
+    d.fresh = fakeJob(ids.fresh, { ageDays: 0 });
+    d.cam = fakeJob(ids.cam, { ageDays: age, filename: 'camera-101500.webm' });
+    d.photo = fakeJob(ids.photo, { ageDays: age, filename: 'photo-101500.png',
+                                   source: null, frames: 1 });
+    d.seq = fakeJob(ids.seq, { ageDays: age, filename: null, source: null,
+                               masks: false });
+
+    r.run = await (await page.request.post(`${BASE}/api/gc/run`)).json();
+    const ran = r.run.ran;
+    r.freedBytes = ran.freed_bytes;
+
+    if (has(d.old)) throw new Error('a job past the age limit survived the sweep');
+    if (!has(path.join(d.fresh, 'frames'))) throw new Error('a fresh job was deleted');
+    if (!has(path.join(d.cam, 'source.webm')) || !has(path.join(d.cam, 'meta.json'))) {
+      throw new Error('the camera recording lost its original');
+    }
+    if (has(path.join(d.cam, 'frames')) || has(path.join(d.cam, 'masks'))
+        || has(path.join(d.cam, 'out.mp4'))) {
+      throw new Error('the camera job kept rebuildable data it should have shed');
+    }
+    if (!has(path.join(d.photo, 'frames', '0000.jpg'))) {
+      throw new Error('the photo lost the only copy of itself');
+    }
+    if (has(d.seq)) throw new Error('an old seq-* directory survived');
+    if (!ran.trimmed.includes(ids.cam) || !ran.deleted.includes(ids.old)) {
+      throw new Error('the report disagrees with the disk: ' + JSON.stringify(ran));
+    }
+    const mine = (x) => Object.values(ids).includes(x);
+    r.deletedFakes = ran.deleted.filter(mine);
+    r.trimmedFakes = ran.trimmed.filter(mine);
+    wipe();
+
+    /* --- the race: a sweep every 1.5 s through a whole track -> render.
+     * The 48 h keep window is what makes this safe, and this is the proof. */
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+    await page.setInputFiles('#file', CLIP);
+    await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+    r.job = await page.evaluate(() => window.DV.job);
+
+    let sweeps = 0, stop = false, sweepErr = null;
+    const hammer = (async () => {
+      while (!stop) {
+        try {
+          const q = await page.request.post(`${BASE}/api/gc/run`);
+          if (!q.ok()) sweepErr = 'gc/run ' + q.status();
+          sweeps++;
+        } catch (e) { sweepErr = String(e); }
+        await sleep(1500);
+      }
+    })();
+
+    await page.click('#scope .chip[data-scope="track"]');
+    await sleep(700);
+    await prompt(page, SUBJECT_A);
+    r.trackInfo = await (async () => {
+      await page.click('#bTrack');
+      return waitText(page, '#tinfo', /tracked|failed/, 300000);
+    })();
+    await openStep(page, 'st5');
+    await page.click('#bExport');
+    r.render = await waitText(page, '#rinfo', /rendered|failed/, 300000);
+    stop = true; await hammer;
+    r.sweepsDuringFlow = sweeps;
+    if (sweepErr) throw new Error('a sweep failed mid-flow: ' + sweepErr);
+    if (/failed/.test(r.trackInfo)) throw new Error(r.trackInfo);
+    if (/failed/.test(r.render)) throw new Error(r.render);
+    if (sweeps < 2) throw new Error('no sweep actually fired during the flow');
+
+    const jd = path.join(HERE, 'jobs', r.job);
+    for (const want of ['frames', 'masks', 'meta.json', 'out.mp4']) {
+      if (!has(path.join(jd, want))) {
+        throw new Error(`the live job lost ${want} to a sweep it was using`);
+      }
+    }
+    r.stamped = has(path.join(jd, '.access'));
+    if (!r.stamped) throw new Error('no .access stamp was written for a job in use');
+    r.probe = ffprobe(path.join(jd, 'out.mp4'));
+
+    // and the button in the panel does the same thing without throwing
+    await page.click('#bGC');
+    await page.waitForFunction(() => !document.querySelector('#bGC').disabled,
+                               { timeout: 60000 });
+    r.lineAfter = await page.textContent('#gcuse');
+    r.after = await (await page.request.get(`${BASE}/api/gc/status`)).json();
+    await page.screenshot({ path: path.join(DOCS, 'g-storage.png') });
+    return r;
+  } finally {
+    wipe();
+  }
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -1099,6 +1250,7 @@ try {
   await run('dots', runDotsServer);
   await run('lasso', runLasso);
   await run('polish', runPolish);
+  await run('gc', runGC);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
 } finally {

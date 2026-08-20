@@ -29,6 +29,7 @@ from pydantic import BaseModel
 import dither as DI
 import dots as DT
 import edgetam_util as EU
+import jobsgc
 import polish as PL
 import render as R
 
@@ -105,7 +106,19 @@ if DEVICE != "mps" and BACKEND in ("auto", "coreml"):
 
 os.makedirs(JOBS, exist_ok=True)
 
-app = FastAPI(title="Dither Studio")
+# jobs/ is a scratch directory and nothing here ever removed anything from it,
+# so two days of use grew it to 5.4 GB. The janitor sweeps on startup and every
+# DV_JOBS_GC_EVERY_H hours; see server/jobsgc.py for the whole policy.
+GC = jobsgc.GC(JOBS)
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    GC.start()
+    yield
+
+
+app = FastAPI(title="Dither Studio", lifespan=_lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS,
                    allow_credentials=False, allow_methods=["*"],
                    allow_headers=["*"], expose_headers=["Content-Length"])
@@ -116,12 +129,18 @@ async def _require_key(request: Request, call_next):
     """Gate /api/* behind DV_API_KEY when one is set. The page itself, the
     static assets and the CORS preflight stay open -- a browser cannot put a
     header on the request that loads the HTML."""
-    if API_KEY and request.url.path.startswith("/api/") \
-            and request.method != "OPTIONS":
+    path = request.url.path
+    if API_KEY and path.startswith("/api/") and request.method != "OPTIONS":
         got = request.headers.get("authorization", "")
         if got[:7].lower() != "bearer " or got[7:].strip() != API_KEY:
             return JSONResponse({"detail": "bad or missing bearer token"},
                                 status_code=401)
+    # Any touch of a job -- a frame, a mask, a status poll -- says "this one is
+    # in use", and that is the only thing standing between an open clip and the
+    # garbage collector. Reading a frame changes nothing on disk otherwise.
+    bits = path.split("/", 4)
+    if len(bits) > 3 and bits[1] == "api" and bits[2] in ("jobs", "sequence"):
+        GC.touch(bits[3])
     return await call_next(request)
 
 _state_lock = threading.Lock()      # guards the in-memory job table
@@ -483,6 +502,7 @@ def api_meta():
             "uncapped": True,          # no 10 s / 300 frame ceiling on upload
             "reextract": True,         # POST /api/jobs/<id>/reextract
             "extract_progress": True,  # GET /api/extract/<ticket>
+            "gc": True,                # GET /api/gc/status, POST /api/gc/run
             "dots_max_frames": DOTS_MAX_FRAMES,
             "formats": list(R.FORMATS)}
 
@@ -514,12 +534,33 @@ def palettes():
         "uncapped": True,
         "reextract": True,
         "extract_progress": True,
+        "gc": True,
         "dots_max_frames": DOTS_MAX_FRAMES,
         "jpeg_bytes_per_frame": JPEG_BYTES_PER_FRAME,
         "decode_height": DECODE_HEIGHT,
         "formats": [dict(id=k, **{x: v[x] for x in ("ext", "mime", "alpha", "label")})
                     for k, v in R.FORMATS.items()],
     }
+
+
+@app.get("/api/gc/status")
+def gc_status():
+    """What jobs/ is holding, and what the janitor last did about it.
+
+    The page shows the one number a person cares about -- how much disk this
+    tool is sitting on -- next to the button that hands it back.
+    """
+    return GC.status()
+
+
+@app.post("/api/gc/run")
+def gc_run():
+    """Sweep now. Same policy as the timed run, so the button cannot delete
+    anything the background thread would not have."""
+    rep = GC.run("manual")
+    out = GC.status()
+    out["ran"] = rep
+    return out
 
 
 IMAGE_MAX_SIDE = 4096

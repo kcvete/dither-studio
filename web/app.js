@@ -3866,6 +3866,52 @@ $('#cSeqBg').addEventListener('input', (e) => {
   renderStrip();
 });
 
+/* ===================================================== the storage line
+ * jobs/ is the server's scratch directory: frames, masks and renders for every
+ * clip anyone ever dropped. It swept itself into 5.4 GB in two days before the
+ * janitor existed, so the number is worth showing next to the button that
+ * hands it back. Server engine only -- the browser engine keeps nothing on
+ * disk, and a server too old to advertise `gc` is never asked.
+ */
+const gcSize = (mb) => (mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB'
+                                   : Math.round(mb) + ' MB');
+
+async function paintStorage() {
+  const bar = $('#gcbar');
+  if (E().id === 'browser' || !(S.meta && S.meta.gc)) { bar.hidden = true; return; }
+  try {
+    const g = await E().api('/api/gc/status');
+    $('#gcuse').textContent = `storage: ${gcSize(g.usage_mb)} · ${g.jobs} job`
+      + (g.jobs === 1 ? '' : 's') + (g.over_budget ? ' · over budget' : '');
+    $('#gcbar').title = `jobs/ on ${E().baseUrl || 'this machine'}. `
+      + `Swept every ${g.every_h} h: anything untouched for ${g.max_age_days} days `
+      + `goes, then the oldest until it fits ${gcSize(g.budget_mb)}. `
+      + `Nothing used in the last ${g.keep_hours} h is ever touched, and a `
+      + 'camera recording keeps its original.';
+    bar.hidden = false;
+  } catch (e) {
+    bar.hidden = true;
+  }
+}
+
+$('#bGC').addEventListener('click', async () => {
+  const b = $('#bGC');
+  b.disabled = true; b.textContent = 'sweeping…';
+  try {
+    const g = await E().api('/api/gc/run', { method: 'POST' });
+    const r = g.ran || {};
+    const n = (r.deleted || []).length, t = (r.trimmed || []).length;
+    toast(n || t
+      ? `freed ${gcSize((r.freed_bytes || 0) / 1048576)} · ${n} job`
+        + `${n === 1 ? '' : 's'} deleted${t ? `, ${t} trimmed to the original` : ''}`
+      : 'nothing to clean up yet — everything here is recent');
+  } catch (err) {
+    toast(why(err), true);
+  }
+  await paintStorage();
+  b.disabled = false; b.textContent = 'clean up';
+});
+
 /* ======================================================== the engine chip */
 function paintEngine() {
   const e = E();
@@ -3980,6 +4026,7 @@ async function afterEngine() {
   setMode(S.P.mode);
   buildTargets();
   await checkModels();
+  paintStorage();
 }
 
 /* The ONNX weights are ~130 MB and deliberately not in the repo. Say that

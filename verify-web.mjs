@@ -49,10 +49,11 @@ const CLIP = process.argv[3] || path.join(HERE, 'sample.mp4');
 const ENTRY = process.argv[4] || path.join(HERE, 'docs', 'entry-clip.mp4');
 const STILL = process.argv[5] || CLIP.replace(/\.\w+$/, '.jpg');
 /* A second clip, for the morph that goes from a subject in one clip to a
- * subject in another. Defaults to the tennis job's source; if it is not there
- * the sequence run still does clip -> static shape. */
-const CLIP2 = process.argv[6]
-  || path.join(HERE, 'jobs', '0e22cc3753bc', 'source.mp4');
+ * subject in another. It defaults to the entry clip -- committed, like
+ * sample.mp4, so the sequence run works from a fresh clone. It used to default
+ * to a source file inside jobs/, which stopped existing the moment jobs/ got a
+ * garbage collector: a suite must not depend on the scratch directory. */
+const CLIP2 = process.argv[6] || ENTRY;
 const DOCS = path.join(HERE, 'docs');
 fs.mkdirSync(DOCS, { recursive: true });
 
@@ -65,9 +66,9 @@ const SUBJECT_A = { box: [435, 95, 625, 360], point: [545, 205] };
 const TREE = { box: [150, 1, 206, 430], point: [178, 220], frame: 0 };
 const JOGGER = { box: [10, 256, 98, 452], point: [52, 318], frame: 48 };
 const JOGGER_ENTERS = 38;
-/* the tennis player, in the frame of jobs/0e22cc3753bc/source.mp4 — the box is
- * the one that job's own meta.json recorded */
-const TENNIS = { box: [406, 152, 831, 719], point: [600, 400], frame: 0 };
+/* the near tree trunk on the left of the entry clip: large, unambiguous and
+ * in every frame, which is all the second item in a sequence has to be */
+const SECOND = { box: [55, 0, 300, 450], point: [168, 300], frame: 0 };
 
 const R = {
   base: BASE, clip: CLIP, entryClip: ENTRY, still: STILL,
@@ -1104,7 +1105,7 @@ async function runSequence() {
     await page.click('#bSeqNew');
     check('sequence · "something new" goes back to the studio',
           (await page.evaluate(() => window.DV.view)) === 'studio');
-    r.addB = await trackAndAdd(CLIP2, TENNIS, 3);
+    r.addB = await trackAndAdd(CLIP2, SECOND, 3);
     check('sequence · the second clip went in', /added/.test(r.addB), r.addB);
     r.libraryKept = await page.evaluate(() => window.DV_seq.library().length);
     check('sequence · the library survived loading another clip',
