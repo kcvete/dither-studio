@@ -5102,7 +5102,7 @@ function renderStrip() {
   if (!S.strip.length) {
     const empty = document.createElement('div');
     empty.className = 'seqempty';
-    empty.textContent = 'nothing in the strip yet — add something on the left';
+    empty.textContent = 'nothing here yet — capture something in Studio, or start with a shape (+ ring)';
     wrap.append(empty);
   }
   const frames = S.strip.reduce((a, x) => a + stripLen(x), 0);

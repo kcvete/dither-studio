@@ -173,6 +173,33 @@
         <div class="chips" id="modes"></div>
         <div id="modenote" class="note"></div>
 
+        <!-- The canvas: what shape the export comes out. 'source' is the
+             default and means every line of this is inert. -->
+        <div id="canvasui" hidden>
+          <div class="lbl"><span>Frame</span><span id="vCanvas">source</span></div>
+          <div class="chips seg" id="canvaspresets"></div>
+          <div id="canvascustom" hidden>
+            <div class="mini"><span>width</span>
+              <input type="number" id="cvW" min="16" max="8192" step="2" value="1080"></div>
+            <div class="mini"><span>height</span>
+              <input type="number" id="cvH" min="16" max="8192" step="2" value="1920"></div>
+          </div>
+          <div id="canvasopts" hidden>
+            <div class="lbl"><span>Framing</span><span id="vFraming"></span></div>
+            <div class="chips seg" id="framing">
+              <button class="chip" data-framing="auto" aria-pressed="true">auto</button>
+              <button class="chip" data-framing="follow">follow</button>
+              <button class="chip" data-framing="static">hold still</button>
+            </div>
+            <div class="lbl"><span>Scale</span><span id="vZoom">1.00×</span></div>
+            <input type="range" id="sZoom" min="0.5" max="3" step="0.05" value="1">
+            <div class="chips" style="margin-top:7px">
+              <button class="chip" id="bCanvasCentre">recentre</button>
+            </div>
+          </div>
+          <div class="note" id="canvasnote"></div>
+        </div>
+
         <div id="edui" hidden>
           <div class="lbl"><span>Kernel</span></div>
           <select id="sAlgo"></select>
@@ -243,32 +270,6 @@
           </div>
         </div>
 
-        <!-- The canvas: what shape the export comes out. 'source' is the
-             default and means every line of this is inert. -->
-        <div id="canvasui" hidden>
-          <div class="lbl"><span>Frame</span><span id="vCanvas">source</span></div>
-          <div class="chips seg" id="canvaspresets"></div>
-          <div id="canvascustom" hidden>
-            <div class="mini"><span>width</span>
-              <input type="number" id="cvW" min="16" max="8192" step="2" value="1080"></div>
-            <div class="mini"><span>height</span>
-              <input type="number" id="cvH" min="16" max="8192" step="2" value="1920"></div>
-          </div>
-          <div id="canvasopts" hidden>
-            <div class="lbl"><span>Framing</span><span id="vFraming"></span></div>
-            <div class="chips seg" id="framing">
-              <button class="chip" data-framing="auto" aria-pressed="true">auto</button>
-              <button class="chip" data-framing="follow">follow</button>
-              <button class="chip" data-framing="static">hold still</button>
-            </div>
-            <div class="lbl"><span>Scale</span><span id="vZoom">1.00×</span></div>
-            <input type="range" id="sZoom" min="0.5" max="3" step="0.05" value="1">
-            <div class="chips" style="margin-top:7px">
-              <button class="chip" id="bCanvasCentre">recentre</button>
-            </div>
-          </div>
-          <div class="note" id="canvasnote"></div>
-        </div>
       </div>
     </section>
 
@@ -361,10 +362,11 @@
       <section class="step" id="sq1" data-open="1">
         <div class="sh"><i>1</i><span>Items</span><em id="sq1sum"></em></div>
         <div class="sb">
-          <div class="note">A sequence is a strip of dot clouds with a
-            transition between each pair &mdash; segments of tracked clips,
-            dithered stills, and static shapes. It keeps everything you capture,
-            so one clip can morph into a subject from another.</div>
+          <div class="note"><b>Capture things in Studio, then morph between
+            them here.</b> A sequence is a strip of dot clouds &mdash; tracked
+            clips, dithered stills, static shapes &mdash; with a transition
+            between each pair. The library keeps everything you capture, so one
+            clip can morph into a subject from another.</div>
           <div class="lbl"><span>Add</span><span id="seqsrc"></span></div>
           <div class="chips" id="seqadd"></div>
           <div class="note" id="addnote"></div>
@@ -507,7 +509,7 @@
         <span class="mono" id="rangelbl" hidden></span>
         <button class="chip" id="bRangeAll" hidden title="use every tracked frame again">full clip ↺</button>
         <span class="mono" id="fps">–</span>
-        <button class="chip" id="bCmp" aria-pressed="false">compare</button>
+        <button class="chip" id="bCmp" aria-pressed="false">before / after</button>
       </div>
     </div>
     <div id="coach" hidden></div>
