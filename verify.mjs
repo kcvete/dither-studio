@@ -3,8 +3,12 @@
  *
  *   node verify.mjs [baseURL] [clip.mp4] [still.jpg]
  *
- * Covers the three flows the app offers:
+ * Covers the flows the app offers:
  *   A  still   -> every algorithm -> client-side PNG download
+ *   A2 still   -> whole-image dots -> PNG + a one-frame .dots.gz
+ *   A3 still   -> a clicked subject, segmented on the SERVER in one frame
+ *                 (/api/upload_image + /preview, no propagation) -> cutout,
+ *                 overlay, per-subject palette -> PNG with alpha
  *   B  clip    -> whole-frame dither -> MP4
  *   C  clip    -> two tracked subjects -> dots + a pixel mode -> MP4
  *   D  clip    -> one tracked subject at "fast" tracking quality (512 px)
@@ -53,6 +57,19 @@ function decodeFrameRGBA(file, n, w, h, extraIn) {
      '-pix_fmt', 'rgba', '-f', 'rawvideo', '-']);
   const buf = execFileSync('ffmpeg', args, { maxBuffer: 1 << 28 });
   return { data: buf, w, h };
+}
+
+/* what an exported PNG's alpha channel actually says */
+function pngAlphaCensus(file) {
+  const data = execFileSync('ffmpeg', ['-v', 'error', '-i', file, '-pix_fmt', 'rgba',
+    '-f', 'rawvideo', '-'], { maxBuffer: 1 << 28 });
+  let zero = 0, full = 0;
+  for (let p = 3; p < data.length; p += 4) {
+    if (data[p] < 16) zero++; else if (data[p] > 200) full++;
+  }
+  const px = data.length / 4;
+  return { pixels: px, transparentPct: +(100 * zero / px).toFixed(1),
+           opaquePct: +(100 * full / px).toFixed(1) };
 }
 
 /* colour census of the live preview canvas */
@@ -183,6 +200,152 @@ async function runStill(page) {
       'stream=width,height', '-of', 'csv=p=0', p]).toString().trim();
   }
   await page.screenshot({ path: path.join(DOCS, 'a-export.png') });
+  return r;
+}
+
+/* ------------------------------------ A2: a still, whole-image dots =====
+ * The look this tool started as, applied to a photograph with nothing
+ * selected: one mask covering everything, density from luminance. */
+async function runStillDots(page) {
+  const r = {};
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 20000 });
+  await sleep(700);
+
+  const off = await page.getAttribute('#modes .chip[data-mode="dots"]', 'class');
+  if (/\boff\b/.test(off || '')) throw new Error('dots is still gated off for a still');
+  await setMode(page, 'dots');
+  await sleep(600);
+  r.fps = await page.textContent('#fps');
+  r.dots = +(/· (\d+) dots/.exec(r.fps) || [])[1];
+  if (!(r.dots > 200)) throw new Error('whole-image dots produced ' + r.fps);
+  r.census = await census(page);
+  if (r.census.distinctColours !== 2) {
+    throw new Error('whole-image dots is not two colours: ' + JSON.stringify(r.census));
+  }
+  // the flat-background picker and the dot-data export both belong to a still
+  r.bgUiShown = await page.getAttribute('#bgui', 'hidden') === null;
+  await openStep(page, 'st5');
+  r.dotsExportShown = await page.getAttribute('#dotsexp', 'hidden') === null;
+  if (!r.dotsExportShown) throw new Error('no .dots.gz export offered for a dotted still');
+  await page.screenshot({ path: path.join(DOCS, 'a2-still-dots.png') });
+
+  const [d] = await Promise.all([
+    page.waitForEvent('download', { timeout: 60000 }).catch(() => null),
+    page.click('#bDots'),
+  ]);
+  if (!d) throw new Error('no .dots.gz download');
+  const gz = path.join(DOCS, 'a2-still.dots.gz');
+  await d.saveAs(gz);
+  const bytes = fs.readFileSync(gz);
+  if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) throw new Error('.dots.gz is not gzip');
+  r.dotsBytes = bytes.length;
+  r.dotsInfo = await page.textContent('#rinfo');
+  // decode it with the player's own codec and check it is one frame of dots
+  const P = await import(path.join(HERE, 'web', 'player', 'dither-player.mjs'));
+  const doc = await P.unpack(new Uint8Array(bytes));
+  r.doc = { w: doc.w, h: doc.h, frames: doc.frames.length,
+            dots: doc.frames[0].reduce((a, x) => a + (x.length >> 1), 0),
+            palette: doc.palette, bg: doc.bg };
+  if (doc.frames.length !== 1) throw new Error('a still is not one frame: ' + doc.frames.length);
+  if (Math.abs(r.doc.dots - r.dots) > 0) {
+    throw new Error(`the file has ${r.doc.dots} dots, the preview showed ${r.dots}`);
+  }
+
+  await page.click('#bExport');
+  r.export = await waitText(page, '#rinfo', /PNG|failed/, 60000);
+  if (/failed/.test(r.export)) throw new Error(r.export);
+  return r;
+}
+
+/* --------------------- A3: a still, a subject, cut out on the server =====
+ * /api/upload_image once, then one /preview per click. No propagation, no
+ * Track button: the mask is re-cut live and the picture follows it. */
+async function runStillSubject(page) {
+  const r = {};
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 20000 });
+  await sleep(700);
+  await openStep(page, 'st2');
+  r.scopeLabels = await page.$$eval('#scope .chip', (n) => n.map((e) => e.textContent));
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(600);
+  r.promptFrameHidden = await page.getAttribute('#pfui', 'hidden') !== null;
+  r.trackButton = await page.textContent('#bTrack');
+
+  const t0 = Date.now();
+  await prompt(page, SUBJECT_A);                      // box, then a click
+  r.info = await waitText(page, '#pvinfo', /subject|failed/, 60000);
+  if (/failed/.test(r.info)) throw new Error(r.info);
+  r.liveSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+  r.segmentSeconds = +(/in ([\d.]+) s/.exec(r.info) || [])[1];
+  r.areas = await page.evaluate(() => window.DV_still.areas());
+  const area = r.areas[Object.keys(r.areas)[0]];
+  if (!(area > 5000 && area < 60000)) {
+    throw new Error('the subject mask is ' + area + ' px, which is not a person');
+  }
+  await page.screenshot({ path: path.join(DOCS, 'a3-still-prompt.png') });
+
+  await page.click('#bTrack');                        // "use this selection"
+  await sleep(800);
+  r.targets = await page.$$eval('#target .chip', (n) => n.map((e) => e.textContent));
+  if (r.targets.length !== 2) throw new Error('no per-subject palette: ' + r.targets);
+
+  // cutout, a pixel mode
+  await setMode(page, 'bluenoise');
+  await sleep(500);
+  r.cutout = await census(page);
+  await page.screenshot({ path: path.join(DOCS, 'a3-still-cutout.png') });
+  // overlay: the photograph is kept and the subject is dithered into it
+  await openStep(page, 'st3');
+  await page.click('#compose .chip[data-compose="overlay"]');
+  await sleep(600);
+  r.overlay = await census(page);
+  if (r.overlay.distinctColours <= r.cutout.distinctColours) {
+    throw new Error('overlay is not keeping the scene: '
+      + JSON.stringify([r.cutout, r.overlay]));
+  }
+  await page.screenshot({ path: path.join(DOCS, 'a3-still-overlay.png') });
+  await page.click('#compose .chip[data-compose="cutout"]');
+  await sleep(500);
+  // dots on the subject alone
+  await setMode(page, 'dots');
+  await sleep(700);
+  r.dotsFps = await page.textContent('#fps');
+  r.subjectDots = +(/· (\d+) dots/.exec(r.dotsFps) || [])[1];
+  if (!(r.subjectDots > 50)) throw new Error('no dots on the subject: ' + r.dotsFps);
+
+  // the transparent PNG
+  await openStep(page, 'st5');
+  r.alphaUiShown = await page.getAttribute('#pngalpha', 'hidden') === null;
+  if (!r.alphaUiShown) throw new Error('no transparent-background switch offered');
+  await page.check('#cAlpha');
+  await page.click('#bExport');
+  r.export = await waitText(page, '#rinfo', /PNG|failed/, 60000);
+  if (/failed/.test(r.export)) throw new Error(r.export);
+  const [d] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }).catch(() => null),
+    page.click('#dl'),
+  ]);
+  if (!d) throw new Error('no PNG download');
+  const out = path.join(DOCS, 'a3-still-cutout-alpha.png');
+  await d.saveAs(out);
+  r.pngBytes = fs.statSync(out).size;
+  r.pngProbe = execFileSync('ffprobe', ['-v', 'error', '-show_entries',
+    'stream=width,height,pix_fmt', '-of', 'csv=p=0', out]).toString().trim();
+  r.alpha = pngAlphaCensus(out);
+  if (!/rgba/.test(r.pngProbe)) throw new Error('the PNG has no alpha: ' + r.pngProbe);
+  if (r.alpha.transparentPct < 80) {
+    throw new Error('the cutout PNG is not transparent: ' + JSON.stringify(r.alpha));
+  }
+  if (r.alpha.opaquePct < 0.1) {
+    throw new Error('the cutout PNG has nothing in it: ' + JSON.stringify(r.alpha));
+  }
+  await page.screenshot({ path: path.join(DOCS, 'a3-still-export.png') });
   return r;
 }
 
@@ -694,6 +857,8 @@ page.on('requestfailed', (rq) => {
 
 try {
   R.runs.still = await runStill(page);
+  R.runs.stillDots = await runStillDots(page);
+  R.runs.stillSubject = await runStillSubject(page);
   R.runs.whole = await runWhole(page);
   R.runs.tracked = await runTracked(page);
   R.runs.trackedFast = await runTrackedFast(page);

@@ -12,6 +12,9 @@
  * Flows:
  *   W0  the engine chip: what auto picked, and switching by hand
  *   W1  browser · a still through several algorithms -> PNG download
+ *   W1a browser · a still, whole-image dots -> a one-frame .dots.gz
+ *   W1b browser + server · a still, a clicked subject segmented in ONE frame
+ *       (no propagation) -> cutout PNG with a transparent background
  *   W2  browser · a clip, whole frame -> WebM
  *   W3  browser · a clip, one tracked subject, frame-0 preview -> dots -> WebM
  *   W4  browser · a polygon mask prompt (the heads_mask graph) -> tracked
@@ -348,6 +351,151 @@ async function runStill() {
   check('still exports a PNG', !/failed/.test(r.export), r.export);
   r.bytes = await saveDownload(page, path.join(DOCS, 'w-still-export.png'));
   r.probe = probe(path.join(DOCS, 'w-still-export.png'));
+  await ctx.close();
+  return r;
+}
+
+/* ================================ W1a: a still, dotted whole-image, in-tab */
+async function runStillDots() {
+  const r = {};
+  const { ctx, page } = await newPage(browserPref());
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 30000 });
+  await sleep(700);
+  const cls = await page.getAttribute('#modes .chip[data-mode="dots"]', 'class');
+  check('still · dots is offered without a subject', !/\boff\b/.test(cls || ''), cls);
+  await setMode(page, 'dots');
+  await sleep(500);
+  r.fps = await page.textContent('#fps');
+  r.dots = +(/· (\d+) dots/.exec(r.fps) || [])[1];
+  check('still · whole-image dots are drawn', r.dots > 200, r.fps);
+  r.census = await census(page);
+  check('still · dots are two colours', r.census.distinctColours === 2,
+        JSON.stringify(r.census));
+  await page.screenshot({ path: path.join(DOCS, 'w-still-dots.png') });
+
+  await openStep(page, 'st5');
+  check('still · the .dots.gz export is offered',
+        await page.getAttribute('#dotsexp', 'hidden') === null);
+  const gz = path.join(DOCS, 'w-still-dots-export.dots.gz');
+  const [d] = await Promise.all([
+    page.waitForEvent('download', { timeout: 60000 }).catch(() => null),
+    page.click('#bDots'),
+  ]);
+  check('still · a .dots.gz downloads', !!d);
+  await d.saveAs(gz);
+  const bytes = fs.readFileSync(gz);
+  check('still · it is gzip', bytes[0] === 0x1f && bytes[1] === 0x8b);
+  r.dotsBytes = bytes.length;
+  const P = await import(path.join(HERE, 'web', 'player', 'dither-player.mjs'));
+  const doc = await P.unpack(new Uint8Array(bytes));
+  r.doc = { w: doc.w, h: doc.h, frames: doc.frames.length, fps: doc.fps,
+            dots: doc.frames[0].reduce((a, x) => a + (x.length >> 1), 0) };
+  check('still · the dot file is one frame', doc.frames.length === 1,
+        String(doc.frames.length));
+  check('still · the file has the dots the preview showed',
+        r.doc.dots === r.dots, `${r.doc.dots} != ${r.dots}`);
+  await ctx.close();
+  return r;
+}
+
+/* ========== W1b: a still, one clicked subject, single-image segmentation ====
+ * Both engines. In the tab this is encoder + heads_prompt on one frame; on the
+ * server it is /api/upload_image and then a one-frame /preview. Neither
+ * propagates anything, so the mask is live: it is re-cut on every click. */
+async function runStillSubject(engineId) {
+  const r = { engine: engineId };
+  const pref = engineId === 'browser' ? browserPref() : { mode: 'local', url: '', key: '' };
+  const { ctx, page } = await newPage(pref);
+  check(`${engineId} · still-subject run is on the right engine`,
+        (await page.evaluate(() => window.DV_engine())).id
+          === (engineId === 'browser' ? 'browser' : 'remote'));
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 30000 });
+  await sleep(600);
+  await openStep(page, 'st2');
+  r.scopeLabels = await page.$$eval('#scope .chip', (n) => n.map((e) => e.textContent));
+  check(`${engineId} · step 2 reads as a still`,
+        r.scopeLabels.join('/') === 'whole image/select subjects',
+        r.scopeLabels.join('/'));
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(700);
+  check(`${engineId} · no prompt-frame slider on a photograph`,
+        await page.getAttribute('#pfui', 'hidden') !== null);
+  r.button = await page.textContent('#bTrack');
+  check(`${engineId} · no Track button on a photograph`,
+        /use this selection/i.test(r.button), r.button);
+
+  const t0 = Date.now();
+  await promptBoxPoint(page, SUBJECT_A);
+  r.info = await waitText(page, '#pvinfo', /subject|failed/, 300000);
+  check(`${engineId} · the subject segments`, !/failed/.test(r.info), r.info);
+  r.firstSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+  r.segmentSeconds = +(/in ([\d.]+) s/.exec(r.info) || [])[1];
+  r.areas = await page.evaluate(() => window.DV_still.areas());
+  r.area = r.areas[Object.keys(r.areas)[0]];
+  check(`${engineId} · the mask is a person-sized region`,
+        r.area > 5000 && r.area < 60000, String(r.area));
+  await page.screenshot({ path: path.join(DOCS, `w-still-prompt-${engineId}.png`) });
+
+  // a second click must re-cut the mask live, with no button pressed
+  const t1 = Date.now();
+  const [nx, ny] = await stageXY(page, SUBJECT_A.point[0], SUBJECT_A.point[1] + 60);
+  await page.mouse.click(nx, ny);
+  await waitText(page, '#pvinfo', /subject/, 120000);
+  r.liveSeconds = +((Date.now() - t1) / 1000).toFixed(1);
+  r.areaAfterSecondClick = (await page.evaluate(() => window.DV_still.areas()))[
+    Object.keys(r.areas)[0]];
+  check(`${engineId} · the second click re-cut the mask without a button`,
+        r.areaAfterSecondClick > 3000, String(r.areaAfterSecondClick));
+
+  await page.click('#bTrack');
+  await sleep(700);
+  r.targets = await page.$$eval('#target .chip', (n) => n.map((e) => e.textContent));
+  check(`${engineId} · the subject gets its own palette`,
+        r.targets.length === 2, r.targets.join('/'));
+
+  await setMode(page, 'bluenoise');
+  await sleep(500);
+  r.cutout = await census(page);
+  check(`${engineId} · a cutout still is flat background + a dithered subject`,
+        r.cutout.distinctColours >= 2 && r.cutout.distinctColours <= 4,
+        JSON.stringify(r.cutout));
+  await page.screenshot({ path: path.join(DOCS, `w-still-cutout-${engineId}.png`) });
+
+  await openStep(page, 'st3');
+  await page.click('#compose .chip[data-compose="overlay"]');
+  await sleep(600);
+  r.overlay = await census(page);
+  check(`${engineId} · overlay keeps the photograph`,
+        r.overlay.distinctColours > r.cutout.distinctColours,
+        JSON.stringify([r.cutout, r.overlay]));
+  await page.click('#compose .chip[data-compose="cutout"]');
+  await sleep(400);
+  await setMode(page, 'dots');
+  await sleep(600);
+  r.dotsFps = await page.textContent('#fps');
+  r.subjectDots = +(/· (\d+) dots/.exec(r.dotsFps) || [])[1];
+  check(`${engineId} · the subject alone becomes dots`, r.subjectDots > 50, r.dotsFps);
+
+  await openStep(page, 'st5');
+  check(`${engineId} · the transparent-background switch is offered`,
+        await page.getAttribute('#pngalpha', 'hidden') === null);
+  await page.check('#cAlpha');
+  await page.click('#bExport');
+  r.export = await waitText(page, '#rinfo', /PNG|failed/, 120000);
+  check(`${engineId} · the cutout PNG exports`, !/failed/.test(r.export), r.export);
+  const out = path.join(DOCS, `w-still-cutout-${engineId}-export.png`);
+  r.bytes = await saveDownload(page, out);
+  r.probe = probe(out);
+  check(`${engineId} · the PNG carries an alpha channel`,
+        /rgba/.test(r.probe.pix_fmt || ''), JSON.stringify(r.probe));
+  r.alpha = alphaCensus(out, 0);
+  check(`${engineId} · the background really is transparent`,
+        r.alpha.transparentPct > 80, JSON.stringify(r.alpha));
+  check(`${engineId} · the subject really is opaque`,
+        r.alpha.opaquePct > 0.1, JSON.stringify(r.alpha));
+  await page.screenshot({ path: path.join(DOCS, `w-still-export-${engineId}.png`) });
   await ctx.close();
   return r;
 }
@@ -1068,6 +1216,9 @@ console.error('[verify-web] ' + BR.how + ' · EP ' + BR.ep);
 try {
   R.runs.engineChip = await runEngineChip();
   R.runs.still = await runStill();
+  R.runs.stillDots = await runStillDots();
+  R.runs.stillSubjectBrowser = await runStillSubject('browser');
+  R.runs.stillSubjectRemote = await runStillSubject('remote');
   R.runs.whole = await runWhole();
   R.runs.tracked = await runTracked();
   R.runs.lasso = await runLasso();

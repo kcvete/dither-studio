@@ -10,10 +10,13 @@ so every new asset came out of the same machine instead of somebody's hand. A
 brand system needs that. So does anyone who wants more than one image.
 
 Dither Studio is that tool, in the open, and it goes one step further: it does
-**video**, and it can dither **one thing in the video**. Point at a person and
-EdgeTAM follows them for the whole clip — they turn into dots and the background
-stays where it is, or the other way round. Drop a still and it is a still
-ditherer with fourteen error-diffusion kernels and eighteen palettes.
+**video**, and it can dither **one thing** in it. Point at a person and EdgeTAM
+follows them for the whole clip — they turn into dots and the background stays
+where it is, or the other way round. Point at a person in a **photograph** and
+the same model cuts them out on the spot, in about a tenth of a second, with no
+propagation and no button: the outline is re-cut after every click. Drop a still
+and take it no further and it is a still ditherer with fourteen error-diffusion
+kernels and eighteen palettes.
 
 ![tracked subjects, per-subject palettes](docs/c-mixed.png)
 
@@ -113,6 +116,7 @@ verify.mjs      headless end-to-end check, server engine
 verify-web.mjs  headless end-to-end check, browser engine + the engine seam
 env/            venv, EdgeTAM checkout, checkpoint, libcdither, CoreML  (ignored)
 jobs/<id>/      source, frames/, masks/<obj>/, out.mp4                  (ignored)
+                a still is the same thing with one frame in it and no source
 docs/           verification screenshots, reports, the tracking test clip
 ```
 
@@ -179,10 +183,47 @@ duration in its header until it has been seeked past its end, so both the
 filmstrip and the browser decoder ask for it that way before deciding how many
 frames there are.
 
-### 2 · Subjects — clips only
-Two choices:
+### 2 · Subjects
+Two choices, and they read differently depending on what you dropped:
 
-* **whole clip** — every pixel of every frame gets dithered.
+* **whole image / whole clip** — every pixel gets dithered. This is the default
+  and the step can be skipped entirely.
+* **select subjects / track subjects** — prompt what you care about.
+
+#### A photograph: selected, not tracked
+
+A still has one frame, so there is nothing to propagate through. Selecting a
+subject in it is exactly the conditioning step the clip flow runs on frame 0,
+with nothing after it: one image encode and the SAM heads, **~0.1 s**. That is
+fast enough that there is no Track button and no progress bar — the mask is
+re-cut after every click, box or drawn shape, and the tinted outline on the
+photograph follows it live.
+
+![selecting a subject in a photograph](docs/a3-still-prompt.png)
+
+Everything else is the clip flow's, unchanged: the same *point / box*, *lasso*
+and *polygon* tools, shift for a negative prompt, up to **six subjects**, one
+palette each. What runs it:
+
+| | how the still is segmented |
+|---|---|
+| **browser** | the photograph becomes a clip of one frame; `encoder` → `heads_prompt` (or `heads_mask` for a drawn shape). Nothing is uploaded. |
+| **server** | `POST /api/upload_image` once — a job whose `n_frames` is 1 — then one `POST /api/jobs/<id>/preview` per click. The picture goes up once; the clicks do not re-upload it. |
+
+The page sends the picture already scaled to the size it prompts at (longest
+edge 1600), so clicks, masks and the overlay share one coordinate space on both
+engines. The PNG still exports at the file's own resolution.
+
+Then step 3 gets the split a tracked clip gets — **flat** background or **keep
+scene** — and step 5 gets a *transparent background* checkbox.
+
+| | |
+|---|---|
+| ![cutout](docs/a3-still-cutout.png) | ![overlay](docs/a3-still-overlay.png) |
+| **flat** — the subject dithered on a flat colour, everything else gone | **keep scene** — the photograph kept, the subject dithered into it |
+
+#### A clip: tracked
+
 * **track subjects** — scrub to any frame and prompt what you care about:
   click = keep this, shift-click = not this, drag = a box. `+ add subject` for
   another object (up to 6), each with its own palette. Press **Track** and
@@ -247,21 +288,64 @@ every frame, so dots stay put and only switch on and off as tone changes. Error
 diffusion recomputes a chaotic error field per frame, so it boils. Both are
 offered; the chip carries a `≈` marker on video so you know which you picked.
 
+**Dots needs something to measure density inside.** On a clip that has to be a
+tracked subject — there is nothing to hold the dots still against otherwise, and
+the chip stays greyed until you have one. **On a still it does not**: with no
+subject selected the whole picture is the mask and density comes straight from
+luminance, which is what this renderer was written for in the first place. With
+a subject selected, only the subject becomes dots.
+
+![whole-image dots on a photograph](docs/a2-still-dots.png)
+
+Choosing dots on a still with nothing selected adjusts two defaults once, and
+then leaves both sliders alone:
+
+* the **palette** becomes the pairing a subject would get (sage / red), because
+  black-and-white is right for a dither that covers every pixel and wrong for
+  dots, which paint *on* a background — white dots on the default sage are
+  invisible;
+* the **dot count** is aimed at 55 % of the cells rather than the subject-sized
+  8,000. A 720p frame at cell 4 is 57,600 cells, and 8,000 of them lit is a
+  scatter with no picture in it; the tree and the wall only come out of the noise
+  somewhere north of half.
+
+One thing to know: the dots grid is measured in **output pixels**, exactly as
+*pixel size* is. The preview runs at up to 1600 px on the long edge and the PNG
+at the file's own resolution, so a picture bigger than that exports a finer grid
+than the preview draws. Every camera photo and most uploads are at or under
+1600 px, where preview and export are the same picture.
+
 Also here: dither strength, pixel size (chunky-pixel scale, box-downsample then
 nearest-upscale), brightness / contrast / gamma / invert, and **reseed** for a
-new noise field. For tracked clips, *background* chooses between a flat colour
-and the dithered scene.
+new noise field. *Background* — flat colour or the dithered scene — appears
+wherever part of the picture is left alone: a tracked clip, a selected subject,
+or the dots look on a still.
 
 ### 4 · Palette
 18 presets — Black & White, Sage, Forest, Ember, Mist, Game Boy DMG, four
 monochromes, CMYK, RGBY, Black White Red, Purple & Green, Blue & Yellow,
 Commodore 64, 4 Greys, 8 Greys — plus **from image** (median-cut extraction from
-the current frame) and a free colour editor. With tracked subjects you get one
-palette per subject *plus* one for the background.
+the current frame) and a free colour editor. With subjects — tracked in a clip
+or selected in a photograph — you get one palette per subject *plus* one for the
+background.
 
 ### 5 · Export
 Stills render at full source resolution in the tab and download as PNG, on both
-engines. Clips get a **format** select, and what is in it depends on the engine.
+engines — the masks are resampled up, so a subject selected at 1600 px comes out
+at the file's own size.
+
+Two things come with the still flow:
+
+* **transparent background** — one checkbox, offered whenever the picture has a
+  flat background to remove (a cutout with a subject, or the dots look). The PNG
+  is written RGBA with the background at alpha 0 and only the subject or the dots
+  opaque. Measured on the reference photograph: **99.3 % transparent, 0.7 %
+  opaque**, ffprobe `rgba`.
+* **.dots.gz** — the same dot-position file a clip writes, with `n_frames` = 1.
+  The player shows it as a static frame. It is offered whenever the dots look is
+  on a still, subject or no subject.
+
+Clips get a **format** select, and what is in it depends on the engine.
 
 | Format | id | browser | server | notes |
 |---|---|---|---|---|
@@ -451,8 +535,13 @@ The browser preview is not an approximation of the export — it is the same
 algorithm. `server/parity.py` runs 110 cases (every mode, all 14 kernels with
 serpentine on and off, three palettes, the tone controls) through the Python and
 the JavaScript implementations and requires **byte-identical** output, then
-repeats the whole set through a subject mask. The browser engine's export uses
-the same `dither.js` the preview does, so it is identical by construction.
+repeats the whole set through a subject mask. A second gate takes the finished
+*picture* rather than the kernel — 15 cases of `render._frame_pixels` against
+`composeFrame`: whole frames and masked ones, two subjects with a palette each,
+cutout and overlay, chunky pixels, and the transparent variant the alpha exports
+use. That is the code path a still cutout PNG goes down. The browser engine's
+export uses the same `dither.js` the preview does, so it is identical by
+construction.
 
 Getting there needed three fixes worth remembering, because each produced
 *visible* pixel differences that error diffusion then amplified:
@@ -579,8 +668,8 @@ What you would actually have to do:
   torch path, so that is the right backend there. The `_gpu_lock` in `server.py`
   serialises one track at a time per process — run one process per GPU behind
   the proxy rather than trying to share.
-* **Jobs are never garbage collected.** ~13 MB per 150-frame clip, and they hold
-  the customer's frames. A hosted deployment needs a reaper and a retention
+* **Jobs are never garbage collected.** ~13 MB per 150-frame clip (a still job is
+  one JPEG), and they hold the customer's frames. A hosted deployment needs a reaper and a retention
   policy before it needs a payment form.
 * **Metering.** Count tracked frames, not requests: `POST /track` returns
   immediately and the work is in the worker. `GET /status` already reports
@@ -601,28 +690,45 @@ node verify-web.mjs http://127.0.0.1:8765 clip.mp4 docs/entry-clip.mp4 still.jpg
 env/venv/bin/python server/parity.py && GATE=1 env/venv/bin/python server/parity.py
 ```
 
-`verify.mjs` drives the **server engine** through five flows: a still through
-every algorithm, a whole-frame clip, two tracked subjects, one subject at a
-non-default tracking quality, and a polygon mask prompt with a frame preview.
+`verify.mjs` drives the **server engine**: a still through every algorithm, a
+still dotted whole-image down to a one-frame `.dots.gz`, a still with a clicked
+subject segmented in one frame and exported as a transparent PNG, a whole-frame
+clip, two tracked subjects, one subject at a non-default tracking quality, and a
+polygon mask prompt with a frame preview.
 
 `verify-web.mjs` drives the **browser engine** and the seam between the two: the
-auto probe and the manual switch, a still, a whole-frame clip, a tracked subject,
-a polygon through the `heads_mask` graph, two subjects prompted on two different
-frames — and the same two-frame test on the server engine, so the feature is
-checked on both. It also starts a second server with `DV_API_KEY` set and checks
+auto probe and the manual switch, a still, whole-image dots on a still, a still
+subject **on both engines**, a whole-frame clip, a tracked subject, a polygon
+through the `heads_mask` graph, two subjects prompted on two different frames —
+and the same two-frame test on the server engine, so the feature is checked on
+both. It also starts a second server with `DV_API_KEY` set and checks
 401 / 401 / 200. It picks a browser rather than assuming one: headless Chromium
 with the WebGPU flags, then `channel:'chrome'`, then the WASM backend over a
 shorter clip with the report saying so.
+
+`parity.py` runs two gates. The **kernel gate** is the 110 cases: every mode, all
+14 error-diffusion kernels with serpentine on and off, three palettes and the
+tone controls, `dither_rgb` against `ditherRGBA`, byte for byte —
+`GATE=1` repeats the whole set through a subject mask. The **compose gate** is
+the picture rather than the kernel: whole frames and *masked* ones, two subjects
+with a palette each, cutout and overlay, chunky pixels, and the transparent
+variant — `render._frame_pixels` against `composeFrame`. That second gate is the
+still cutout PNG's own code path.
 
 Latest run (M4 Pro, 24 GB, macOS 26.1, torch 2.13 / MPS + CoreML; headless
 Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 
 | | result |
 |---|---|
-| engine parity | **110/110 byte-identical**, and 110/110 again through a mask |
-| `verify.mjs` | 5 flows, **0 console errors** |
-| `verify-web.mjs` | 8 flows, **57/57 assertions**, **0 console errors** |
+| engine parity, kernels | **110/110 byte-identical**, and 110/110 again through a mask |
+| engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
+| `verify.mjs` | 10 flows, **0 console errors** |
+| `verify-web.mjs` | 16 flows, **160/160 assertions**, **0 console errors** |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
+| still: subject, server | one frame, **0.07 s** at 768 px, a 12,750 px mask, no propagation |
+| still: subject, browser | one frame, **0.08 s** at 768 px, a 12,850 px mask, WebGPU fp16 |
+| still: cutout PNG, alpha | 1280×720 `rgba` on both engines · **99.3 % / 99.4 % transparent**, 0.7 % / 0.6 % opaque, ffprobed |
+| still: whole-image dots | **31,500 dots**, and a one-frame `.dots.gz` whose positions the player replays |
 | browser: clip decode | 150 frames in **4.9 s**, in the tab |
 | browser: frame-0 preview | **0.14 s** once the graphs are warm (1.6 s including the load) |
 | browser: track | 150/150 frames in 13.0 s (**11.5 fps**), WebGPU fp16 |

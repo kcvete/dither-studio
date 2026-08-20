@@ -2,7 +2,8 @@
 
 This directory is the whole product. Copy it to any static host and it works:
 drop a still and dither it, drop a clip and dither every frame, or point at
-something in a clip and have EdgeTAM follow it while only that gets dithered.
+something and have only that dithered — cut out of a photograph on the spot,
+followed by EdgeTAM through a clip.
 There is no build step, no bundler, no framework and nothing is fetched from a
 CDN at run time.
 
@@ -149,7 +150,8 @@ in the tab. The chip in the header names the winner and switches it by hand:
 | multiple subjects | one pass each, so N subjects cost N x | one batched propagate pass |
 | video export | WebM (VP9) via MediaRecorder | H.264 MP4 via ffmpeg |
 | frames | never leave the tab | uploaded, decoded to JPEG under `jobs/` |
-| still export | PNG, in the tab | PNG, in the tab |
+| still export | PNG (RGBA when you ask for a transparent background), in the tab | the same, in the tab |
+| subject in a still | one frame through `encoder` + `heads_prompt`, nothing uploaded | `POST /api/upload_image`, then one `/preview` per click |
 
 The WebM trade-off is the one worth knowing about. Writing H.264 in the tab
 would mean shipping an encoder, and ffmpeg.wasm is ~32 MB that would have to be
