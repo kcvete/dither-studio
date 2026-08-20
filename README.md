@@ -409,14 +409,15 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | `verify-web.mjs` | 8 flows, **56/56 assertions**, **0 console errors** |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
 | browser: clip decode | 150 frames in **4.9 s**, in the tab |
-| browser: frame-0 preview | **0.14 s** (box), **0.13 s** (27-point polygon) |
-| browser: track | 150/150 frames in 12.2 s (**12.3 fps**), WebGPU fp16 |
+| browser: frame-0 preview | **0.14 s** once the graphs are warm (1.6 s including the load) |
+| browser: track | 150/150 frames in 13.0 s (**11.5 fps**), WebGPU fp16 |
 | browser: mask prompt | tracked from a polygon alone, non-empty on 150/150 frames |
-| browser: dots preview | 42.0 fps · 774 dots |
-| browser: export | 150 frames of VP9 WebM in 5.1 s, 1280×720, ffprobed |
-| server: track, 2 subjects | 150/150 in 16.0 s (**9.4 fps**) end to end |
+| browser: dots preview | 49.5 fps · 774 dots |
+| browser: export | 150 frames of VP9 WebM in 5.3 s, 1280×720, ffprobed |
+| server: track, 2 subjects | 150/150 in 14.0 s (**10.7 fps**) end to end, CoreML |
+| server: track, 1 subject @ 512 px | 150/150 in 10.4 s (**14.4 fps**), masks still 1280×720 |
 | server: track from a polygon | mask-prompt vs box-prompt IoU **0.978 mean / 0.928 worst** |
-| server: export | 150 frames of H.264 in 10.4 s, ffprobed |
+| server: export | 150 frames of H.264 in 10.3 s, ffprobed |
 | preview vs exported MP4 | **97.8 %** of pixels within 30 RGB units |
 | `DV_API_KEY` | bare 401 · wrong key 401 · right key 200 · the page still 200 |
 
@@ -438,6 +439,9 @@ prompted on frame 48, ten frames after she appears.
 | server engine | non-empty on **149/149** frames | empty 0–37, **first mask on frame 38** |
 | browser engine | non-empty on **149/149** frames | empty 0–38, **first mask on frame 39** |
 
+Two subjects over 149 frames took **16.1 s** on the server and **29.5 s** in the
+browser, which is the one-pass-per-subject cost showing up.
+
 Neither was told when she arrives. The server finds frame 38 because SAM2's
 `max_cond_frames_in_attn` is -1, so a conditioning frame in the *future*
 participates in the memory attention from frame 0 onwards and the object score
@@ -445,8 +449,9 @@ simply stays negative until she is there. The browser gets to the same place fro
 the other direction, tracking her backwards out of frame 48 until she leaves.
 One frame apart, from entirely separate code.
 
-The renderer follows: at frame 10 the dot count is the tree's alone, and it jumps
-when she enters. Dots pop rather than fade, which is what a threshold field does
+The renderer follows: at frame 10 the dot count is the tree's alone — **1346**,
+with not one stray dot where she will be — and at frame 100 it is **1787**, the
+tree plus her. Dots pop rather than fade, which is what a threshold field does
 and what the aesthetic wants.
 
 ![frame 10, before she arrives](docs/w-entry-f10-remote.png)

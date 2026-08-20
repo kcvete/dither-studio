@@ -6,19 +6,19 @@
  "pageErrors": [],
  "requestFailures": [
   {
-   "url": "http://127.0.0.1:8790/api/jobs/4f79b4f835d9/out.mp4?t=1787206332630",
+   "url": "http://127.0.0.1:8790/api/jobs/a2d23b734497/out.mp4?t=1787207238016",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8790/api/jobs/2bfdd7601c43/out.mp4?t=1787206359723",
+   "url": "http://127.0.0.1:8790/api/jobs/20051f4e807b/out.mp4?t=1787207262460",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8790/api/jobs/2bfdd7601c43/out.mp4?t=1787206378140",
+   "url": "http://127.0.0.1:8790/api/jobs/20051f4e807b/out.mp4?t=1787207280787",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8790/api/jobs/2bfdd7601c43/out.mp4?t=1787206378140",
+   "url": "http://127.0.0.1:8790/api/jobs/20051f4e807b/out.mp4?t=1787207280787",
    "why": "net::ERR_ABORTED"
   }
  ],
@@ -184,7 +184,7 @@
   },
   "whole": {
    "source": "150 frames · 1280×720 · 30 fps",
-   "job": "4f79b4f835d9",
+   "job": "a2d23b734497",
    "preview": {
     "w": 1280,
     "h": 720,
@@ -208,7 +208,7 @@
      ]
     ]
    },
-   "previewFps": "57.8 fps",
+   "previewFps": "57.1 fps",
    "previewFrame20": {
     "w": 1280,
     "h": 720,
@@ -232,7 +232,7 @@
      ]
     ]
    },
-   "render": "rendered 150 frames in 10.4 s (14.5 fps)",
+   "render": "rendered 150 frames in 10.3 s (14.5 fps)",
    "ffprobe": {
     "width": 1280,
     "height": 720,
@@ -241,7 +241,7 @@
    }
   },
   "tracked": {
-   "job": "2bfdd7601c43",
+   "job": "20051f4e807b",
    "subjectChips": [
     "#1 · 1pt+box @ 0✕",
     "#2 · 1pt+box @ 0✕"
@@ -264,17 +264,17 @@
     }
    ],
    "qualityDefault": 768,
-   "trackInfo": "tracked 150 frames in 16.0 s (9.4 fps) on MPS torch-compiled · 2 subjects",
-   "trackWallSeconds": 16.6,
+   "trackInfo": "tracked 150 frames in 14.0 s (10.7 fps) on MPS coreml · 2 subjects",
+   "trackWallSeconds": 14.1,
    "status": {
     "state": "done",
     "done_frames": 150,
     "n_frames": 150,
-    "elapsed_s": 15.96,
-    "fps": 9.4,
+    "elapsed_s": 13.98,
+    "fps": 10.73,
     "error": null,
     "device": "mps",
-    "backend": "torch-compiled",
+    "backend": "coreml",
     "precision": "fp16",
     "image_size": 768,
     "objects": [
@@ -294,7 +294,7 @@
      "error": null
     }
    },
-   "backend": "torch-compiled",
+   "backend": "coreml",
    "trackImageSize": 768,
    "dotsPreview": {
     "w": 1280,
@@ -303,11 +303,11 @@
     "top": [
      [
       "#c9d4c5",
-      888051
+      888029
      ],
      [
       "#2f4f4a",
-      26982
+      27004
      ],
      [
       "#b0413e",
@@ -315,8 +315,8 @@
      ]
     ]
    },
-   "dotsFps": "43.7 fps · 3986 dots",
-   "dotsRender": "rendered 150 frames in 3.9 s (38.4 fps)",
+   "dotsFps": "39.7 fps · 3989 dots",
+   "dotsRender": "rendered 150 frames in 3.8 s (39.3 fps)",
    "dotsProbe": {
     "width": 1280,
     "height": 720,
@@ -335,19 +335,19 @@
     "top": [
      [
       "#919191",
-      374526
+      374548
      ],
      [
       "#b6b6b6",
-      160278
+      160294
      ],
      [
       "#484848",
-      137519
+      137520
      ],
      [
       "#6d6d6d",
-      106221
+      106230
      ],
      [
       "#242424",
@@ -355,15 +355,15 @@
      ],
      [
       "#001a05",
-      46957
+      46948
      ],
      [
       "#dadada",
-      18044
+      18058
      ],
      [
       "#2dff6a",
-      15844
+      15784
      ]
     ]
    },
@@ -376,20 +376,20 @@
    },
    "previewVsExport": {
     "pixels": 921600,
-    "within30": 901218,
-    "pct": 97.79
+    "within30": 900957,
+    "pct": 97.76
    }
   },
   "trackedFast": {
-   "job": "92f81d234495",
+   "job": "c1ab38836f1d",
    "selected": 512,
-   "trackInfo": "tracked 150 frames in 26.5 s (5.7 fps) on MPS torch-compiled · 1 subject",
-   "trackWallSeconds": 27.1,
+   "trackInfo": "tracked 150 frames in 10.4 s (14.4 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 11.1,
    "imageSize": 512,
-   "backend": "torch-compiled",
+   "backend": "coreml",
    "doneFrames": 150,
-   "fps": 5.66,
-   "maskBytes": 7214,
+   "fps": 14.38,
+   "maskBytes": 7260,
    "maskSize": [
     1280,
     720
@@ -415,21 +415,21 @@
    }
   },
   "lasso": {
-   "job": "f2fdd6d3abfd",
-   "boxPreviewText": "frame 0 · 1 subject in 0.14 s (768 px) · #1 12766 px",
+   "job": "f9ab99ace330",
+   "boxPreviewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12767 px",
    "boxPreviewWallSeconds": 0.53,
    "boxPreviewOverlay": 1,
    "shapes": [
     27
    ],
    "maskDataURLBytes": 36138,
-   "lassoPreviewText": "frame 0 · 1 subject in 0.19 s (768 px) · #1 12093 px",
+   "lassoPreviewText": "frame 0 · 1 subject in 0.10 s (768 px) · #1 12093 px",
    "lassoPreviewWallSeconds": 0.52,
-   "trackInfo": "tracked 150 frames in 10.1 s (14.9 fps) on MPS torch-compiled · 1 subject",
-   "trackWallSeconds": 10.6,
+   "trackInfo": "tracked 150 frames in 11.0 s (13.6 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 11.6,
    "doneFrames": 150,
-   "fps": 14.91,
-   "backend": "torch-compiled",
+   "fps": 13.61,
+   "backend": "coreml",
    "promptRecorded": {
     "frame_idx": 0,
     "image_size": 768,
@@ -476,8 +476,8 @@
      130,
      140
     ],
-    "mean": 0.9788,
-    "min": 0.9283
+    "mean": 0.9777,
+    "min": 0.9282
    }
   }
  }
