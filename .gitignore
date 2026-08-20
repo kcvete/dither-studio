@@ -12,7 +12,10 @@ node_modules/
 bench/_res/
 .claude/
 
-# track-web: regenerable binaries (onnxexport/export_onnx.py, npm i onnxruntime-web)
-static/track-web/models/*.onnx
-static/track-web/ort/*.wasm
-static/track-web/ort/*.mjs
+# Regenerable binaries for the browser engine. `setup.sh` writes both:
+#   web/models/*.onnx  <- onnxexport/export_onnx.py   (~130 MB)
+#   web/ort/           <- npm i onnxruntime-web       (~41 MB)
+# web/models/manifest.json and web/models/consts.bin ARE committed: they are
+# small and the page needs them to know what it is missing.
+web/models/*.onnx
+web/ort/

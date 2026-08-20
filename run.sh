@@ -21,7 +21,7 @@ done
 if ! is_ours "$PORT"; then
   [ "$PORT" = "$BASE" ] || echo "[run] :$BASE is taken, using :$PORT"
   echo "[run] starting server on http://127.0.0.1:$PORT"
-  DV_PORT="$PORT" "$HERE/env/venv/bin/python" "$HERE/server.py" &
+  DV_PORT="$PORT" "$HERE/env/venv/bin/python" "$HERE/server/server.py" &
   SRV=$!
   for _ in $(seq 1 60); do is_ours "$PORT" && break; sleep 0.5; done
 fi

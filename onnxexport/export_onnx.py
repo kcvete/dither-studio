@@ -33,8 +33,9 @@ import warnings
 warnings.filterwarnings('ignore')
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DV = '/Users/kevincvetezar/dither-video'
+DV = ROOT
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, 'server'))
 sys.path.insert(0, os.path.join(DV, 'env', 'EdgeTAM'))
 
 import numpy as np                      # noqa: E402
@@ -82,7 +83,7 @@ def to_fp16(src, dst, keep_io_fp32=False, block=()):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--image-size', type=int, default=768)
-    ap.add_argument('--out', default=os.path.join(ROOT, 'static', 'track-web', 'models'))
+    ap.add_argument('--out', default=os.path.join(ROOT, 'web', 'models'))
     ap.add_argument('--fp16', action='store_true', default=True)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)

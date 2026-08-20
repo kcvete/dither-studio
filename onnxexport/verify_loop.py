@@ -108,7 +108,7 @@ def main():
     ap.add_argument('--clip', default='/private/tmp/claude-501/'
                     '-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/'
                     'scratchpad/parkour')
-    ap.add_argument('--models', default=os.path.join(here, 'static', 'track-web', 'models'))
+    ap.add_argument('--models', default=os.path.join(here, 'web', 'models'))
     ap.add_argument('--fp16', action='store_true')
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--ref', default='masks_edgetam')

@@ -216,7 +216,7 @@ $('dith').onclick = guard(async () => {
   if (!window.__dither) {
     await new Promise((ok, no) => {
       const s = document.createElement('script');
-      s.src = '../dither.js'; s.onload = ok; s.onerror = no;
+      s.src = './dither.js'; s.onload = ok; s.onerror = no;
       document.head.appendChild(s);
     });
     window.__dither = (0, eval)('Dither');

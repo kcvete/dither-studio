@@ -22,7 +22,7 @@ _LIB = None
 def _lib():
     global _LIB
     if _LIB is None:
-        p = os.path.join(HERE, 'env', 'libcdither.dylib')
+        p = os.path.join(os.path.dirname(HERE), 'env', 'libcdither.dylib')
         if not os.path.exists(p):
             _LIB = False
             return False

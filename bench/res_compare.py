@@ -24,6 +24,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, 'server'))
 sys.path.insert(0, HERE)
 os.environ.setdefault("TQDM_DISABLE", "1")
 

@@ -28,12 +28,13 @@ import edgetam_util as EU
 import render as R
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-JOBS = os.path.join(HERE, "jobs")
-STATIC = os.path.join(HERE, "static")
-CKPT = os.path.join(HERE, "env", "EdgeTAM", "checkpoints", "edgetam.pt")
+ROOT = os.path.dirname(HERE)          # repo root: web/, env/, jobs/ live there
+JOBS = os.path.join(ROOT, "jobs")
+WEB = os.path.join(ROOT, "web")
+CKPT = os.path.join(ROOT, "env", "EdgeTAM", "checkpoints", "edgetam.pt")
 CFG = "configs/edgetam.yaml"
 DEVICE = os.environ.get("DV_DEVICE", "mps")
-COREML_DIR = os.path.join(HERE, "env", "coreml")
+COREML_DIR = os.path.join(ROOT, "env", "coreml")
 MAX_OBJECTS = 6
 
 # Tracking backends, fastest first. `DV_BACKEND` picks one; the default walks
@@ -285,7 +286,7 @@ def _soft_png(logits):
 # -------------------------------------------------------------------- API
 @app.get("/", response_class=HTMLResponse)
 def index():
-    with open(os.path.join(STATIC, "index.html")) as f:
+    with open(os.path.join(WEB, "index.html")) as f:
         return HTMLResponse(f.read())
 
 
@@ -672,7 +673,10 @@ def get_out(jid: str):
         "Accept-Ranges": "bytes"})
 
 
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+# The page is served from web/ as-is -- the same bytes GitHub Pages would
+# serve. /static stays as an alias so old bookmarks keep working.
+app.mount("/static", StaticFiles(directory=WEB), name="static")
+app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
 
 
 if __name__ == "__main__":

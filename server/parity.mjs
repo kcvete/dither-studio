@@ -1,6 +1,6 @@
 import fs from 'node:fs';
-const D = (await import('./static/dither.js')).default || (await import('node:module'))
-  .createRequire(import.meta.url)('./static/dither.js');
+const D = (await import('../web/dither.js')).default || (await import('node:module'))
+  .createRequire(import.meta.url)('../web/dither.js');
 const j = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 D.setBlueNoise(Float32Array.from(j.blue));
 const { w, h } = j;

@@ -5,8 +5,8 @@ Runs every mode, all 14 error-diffusion kernels (serpentine on and off), three
 palettes and the tone controls through both implementations and requires byte
 identical output. Run with GATE=1 to repeat it through a subject mask.
 
-    env/venv/bin/python parity.py        # whole frame
-    GATE=1 env/venv/bin/python parity.py # through a mask
+    env/venv/bin/python server/parity.py        # whole frame
+    GATE=1 env/venv/bin/python server/parity.py # through a mask
 """
 import base64, json, os, subprocess, sys
 import numpy as np
