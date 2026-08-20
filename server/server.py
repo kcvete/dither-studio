@@ -28,6 +28,7 @@ from pydantic import BaseModel
 import dither as DI
 import dots as DT
 import edgetam_util as EU
+import polish as PL
 import render as R
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -501,10 +502,21 @@ def get_frame(jid: str, n: int):
 
 
 @app.get("/api/jobs/{jid}/mask/{obj}/{n}")
-def get_mask(jid: str, obj: str, n: int):
+def get_mask(jid: str, obj: str, n: int, polish: int = 0):
+    """One soft mask. `?polish=0-100` hands back the polished one instead --
+    the same file the render would use, built and cached on first ask. The page
+    polishes in the tab rather than fetching this, but it is the only way to
+    see the server's own answer, which is what the parity check compares."""
     if not obj.isalnum():
         raise HTTPException(400, "bad object id")
-    p = os.path.join(job_dir(jid), "masks", obj, "%04d.png" % n)
+    d = job_dir(jid)
+    if polish > 0:
+        if not os.path.isdir(os.path.join(d, "masks", obj)):
+            raise HTTPException(404, "no such mask")
+        md, _ = PL.polished_dir(d, obj, polish)
+        p = os.path.join(md, "%04d.png" % n)
+    else:
+        p = os.path.join(d, "masks", obj, "%04d.png" % n)
     if not os.path.exists(p):
         raise HTTPException(404, "no such mask")
     return FileResponse(p, media_type="image/png",
@@ -748,8 +760,46 @@ def preview(jid: str, req: TrackReq):
             "backend": backend, "image_size": req.image_size, "objects": objs}
 
 
+def _resolve_subjects(jid, d, subjects, do_polish=True, progress=None):
+    """[{id, palette, dot, polish}] -> what the renderer wants: a mask directory
+    per subject, plus the palettes.
+
+    `polish` (0-100) is the only thing here that does work. It swaps the
+    tracker's own masks for a polished copy -- server/polish.py, the same
+    algorithm web/polish.js runs in the tab -- built once per (subject,
+    strength) and cached under jobs/<jid>/polish/, because two renders of the
+    same clip at the same strength want the same masks and polishing 189 frames
+    costs a few seconds.
+    """
+    mroot = os.path.join(d, "masks")
+    out = []
+    for i, s in enumerate(subjects):
+        oid = str(s.get("id"))
+        md = os.path.join(mroot, oid)
+        if not os.path.isdir(md):
+            raise HTTPException(400, "no masks for subject %s - track first" % oid)
+        strength = int(round(float(s.get("polish") or 0)))
+        if strength > 0 and do_polish:
+            if progress:
+                progress("polishing subject #%s (%d)" % (oid, strength))
+            t0 = time.perf_counter()
+            md, info = PL.polished_dir(d, oid, strength)
+            if info:
+                print("[polish] %s: subject %s at %d -> %d frames in %.1fs "
+                      "(radius %d, morph %d, blur %d)"
+                      % (jid, oid, strength, info["frames"],
+                         time.perf_counter() - t0, info["radius"], info["morph"],
+                         info["blur"]), flush=True)
+        out.append({"masks": md, "palette": s.get("palette"),
+                    "dot": s.get("dot") or R.SUBJECT_COLORS[i % 6],
+                    "polish": strength})
+    return out
+
+
 class RenderReq(BaseModel):
-    subjects: list[dict] = []          # [{id, palette:[hex,...]}] — [] = whole frame
+    # [{id, palette:[hex,...], polish:0-100}] — [] = whole frame. `polish` is
+    # the mask smoother; 0 (the default) leaves the tracker's masks alone.
+    subjects: list[dict] = []
     # look
     mode: str = "dots"                 # dots|bluenoise|ordered|halftone|whitenoise|errordiff|riemersma
     algo: str = "floyd-steinberg"      # errordiff kernel
@@ -785,16 +835,9 @@ class RenderReq(BaseModel):
 def start_render(jid: str, req: RenderReq):
     d = job_dir(jid)
     meta = read_meta(jid)
-    mroot = os.path.join(d, "masks")
-    resolved = []
-    for i, s in enumerate(req.subjects):
-        oid = str(s.get("id"))
-        md = os.path.join(mroot, oid)
-        if not os.path.isdir(md):
-            raise HTTPException(400, "no masks for subject %s - track first" % oid)
-        resolved.append({"masks": md,
-                         "palette": s.get("palette"),
-                         "dot": s.get("dot") or R.SUBJECT_COLORS[i % 6]})
+    # validated here, polished in the worker: building the polished masks for
+    # four subjects takes seconds and this call has to answer straight away
+    resolved = _resolve_subjects(jid, d, req.subjects, do_polish=False)
     if req.mode == "dots" and not resolved:
         raise HTTPException(400, "the dots look needs at least one tracked subject")
     if req.format not in R.FORMATS:
@@ -807,7 +850,7 @@ def start_render(jid: str, req: RenderReq):
         st["render"] = {"state": "rendering", "done_frames": 0,
                         "n_frames": meta["n_frames"], "elapsed_s": 0.0,
                         "fps": 0.0, "error": None, "format": req.format,
-                        "bytes": 0}
+                        "bytes": 0, "stage": "rendering"}
         _jobs[jid] = st
 
     params = req.model_dump()
@@ -825,6 +868,24 @@ def _render_worker(jid, d, subs, params):
     fmt = params.get("format") or "mp4"
     out = os.path.join(d, R.FORMATS[fmt]["file"])
     try:
+        for k, s in enumerate(subs):
+            if not s.get("polish"):
+                continue
+            with _state_lock:
+                _jobs[jid]["render"]["stage"] = "polishing subject %d/%d" % (
+                    k + 1, len(subs))
+            tp = time.perf_counter()
+            s["masks"], info = PL.polished_dir(d, os.path.basename(s["masks"]),
+                                               s["polish"])
+            if info:
+                print("[polish] %s: subject %s at %d -> %d frames in %.1fs "
+                      "(radius %d, morph %d, blur %d)"
+                      % (jid, os.path.basename(os.path.dirname(info["dir"])),
+                         s["polish"], info["frames"], time.perf_counter() - tp,
+                         info["radius"], info["morph"], info["blur"]), flush=True)
+        with _state_lock:
+            _jobs[jid]["render"]["stage"] = "rendering"
+
         def prog(done, total):
             el = time.perf_counter() - t0
             with _state_lock:
@@ -875,15 +936,7 @@ def export_dots(jid: str, req: DotsReq):
     """
     d = job_dir(jid)
     meta = read_meta(jid)
-    mroot = os.path.join(d, "masks")
-    subs = []
-    for i, s in enumerate(req.subjects):
-        oid = str(s.get("id"))
-        md = os.path.join(mroot, oid)
-        if not os.path.isdir(md):
-            raise HTTPException(400, "no masks for subject %s - track first" % oid)
-        subs.append({"masks": md, "palette": s.get("palette"),
-                     "dot": s.get("dot") or R.SUBJECT_COLORS[i % 6]})
+    subs = _resolve_subjects(jid, d, req.subjects)
     if not subs:
         raise HTTPException(400, "dot data needs at least one tracked subject")
     params = req.model_dump()

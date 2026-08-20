@@ -16,7 +16,8 @@
  *   W1b browser + server · a still, a clicked subject segmented in ONE frame
  *       (no propagation) -> cutout PNG with a transparent background
  *   W2  browser · a clip, whole frame -> WebM
- *   W3  browser · a clip, one tracked subject, frame-0 preview -> dots -> WebM
+ *   W3  browser · a clip, one tracked subject, frame-0 preview -> dots -> WebM,
+ *       with the mask polish on for the export and off again afterwards
  *   W4  browser · a polygon mask prompt (the heads_mask graph) -> tracked
  *   W5  browser · two subjects prompted on DIFFERENT frames, mask-area census
  *   R5  server  · the same two-frame prompt, so the feature is checked on both
@@ -572,6 +573,33 @@ async function runTracked() {
   check('the dots look draws dots', /\d+ dots/.test(r.dotsFps), r.dotsFps);
   await page.screenshot({ path: path.join(DOCS, 'w-dots.png') });
 
+  /* --- mask polish, in the tab. The server half of this (and the byte-for-byte
+   * agreement between the two) is verify.mjs's P run; what matters here is that
+   * the free tier has the feature at all, that it redraws, and that the export
+   * below goes out through the polished masks rather than the raw ones. */
+  const canvasHash = () => page.evaluate(() => {
+    const c = document.querySelector('#vcv');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let h = 2166136261;
+    for (let q = 0; q < d.length; q += 4) { h ^= d[q]; h = Math.imul(h, 16777619); }
+    return h >>> 0;
+  });
+  r.polish = { params: await page.evaluate(() => window.MaskPolish.params(70)),
+               before: { fps: r.dotsFps, hash: await canvasHash() } };
+  check('browser · polish is off until it is asked for',
+        (await page.evaluate(() => window.DV_polish.get()))[0].polish === 0);
+  await openStep(page, 'st3');
+  await page.click('#pollist .chip.pol');
+  await sleep(1000);
+  await page.evaluate(() => window.DV_draw(10)); await sleep(2500);
+  r.polish.state = await page.evaluate(() => window.DV_polish.get());
+  r.polish.after = { fps: await page.textContent('#fps'), hash: await canvasHash() };
+  check('browser · the toggle sets 70 on that subject',
+        r.polish.state[0].polish === 70, JSON.stringify(r.polish.state));
+  check('browser · polishing the mask changes the picture',
+        r.polish.after.hash !== r.polish.before.hash, JSON.stringify(r.polish));
+  await page.screenshot({ path: path.join(DOCS, 'w-polish.png') });
+
   await openStep(page, 'st5');
   t0 = Date.now();
   await page.click('#bExport');
@@ -581,7 +609,14 @@ async function runTracked() {
   const out = path.join(DOCS, 'w-dots-export.webm');
   r.bytes = await saveDownload(page, out);
   r.probe = probe(out);
+  r.polish.exportSeconds = r.renderSeconds;   // the WebM above went out polished
   await page.screenshot({ path: path.join(DOCS, 'w-export.png') });
+  // and off again, so the format runs below measure the plain path
+  await openStep(page, 'st3');
+  await page.click('#pollist .chip.pol'); await sleep(600);
+  check('browser · the toggle turns polish back off',
+        (await page.evaluate(() => window.DV_polish.get()))[0].polish === 0);
+  await openStep(page, 'st5');
 
   // --- the other containers the tab can write, and the two it cannot
   r.offered = await page.evaluate(() => window.DV_formats());
@@ -1213,23 +1248,32 @@ if (BR.ep === 'wasm') {
 }
 console.error('[verify-web] ' + BR.how + ' · EP ' + BR.ep);
 
+/* DV_ONLY=tracked,sequence runs a subset. Unset runs all of it, which is what
+ * the README's numbers were measured with. */
+const ONLY = (process.env.DV_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
+const want = (name) => !ONLY.length || ONLY.includes(name);
+R.only = ONLY;
+const run = async (name, fn, ...args) => {
+  if (want(name)) R.runs[name] = await fn(...args);
+};
+
 try {
-  R.runs.engineChip = await runEngineChip();
-  R.runs.still = await runStill();
-  R.runs.stillDots = await runStillDots();
-  R.runs.stillSubjectBrowser = await runStillSubject('browser');
-  R.runs.stillSubjectRemote = await runStillSubject('remote');
-  R.runs.whole = await runWhole();
-  R.runs.tracked = await runTracked();
-  R.runs.lasso = await runLasso();
-  R.runs.cameraRemote = await runCamera('remote', true);
-  R.runs.cameraBrowser = await runCamera('browser', false);
-  R.runs.dotsRemote = await runDots('remote');
-  R.runs.dotsBrowser = await runDots('browser');
-  R.runs.sequence = await runSequence();
-  R.runs.entryBrowser = await runEntry('browser');
-  R.runs.entryRemote = await runEntry('remote');
-  R.runs.apiKey = await runApiKey();
+  await run('engineChip', runEngineChip);
+  await run('still', runStill);
+  await run('stillDots', runStillDots);
+  await run('stillSubjectBrowser', runStillSubject, 'browser');
+  await run('stillSubjectRemote', runStillSubject, 'remote');
+  await run('whole', runWhole);
+  await run('tracked', runTracked);
+  await run('lasso', runLasso);
+  await run('cameraRemote', runCamera, 'remote', true);
+  await run('cameraBrowser', runCamera, 'browser', false);
+  await run('dotsRemote', runDots, 'remote');
+  await run('dotsBrowser', runDots, 'browser');
+  await run('sequence', runSequence);
+  await run('entryBrowser', runEntry, 'browser');
+  await run('entryRemote', runEntry, 'remote');
+  await run('apiKey', runApiKey);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
 } finally {

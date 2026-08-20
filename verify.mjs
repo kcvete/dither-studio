@@ -13,6 +13,9 @@
  *   C  clip    -> two tracked subjects -> dots + a pixel mode -> MP4
  *   D  clip    -> one tracked subject at "fast" tracking quality (512 px)
  *   E  clip    -> frame-0 preview, then a polygon mask prompt -> tracked
+ *   P  clip    -> a tracked subject with MASK POLISH on: the motion gate, the
+ *                 tab's polished mask against the server's byte for byte, the
+ *                 wipe, and preview-vs-export
  * Writes screenshots to docs/ and a JSON report to docs/verify-report.json.
  */
 import { chromium } from 'playwright';
@@ -842,6 +845,162 @@ print(json.dumps({'identical': bool(np.array_equal(painted, replay)),
   return r;
 }
 
+/* --------- P: mask polish — motion-aware smoothing, both engines ----------
+ * The claim under test is not "the mask looks nicer". It is:
+ *   1. the strength maps to a documented set of filter sizes;
+ *   2. the temporal window closes itself as a subject moves fast for its size,
+ *      which is what keeps a struck ball out of the smear;
+ *   3. the mask the tab computes for a frame is BYTE FOR BYTE the mask the
+ *      server renders that frame with -- otherwise the preview is a lie;
+ *   4. the render path uses it, and the before/after wipe still works.
+ */
+async function runPolish(page) {
+  const r = {};
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+
+  // (1) and (2) are pure functions — check them before any pixels exist
+  r.params = await page.evaluate(() => [0, 30, 70, 100].map((s) =>
+    Object.assign({ strength: s }, window.MaskPolish.params(s))));
+  if (r.params[2].radius !== 2 || r.params[3].radius !== 3 || r.params[0].radius !== 0) {
+    throw new Error('polish strengths do not map to the documented radii: '
+      + JSON.stringify(r.params));
+  }
+  r.gate = await page.evaluate(() => {
+    const MP = window.MaskPolish;
+    // a body: 140 px across, drifting 3 px a frame
+    const slow = [-2, -1, 0, 1, 2].map((d) => ({ area: 20000, cx: 100 + 3 * d, cy: 100 }));
+    // a ball: 36 px across, crossing 30 px a frame
+    const fast = [-2, -1, 0, 1, 2].map((d) => ({ area: 1300, cx: 100 + 30 * d, cy: 100 }));
+    const sum = (w) => Array.from(w).reduce((a, b) => a + b, 0);
+    return { slow: Array.from(MP.weights(slow, 2, 2)).map((v) => +v.toFixed(3)),
+             fast: Array.from(MP.weights(fast, 2, 2)).map((v) => +v.toFixed(3)),
+             slowTotal: +sum(MP.weights(slow, 2, 2)).toFixed(3),
+             fastTotal: +sum(MP.weights(fast, 2, 2)).toFixed(3) };
+  });
+  if (r.gate.fastTotal !== 1) {
+    throw new Error('a fast small subject still got temporal averaging: '
+      + JSON.stringify(r.gate));
+  }
+  if (r.gate.slowTotal < 2) {
+    throw new Error('a slow large subject did not get its window: '
+      + JSON.stringify(r.gate));
+  }
+
+  await page.setInputFiles('#file', CLIP);
+  await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+  r.job = await page.evaluate(() => window.DV.job);
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(700);
+  await prompt(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.trackInfo = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+  if (/failed/.test(r.trackInfo)) throw new Error(r.trackInfo);
+
+  await setMode(page, 'dots');
+  await page.evaluate(() => window.DV_draw(20)); await sleep(600);
+  r.dotsOff = await page.textContent('#fps');
+  await page.screenshot({ path: path.join(DOCS, 'p-polish-off.png') });
+
+  // the UI: one row per subject, default off
+  r.rowsBefore = await page.$$eval('#pollist .mini', (n) => n.map((e) => e.textContent));
+  r.before = await page.evaluate(() => window.DV_polish.get());
+  if (r.before[0].polish !== 0) throw new Error('polish is not off by default');
+  await openStep(page, 'st3');
+  await page.click('#pollist .chip.pol');
+  await sleep(1500);
+  r.after = await page.evaluate(() => window.DV_polish.get());
+  if (r.after[0].polish !== 70) {
+    throw new Error('the toggle did not turn polish on: ' + JSON.stringify(r.after));
+  }
+  await page.evaluate(() => window.DV_draw(20)); await sleep(1200);
+  r.dotsOn = await page.textContent('#fps');
+  await page.screenshot({ path: path.join(DOCS, 'p-polish-on.png') });
+
+  // (3) the tab's polished mask against the server's polished PNG, byte for byte
+  r.maskParity = await page.evaluate(async ({ job, id, frame }) => {
+    const mine = await window.DV_polish.mask(id, frame);
+    const im = new Image();
+    await new Promise((ok, no) => {
+      im.onload = ok; im.onerror = () => no(new Error('mask fetch failed'));
+      im.src = `/api/jobs/${job}/mask/${id}/${frame}?polish=70&t=` + Date.now();
+    });
+    const c = document.createElement('canvas');
+    c.width = im.naturalWidth; c.height = im.naturalHeight;
+    c.getContext('2d').drawImage(im, 0, 0);
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let diff = 0, worst = 0, lit = 0;
+    for (let q = 0; q < mine.length; q++) {
+      const a = mine[q], b = d[q * 4];
+      if (a) lit++;
+      if (a !== b) { diff++; worst = Math.max(worst, Math.abs(a - b)); }
+    }
+    return { pixels: mine.length, lit, differing: diff, worst,
+             w: c.width, h: c.height };
+  }, { job: r.job, id: r.after[0].id, frame: 20 });
+  if (r.maskParity.differing !== 0) {
+    throw new Error('the tab and the server polish differently: '
+      + JSON.stringify(r.maskParity));
+  }
+
+  // (4) the wipe still works with polish on, and the render uses the same masks
+  await page.click('#bCmp'); await sleep(500);
+  r.wipeVisible = await page.isVisible('#wipe');
+  await page.screenshot({ path: path.join(DOCS, 'p-polish-wipe.png') });
+  r.wipe = await page.evaluate(() => {
+    const c = document.querySelector('#vcv');
+    const g = c.getContext('2d');
+    const l = g.getImageData(10, (c.height / 2) | 0, 60, 1).data;
+    const rr = g.getImageData(c.width - 70, (c.height / 2) | 0, 60, 1).data;
+    let dl = new Set(), dr = new Set();
+    for (let p = 0; p < l.length; p += 4) dl.add(l[p] + ',' + l[p + 1] + ',' + l[p + 2]);
+    for (let p = 0; p < rr.length; p += 4) dr.add(rr[p] + ',' + rr[p + 1] + ',' + rr[p + 2]);
+    return { leftColours: dl.size, rightColours: dr.size };
+  });
+  if (r.wipe.leftColours <= r.wipe.rightColours) {
+    throw new Error('the before/after wipe is not showing the original on the left: '
+      + JSON.stringify(r.wipe));
+  }
+  await page.click('#bCmp'); await sleep(300);
+
+  await openStep(page, 'st5');
+  const t0 = Date.now();
+  await page.click('#bExport');
+  r.render = await waitText(page, '#rinfo', /rendered|failed/, 300000);
+  if (/failed/.test(r.render)) throw new Error(r.render);
+  r.renderWallSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+  r.probe = ffprobe(path.join(HERE, 'jobs', r.job, 'out.mp4'));
+  r.cached = fs.existsSync(path.join(HERE, 'jobs', r.job, 'polish',
+                                     String(r.after[0].id), '70'));
+  if (!r.cached) throw new Error('the render did not build the polished masks');
+
+  // preview against export, on the same frame, with polish on: JPEG decode and
+  // h264 both move pixels, so this is a similarity measure like run C's
+  const png = path.join(DOCS, 'p-polish-frame20.png');
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', path.join(HERE, 'jobs', r.job, 'out.mp4'),
+    '-vf', 'select=eq(n\\,20)', '-vframes', '1', png]);
+  const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', png, '-f', 'rawvideo',
+    '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 });
+  await page.evaluate(() => window.DV_draw(20)); await sleep(1200);
+  const prev = await page.evaluate(() => {
+    const c = document.querySelector('#vcv');
+    return Array.from(c.getContext('2d').getImageData(0, 0, c.width, c.height).data);
+  });
+  let near = 0, n = 0;
+  for (let p = 0, q = 0; p < raw.length; p += 3, q += 4) {
+    const dr = raw[p] - prev[q], dg = raw[p + 1] - prev[q + 1], db = raw[p + 2] - prev[q + 2];
+    if (dr * dr + dg * dg + db * db < 900) near++;
+    n++;
+  }
+  r.previewVsExport = { pixels: n, within30: near, pct: +(100 * near / n).toFixed(2) };
+  if (r.previewVsExport.pct < 97) {
+    throw new Error('preview and export disagree with polish on: '
+      + JSON.stringify(r.previewVsExport));
+  }
+  await page.screenshot({ path: path.join(DOCS, 'p-polish-export.png') });
+  return r;
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -855,17 +1014,26 @@ page.on('requestfailed', (rq) => {
   if (why !== 'net::ERR_ABORTED') R.consoleErrors.push('requestfailed ' + rq.url() + ' ' + why);
 });
 
+/* DV_ONLY=polish,tracked runs a subset — the suite is minutes long and the
+ * thing you just changed is usually one of its ten flows. Unset runs all of
+ * them, which is what CI and the README numbers mean by "the suite". */
+const ONLY = (process.env.DV_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
+const want = (name) => !ONLY.length || ONLY.includes(name);
+R.only = ONLY;
+const run = async (name, fn) => { if (want(name)) R.runs[name] = await fn(page); };
+
 try {
-  R.runs.still = await runStill(page);
-  R.runs.stillDots = await runStillDots(page);
-  R.runs.stillSubject = await runStillSubject(page);
-  R.runs.whole = await runWhole(page);
-  R.runs.tracked = await runTracked(page);
-  R.runs.trackedFast = await runTrackedFast(page);
-  R.runs.formats = await runFormats(page);
-  R.runs.trim = await runTrim(page);
-  R.runs.dots = await runDotsServer(page);
-  R.runs.lasso = await runLasso(page);
+  await run('still', runStill);
+  await run('stillDots', runStillDots);
+  await run('stillSubject', runStillSubject);
+  await run('whole', runWhole);
+  await run('tracked', runTracked);
+  await run('trackedFast', runTrackedFast);
+  await run('formats', runFormats);
+  await run('trim', runTrim);
+  await run('dots', runDotsServer);
+  await run('lasso', runLasso);
+  await run('polish', runPolish);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);
 } finally {

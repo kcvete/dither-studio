@@ -191,6 +191,15 @@
           <button class="chip" id="bSeed">reseed</button>
         </div>
 
+        <div id="polui" hidden>
+          <div class="lbl"><span>Mask polish</span><span id="vPol">off</span></div>
+          <div id="pollist"></div>
+          <div class="note" id="polnote">Steadies each subject's mask: a few
+            frames averaged together, pinholes closed, the edge softened. The
+            window closes itself where a subject is moving fast for its size, so
+            a struck ball keeps its own outline instead of smearing into one.</div>
+        </div>
+
         <div id="composeui" hidden>
           <div class="lbl"><span>Background</span></div>
           <div class="chips seg" id="compose">
@@ -363,4 +372,5 @@
   </main>
 </div>
 <script src="./dither.js"></script>
+<script src="./polish.js"></script>
 <script type="module" src="./app.js"></script>

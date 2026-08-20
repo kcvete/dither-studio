@@ -321,6 +321,84 @@ new noise field. *Background* — flat colour or the dithered scene — appears
 wherever part of the picture is left alone: a tracked clip, a selected subject,
 or the dots look on a still.
 
+#### Mask polish
+
+A tracker's masks are good outlines and restless neighbours: the edge moves a
+pixel or two between frames, pinholes open and close inside a body, and a
+subject standing still shimmers. Averaging a few frames of the *soft* mask
+together fixes all of it — and ruins anything fast, because averaging a struck
+ball over five frames **is** a streak. The first version of this smeared Roberto
+Carlos's free kick into a comet.
+
+So the window is not fixed. Per subject, per frame, polish measures how far the
+mask's centroid walked against how big the mask is — displacement over
+`sqrt(area)` — and closes the temporal window as that ratio grows:
+
+* **temporal** — weighted mean of the soft masks in the window. The weight is
+  triangular in distance and multiplied by a motion gate that reaches zero once
+  the cumulative centroid walk passes `0.35 × sqrt(area)`. No threshold to tune,
+  no subject to label by hand: a body drifting three pixels a frame gets the
+  whole window, a ball crossing thirty gets none of it.
+* **morph** — grayscale close, then open, square element. Closes the pinholes
+  inside a body and drops the specks outside it.
+* **blur** — one or two passes of a separable `[1 2 1]/4`, to take the stair
+  stepping off the 192×192 mask upsample.
+
+One 0–100 **strength** per subject sets all three, and it is **off by default**:
+polish is a decision about a subject, not a global improvement. Video only — a
+still has no neighbouring frames.
+
+| strength | frames each side | close/open radius | blur passes |
+|---|---|---|---|
+| 0 (default) | 0 | 0 | 0 |
+| 30 | 1 | 1 | 1 |
+| 70 | 2 | 1 | 1 |
+| 100 | 3 | 2 | 2 |
+
+Measured on the Roberto Carlos free kick — 189 frames of 1997 broadcast, four
+subjects tracked, ball 37 px across and travelling 796 × 341 px across the
+frame — at strength 70, against the same filter with the motion gate removed:
+
+| ball (#12), soft-mask geometry | tracker | polish 70 | no motion gate |
+|---|---|---|---|
+| elongation, p90 | 2.21 | **2.12** | 3.39 |
+| major axis, p90 | 70.8 px | **66.8 px** | 122.9 px |
+| mass landing off-subject, p90 | 0.069 | **0.089** | 0.365 (max 0.71) |
+
+| bodies, frame-to-frame mask churn | tracker | polish 70 | no motion gate |
+|---|---|---|---|
+| #9 | 0.119 | **0.072** | 0.137 |
+| #10 (the striker) | 0.093 | **0.064** | 0.088 |
+| #13 | 0.242 | **0.163** | 0.174 |
+
+Churn is the symmetric difference between consecutive binarised masks over their
+mean area — the shimmer, as a number. Polish takes a third off it. The naive
+filter is *worse* than doing nothing on two of the three bodies, because this
+clip is a 25→30 fps broadcast conversion: the camera pans in jumps, and
+averaging across a jump moves the mask instead of steadying it. The motion gate
+sees those jumps too.
+
+The gate is legible rather than magic. For a 140 px body drifting 3 px a frame
+the five weights come out `0.29 / 0.63 / 1 / 0.63 / 0.29`; for a 36 px ball
+crossing 30 px a frame they come out `0 / 0 / 1 / 0 / 0` — the frame is left
+exactly as the tracker drew it.
+
+![polish A/B on the free kick](docs/polish-ab.png)
+
+Same clip, same look, three rows: the tracker's masks, polish 70, and polish 70
+with the motion gate removed. Four ball-in-flight frames and one of the striker.
+
+Both engines implement it: `server/polish.py` in numpy on the mask PNGs,
+`web/polish.js` in the tab on the mask bitmaps, and the two are the same
+arithmetic to the last float — `server/parity.py` gates them (see
+[Verification](#verification)). The server caches its polished masks per
+(subject, strength) under `jobs/<id>/polish/`, so the first render at a strength
+pays for it and every later one does not: 8 s a subject to build, 38.2 s → 8.3 s
+wall clock for the same 189-frame MP4 the second time. In the tab the first
+polished draw of a frame costs 50–100 ms; after that the cache makes drawing
+*faster* than not polishing (12.3 ms against 23 ms a frame), because a cached
+polished mask skips the per-draw bitmap decode as well.
+
 ### 4 · Palette
 18 presets — Black & White, Sage, Forest, Ember, Mist, Game Boy DMG, four
 monochromes, CMYK, RGBY, Black White Red, Purple & Green, Blue & Yellow,
@@ -693,8 +771,10 @@ env/venv/bin/python server/parity.py && GATE=1 env/venv/bin/python server/parity
 `verify.mjs` drives the **server engine**: a still through every algorithm, a
 still dotted whole-image down to a one-frame `.dots.gz`, a still with a clicked
 subject segmented in one frame and exported as a transparent PNG, a whole-frame
-clip, two tracked subjects, one subject at a non-default tracking quality, and a
-polygon mask prompt with a frame preview.
+clip, two tracked subjects, one subject at a non-default tracking quality, a
+polygon mask prompt with a frame preview, and **mask polish** — the motion gate
+as numbers, the tab's polished mask against the server's own byte for byte, the
+before/after wipe, and preview against the exported MP4.
 
 `verify-web.mjs` drives the **browser engine** and the seam between the two: the
 auto probe and the manual switch, a still, whole-image dots on a still, a still
@@ -713,7 +793,14 @@ tone controls, `dither_rgb` against `ditherRGBA`, byte for byte —
 the picture rather than the kernel: whole frames and *masked* ones, two subjects
 with a palette each, cutout and overlay, chunky pixels, and the transparent
 variant — `render._frame_pixels` against `composeFrame`. That second gate is the
-still cutout PNG's own code path.
+still cutout PNG's own code path. The **polish gate** is the third: a synthetic
+nine-frame sequence with a slow body and a fast ball in it, at three strengths,
+`polish.polish_sequence` against `polishSequence`, float for float — plus the
+browser's own shortcut (polishing the padded bounding box rather than the whole
+frame) against the whole frame. Polish sits *upstream* of composition — it
+changes the masks, not the way masks are composed — so it is its own gate rather
+than more compose cases; what the compose gate already proves is that identical
+masks compose identically.
 
 Latest run (M4 Pro, 24 GB, macOS 26.1, torch 2.13 / MPS + CoreML; headless
 Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
@@ -722,24 +809,27 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 |---|---|
 | engine parity, kernels | **110/110 byte-identical**, and 110/110 again through a mask |
 | engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
-| `verify.mjs` | 10 flows, **0 console errors** |
-| `verify-web.mjs` | 16 flows, **160/160 assertions**, **0 console errors** |
+| engine parity, polish | **27/27 float-identical** (3 strengths × 9 frames); crop shortcut vs whole frame, max difference **0** |
+| `verify.mjs` | 11 flows, **0 console errors** |
+| `verify-web.mjs` | 16 flows, **164/164 assertions**, **0 console errors** |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
-| still: subject, server | one frame, **0.07 s** at 768 px, a 12,750 px mask, no propagation |
-| still: subject, browser | one frame, **0.08 s** at 768 px, a 12,850 px mask, WebGPU fp16 |
+| still: subject, server | one frame, **0.09 s** at 768 px, a 12,750 px mask, no propagation |
+| still: subject, browser | one frame, **0.09 s** at 768 px, a 12,654 px mask, WebGPU fp16 |
 | still: cutout PNG, alpha | 1280×720 `rgba` on both engines · **99.3 % / 99.4 % transparent**, 0.7 % / 0.6 % opaque, ffprobed |
 | still: whole-image dots | **31,500 dots**, and a one-frame `.dots.gz` whose positions the player replays |
-| browser: clip decode | 150 frames in **4.9 s**, in the tab |
-| browser: frame-0 preview | **0.14 s** once the graphs are warm (1.6 s including the load) |
-| browser: track | 150/150 frames in 13.0 s (**11.5 fps**), WebGPU fp16 |
+| browser: clip decode | 150 frames in **5.6 s**, in the tab |
+| browser: frame-0 preview | **0.14 s** once the graphs are warm (1.75 s including the load) |
+| browser: track | 150/150 frames in 17.1 s (**8.8 fps**), WebGPU fp16 |
 | browser: mask prompt | tracked from a polygon alone, non-empty on 150/150 frames |
-| browser: dots preview | 49.5 fps · 774 dots |
-| browser: export | 150 frames of VP9 WebM in 5.3 s, 1280×720, ffprobed |
-| server: track, 2 subjects | 150/150 in 14.0 s (**10.7 fps**) end to end, CoreML |
-| server: track, 1 subject @ 512 px | 150/150 in 10.4 s (**14.4 fps**), masks still 1280×720 |
+| browser: dots preview | 54.6 fps · 774 dots (7.0 fps on the first polished frame, 95 fps once its masks are cached) |
+| browser: export | 150 frames of VP9 WebM in 8.1 s **with polish on**, 1280×720, ffprobed |
+| server: track, 2 subjects | 150/150 in 16.9 s (**8.8 fps**) end to end, CoreML |
+| server: track, 1 subject @ 512 px | 150/150 in 10.4 s (**14.5 fps**), masks still 1280×720 |
 | server: track from a polygon | mask-prompt vs box-prompt IoU **0.978 mean / 0.928 worst** |
-| server: export | 150 frames of H.264 in 10.3 s, ffprobed |
+| server: export | 150 frames of H.264 in 10.5 s, ffprobed |
 | preview vs exported MP4 | **97.8 %** of pixels within 30 RGB units |
+| polish: tab vs server mask | **0 of 921,600** pixels differ on the same frame at strength 70 |
+| polish: preview vs export | **99.3 %** of pixels within 30 RGB units, polish on |
 | `DV_API_KEY` | bare 401 · wrong key 401 · right key 200 · the page still 200 |
 
 The remaining 2.2 % of the preview-vs-export comparison is not an engine
@@ -1113,6 +1203,14 @@ why the setting exists rather than a silently lowered default.
   resolution only for the download, so a large photo stays responsive while you
   drag sliders.
 * **Compare is preview-only** — not baked into the export.
+* **Polish is a mask filter, not a segmentation fix.** It steadies an outline the
+  tracker already found; it cannot recover one it lost, and at strength 100 it
+  will round off genuinely spiky detail (fingers, a racket) along with the noise.
+  The motion gate protects fast subjects from the temporal stage only — the close
+  and the blur still apply to them.
+* **Polish costs time on the first pass.** ~8 s a subject for 189 frames on the
+  server (cached afterwards, per strength, under `jobs/<id>/polish/`), 50–100 ms
+  for the first draw of a frame in the tab. Changing the strength rebuilds it.
 * **No audio.** Video export is picture only.
 * **A sequence is not a timeline.** Segments and shapes in order, one subject
   track, one global palette, one morph length per join. No layers, no easing

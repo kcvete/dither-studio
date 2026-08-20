@@ -19,7 +19,7 @@ Two gates, both byte-for-byte:
 import base64, json, os, subprocess, sys
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import dither as D, render as R
+import dither as D, polish as PO, render as R
 from PIL import Image
 
 W, H = 160, 96
@@ -97,12 +97,34 @@ addc('cutout-halftone', [0, 1], mode='halftone', matrix=8)
 addc('cutout-riemersma', [0, 1], mode='riemersma')
 addc('cutout-tone', [0, 1], gamma=1.7, contrast=1.3, brightness=-0.08, invert=True)
 
+# ------------------------------------------------------- the polish gate
+# A body drifting a couple of pixels a frame and a ball crossing thirty, so the
+# motion gate is exercised at both ends. Quantised to 8 bits first, because
+# that is what both engines actually get handed: PNGs on the server, mask
+# bitmaps in the tab.
+PW, PH, PN = 96, 64, 9
+_py, _px = np.mgrid[0:PH, 0:PW]
+POL = []
+for i in range(PN):
+    body = np.clip(1.6 - 1.6 * np.sqrt(((_px - (18 + 1.5 * i)) / 14.0) ** 2
+                                       + ((_py - (34 + 0.7 * i)) / 20.0) ** 2), 0, 1)
+    ball = np.clip(1.8 - 1.8 * np.sqrt(((_px - (6 + 9.0 * i)) / 3.4) ** 2
+                                       + ((_py - (14 + 1.0 * i)) / 3.4) ** 2), 0, 1)
+    m = np.clip(body + ball, 0, 1)
+    m = np.where(rng.random((PH, PW)) < 0.04, np.clip(m + 0.5, 0, 1), m)  # specks
+    POL.append((np.floor(m * 255 + 0.5).clip(0, 255).astype(np.uint8)
+                .astype(np.float64) / 255.0).astype(np.float32))
+POL_STRENGTHS = [30, 70, 100]
+
 USE_GATE = os.environ.get('GATE') == '1'
 payload = dict(w=W, h=H, blue=[float(v) for v in blue.ravel()],
                src=base64.b64encode(rgba.tobytes()).decode(),
                gate=base64.b64encode(gate.tobytes()).decode() if USE_GATE else None,
                masks=[base64.b64encode(m.tobytes()).decode() for m in MASKS],
-               cases=cases, compose=compose)
+               cases=cases, compose=compose,
+               polish=dict(w=PW, h=PH, strengths=POL_STRENGTHS,
+                           masks=[base64.b64encode(m.tobytes()).decode()
+                                  for m in POL]))
 S = os.environ.get('TMPDIR', '/tmp').rstrip('/')
 json.dump(payload, open(f'{S}/pin.json', 'w'))
 subprocess.run(['node', 'parity.mjs', f'{S}/pin.json', f'{S}/pout.json'],
@@ -137,8 +159,28 @@ for c in compose:
     else:
         cok += 1
 
+pbad, pok = [], 0
+for st in POL_STRENGTHS:
+    py_seq = PO.polish_sequence(POL, st)
+    for i, py_m in enumerate(py_seq):
+        js_m = np.frombuffer(base64.b64decode(js['_polish']['%d:%d' % (st, i)]),
+                             np.float32).reshape(PH, PW)
+        d = int((py_m != js_m).sum())
+        if d:
+            pbad.append((st, i, d, float(np.abs(py_m - js_m).max())))
+        else:
+            pok += 1
+crop_diff = float(js.get('_polishCropMaxDiff', 0))
+if crop_diff:
+    pbad.append(('crop-vs-whole-frame', crop_diff))
+
 print(json.dumps({'gate': USE_GATE, 'cases': len(cases), 'pixel_identical': ok,
                   'mismatched': bad[:14], 'n_mismatched': len(bad),
                   'compose_cases': len(compose), 'compose_identical': cok,
-                  'compose_mismatched': cbad[:14]}, indent=1))
-sys.exit(1 if bad or cbad else 0)
+                  'compose_mismatched': cbad[:14],
+                  'polish_cases': len(POL_STRENGTHS) * PN,
+                  'polish_identical': pok,
+                  'polish_crop_max_diff': crop_diff,
+                  'polish_params': js.get('_polishParams'),
+                  'polish_mismatched': pbad[:14]}, indent=1))
+sys.exit(1 if bad or cbad or pbad else 0)

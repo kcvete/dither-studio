@@ -575,7 +575,10 @@ function addSubject() {
   // promptFrame stays null until the subject actually gets a prompt, so it
   // adopts whatever frame the user was looking at when they drew it
   S.subjects.push({ id: S.nextId++, palette: [S.bg, subjectColor(i)],
-                    points: [], box: null, paths: [], promptFrame: null });
+                    points: [], box: null, paths: [], promptFrame: null,
+                    // mask polish, 0-100; 0 is off and is the default. See
+                    // web/polish.js — the same algorithm the server runs.
+                    polish: 0 });
   S.active = S.subjects.length - 1;
   renderSubjects(); buildTargets();
 }
@@ -682,6 +685,7 @@ function renderSubjects() {
   $('#vSubs').textContent = `${S.subjects.length} / ${MAX_SUBJECTS}`;
   paintScopeSummary();
   paintOffFrame();
+  renderPolish();
 }
 
 const pimg = $('#pimg'), pov = $('#pov'), pctx = pov.getContext('2d');
@@ -1178,7 +1182,7 @@ async function track() {
     $('#offframe').hidden = true;
     $('#composeui').hidden = false;
     $('#bgui').hidden = S.P.compose !== 'cutout';
-    dropCache(); buildTargets(); renderModes(); openStep(3);
+    dropCache(); buildTargets(); renderModes(); renderPolish(); openStep(3);
     DOTS_CACHE = null;
     buildSubjectPicker();
     await draw();
@@ -1212,6 +1216,7 @@ async function frameAt(i) {
 function dropCache() {
   CACHE.forEach((v) => { v.frame.close(); v.masks.forEach((m) => m.close()); });
   CACHE.clear();
+  dropPolish();
 }
 /* "there are masks, and they belong to subjects" — true for a tracked clip and
  * for a still whose subjects have been segmented. Everything downstream (the
@@ -1260,6 +1265,155 @@ function bitmapAlpha(bmp, w, h, slot) {
   const d = c.getImageData(0, 0, w, h).data;
   const out = new Float32Array(w * h);
   for (let i = 0, p = 0; i < out.length; i++, p += 4) out[i] = d[p] / 255;
+  return out;
+}
+
+/* ============================================================ mask polish ===
+ * The tracker's masks are per-frame and slightly restless: the outline wobbles
+ * a pixel or two, pinholes open and close, and a subject that is barely moving
+ * still shimmers. web/polish.js smooths that — temporally, motion-aware, so a
+ * ball crossing the frame keeps its own mask while a body gets the whole
+ * window — and this is where the browser runs it.
+ *
+ * Two things matter here beyond calling it:
+ *
+ *   PARITY   the result is quantised to 8 bits before use, because the server
+ *            writes its polished masks as PNGs and the two engines have to
+ *            hand the renderer the same numbers. server/polish.py is the same
+ *            arithmetic; server/parity.py gates it.
+ *   COST     polishing a whole 720p frame per subject per draw would make
+ *            scrubbing crawl, so it runs on the union bounding box of the
+ *            window's non-zero pixels, padded by more than the filters reach.
+ *            Outside that box every mask is exactly zero (they arrive as 8-bit
+ *            images), so a padded crop and the whole frame give the same
+ *            answer — which is a claim the parity gate also covers.
+ */
+const PM = { key: null, raw: new Map(), out: new Map(), pool: [] };
+const PM_RAW_MAX = 64, PM_OUT_MAX = 48;
+
+const polishOn = () => S.kind === 'video' && usingSubjects()
+  && S.subjects.some((s) => (s.polish | 0) > 0);
+
+function polishKey() {
+  return JSON.stringify([E().id, S.job, S.W, S.H,
+                         S.subjects.map((s) => [s.id, s.polish | 0])]);
+}
+function dropPolish() { PM.key = null; PM.raw.clear(); PM.out.clear(); }
+function checkPolishKey() {
+  const k = polishKey();
+  if (PM.key !== k) { PM.key = k; PM.raw.clear(); PM.out.clear(); }
+}
+function lru(map, max) {
+  while (map.size > max) { const k = map.keys().next().value; map.delete(k); }
+}
+
+/** One subject's raw mask on one frame: 8-bit coverage, its stats and the box
+ *  outside which it is exactly zero. Fetched through the engine, not through
+ *  frameAt — polish wants six neighbouring MASKS, not six neighbouring frames. */
+async function rawMask(k, j) {
+  const key = k + ':' + j;
+  const hit = PM.raw.get(key);
+  if (hit) { PM.raw.delete(key); PM.raw.set(key, hit); return hit; }
+  const bmp = await E().mask(S.subjects[k].id, j);
+  const w = S.W, h = S.H;
+  const c = ctx2d(w, h, 'pm');
+  c.clearRect(0, 0, w, h);
+  c.drawImage(bmp, 0, 0, w, h);
+  if (bmp.close) bmp.close();
+  const d = c.getImageData(0, 0, w, h).data;
+  const u8 = new Uint8Array(w * h);
+  let n = 0, sx = 0, sy = 0, x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0, q = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, q++) {
+      const v = d[q * 4];
+      u8[q] = v;
+      if (!v) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+      if (v >= 128) { n++; sx += x; sy += y; }   // >= 0.5 in 8-bit terms
+    }
+  }
+  const rec = { u8, box: x1 < 0 ? null : { x0, y0, x1, y1 },
+                st: n ? { area: n, cx: sx / n, cy: sy / n }
+                      : { area: 0, cx: 0, cy: 0 } };
+  PM.raw.set(key, rec); lru(PM.raw, PM_RAW_MAX);
+  return rec;
+}
+
+/** A cropped float view of a raw mask, from the shared pool. */
+function crop(rec, box, w, slot) {
+  const cw = box.x1 - box.x0 + 1, ch = box.y1 - box.y0 + 1;
+  let a = PM.pool[slot];
+  if (!a || a.length < cw * ch) a = PM.pool[slot] = new Float32Array(cw * ch);
+  for (let y = 0; y < ch; y++) {
+    const src = (box.y0 + y) * w + box.x0, dst = y * cw;
+    for (let x = 0; x < cw; x++) a[dst + x] = rec.u8[src + x] / 255;
+  }
+  return a.length === cw * ch ? a : a.subarray(0, cw * ch);
+}
+
+/** Subject k's polished mask on frame i, as the renderer wants it. */
+async function polishedMask(k, i) {
+  const sub = S.subjects[k], strength = sub.polish | 0;
+  const w = S.W, h = S.H;
+  const key = k + ':' + i;
+  const hit = PM.out.get(key);
+  if (hit) {
+    PM.out.delete(key); PM.out.set(key, hit);
+    return expand(hit, w * h, 'pf' + k);
+  }
+  const P = MaskPolish.params(strength);
+  const lo = Math.max(0, i - P.radius), hi = Math.min(S.nFrames - 1, i + P.radius);
+  const recs = [];
+  for (let j = lo; j <= hi; j++) recs.push(await rawMask(k, j));
+  const pad = 2 * P.morph + P.blur + 2;
+  let box = null;
+  for (const r of recs) {
+    if (!r.box) continue;
+    box = box ? { x0: Math.min(box.x0, r.box.x0), y0: Math.min(box.y0, r.box.y0),
+                  x1: Math.max(box.x1, r.box.x1), y1: Math.max(box.y1, r.box.y1) }
+              : Object.assign({}, r.box);
+  }
+  const out = new Uint8Array(w * h);
+  if (box) {
+    box = { x0: clamp(box.x0 - pad, 0, w - 1), y0: clamp(box.y0 - pad, 0, h - 1),
+            x1: clamp(box.x1 + pad, 0, w - 1), y1: clamp(box.y1 + pad, 0, h - 1) };
+    const cw = box.x1 - box.x0 + 1, ch = box.y1 - box.y0 + 1;
+    const win = recs.map((r, n) => crop(r, box, w, n));
+    const st = recs.map((r) => r.st);
+    const got = MaskPolish.polishFrame(win, i - lo, cw, ch, strength, st);
+    const q = MaskPolish.quantise(got);
+    for (let y = 0; y < ch; y++) out.set(q.subarray(y * cw, y * cw + cw),
+                                        (box.y0 + y) * w + box.x0);
+  }
+  PM.out.set(key, out); lru(PM.out, PM_OUT_MAX);
+  return expand(out, w * h, 'pf' + k);
+}
+
+const EXP = {};
+function expand(u8, n, slot) {
+  let a = EXP[slot];
+  if (!a || a.length !== n) a = EXP[slot] = new Float32Array(n);
+  for (let q = 0; q < n; q++) a[q] = u8[q] / 255;
+  return a;
+}
+
+/** The masks one frame is composed with — polished where a subject asks for
+ *  it. Preview and export both come through here, which is what makes the two
+ *  the same picture. */
+async function masksFor(i, rec, slot) {
+  if (!usingSubjects()) return [];
+  if (S.kind !== 'video') return stillMasksAt(S.W, S.H, slot);
+  if (!polishOn()) return rec.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, slot + k));
+  checkPolishKey();
+  const out = [];
+  for (let k = 0; k < S.subjects.length; k++) {
+    out.push((S.subjects[k].polish | 0) > 0
+      ? await polishedMask(k, i)
+      : bitmapAlpha(rec.masks[k], S.W, S.H, slot + k));
+  }
   return out;
 }
 
@@ -1495,8 +1649,8 @@ async function draw(i) {
   const c = ctx2d(S.W, S.H, 'src');
   c.drawImage(bmp.frame, 0, 0);
   const src = c.getImageData(0, 0, S.W, S.H).data;
-  const masks = usingSubjects()
-    ? bmp.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, 'm' + k)) : [];
+  const masks = await masksFor(idx, bmp, 'm');
+  if (seq !== drawSeq) return;
   const r = paint($('#vcv'), src, S.W, S.H, masks, { original: bmp.frame });
   S.cur = idx;
   $('#fcount').textContent = `${idx} / ${S.nFrames - 1}`;
@@ -1571,6 +1725,7 @@ function setMode(id) {
   $('#mxui').hidden = !(id === 'ordered' || id === 'halftone');
   $('#dotsui').hidden = id !== 'dots';
   $('#pxui').hidden = id === 'dots';
+  renderPolish();
   const m = (S.meta.modes || []).find((x) => x.id === id);
   const risky = S.kind === 'video' && S.meta.stable && S.meta.stable[id] === false;
   $('#modenote').textContent = m ? m.note : '';
@@ -1609,6 +1764,58 @@ function tuneWholeImageDots() {
   const n = Math.min(+el.max, Math.max(+el.min,
     Math.round(cells * 0.55 / 500) * 500));
   S.P.n = n; el.value = String(n); $('#vN').textContent = String(n);
+}
+
+/* ---------------------------------------------------------- mask polish UI
+ * One row per subject: a toggle and a strength. Video only — a still has one
+ * frame, and everything temporal about this needs neighbours. Default off,
+ * because polish is a decision about a subject ("this is a body, steady it")
+ * and not a global improvement. */
+function renderPolish() {
+  const box = $('#polui');
+  if (!box) return;
+  const show = S.kind === 'video' && usingSubjects();
+  box.hidden = !show;
+  if (!show) return;
+  const wrap = $('#pollist');
+  wrap.textContent = '';
+  S.subjects.forEach((s, k) => {
+    const on = (s.polish | 0) > 0;
+    const row = document.createElement('div');
+    row.className = 'mini';
+    const t = document.createElement('button');
+    t.className = 'chip pol';
+    t.setAttribute('aria-pressed', String(on));
+    t.title = on ? 'turn polish off for this subject' : 'polish this subject';
+    const sw = document.createElement('span');
+    sw.className = 'sw'; sw.style.background = s.palette[s.palette.length - 1];
+    const nm = document.createElement('span');
+    nm.textContent = '#' + s.id;
+    t.append(sw, nm);
+    const sl = document.createElement('input');
+    sl.type = 'range'; sl.min = '10'; sl.max = '100'; sl.step = '5';
+    sl.value = String(on ? (s.polish | 0) : 70);
+    sl.disabled = !on;
+    const v = document.createElement('b');
+    v.textContent = on ? String(s.polish | 0) : 'off';
+    t.addEventListener('click', () => setPolish(k, on ? 0 : (+sl.value || 70)));
+    sl.addEventListener('input', () => setPolish(k, +sl.value));
+    row.append(t, sl, v);
+    wrap.append(row);
+  });
+  const lit = S.subjects.filter((s) => (s.polish | 0) > 0);
+  $('#vPol').textContent = lit.length
+    ? `${lit.length}/${S.subjects.length} on` : 'off';
+}
+
+function setPolish(k, v) {
+  const s = S.subjects[k];
+  if (!s) return;
+  s.polish = clamp(v | 0, 0, 100);
+  dropPolish();
+  DOTS_CACHE = null;
+  renderPolish();
+  draw();
 }
 
 function renderModes() {
@@ -1808,8 +2015,7 @@ async function composeAt(i, opts) {
   c.clearRect(0, 0, S.W, S.H);
   c.drawImage(rec.frame, 0, 0);
   const src = c.getImageData(0, 0, S.W, S.H).data;
-  const masks = usingSubjects()
-    ? rec.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, 'x' + k)) : [];
+  const masks = await masksFor(i, rec, 'x');
   const pal = palettesForRender();
   // `alpha` is the transparent exports: same pixels, background keyed out
   const P = (opts && opts.alpha) ? Object.assign({}, S.P, { alpha: true }) : S.P;
@@ -1946,7 +2152,8 @@ async function exportClip() {
       bg: S.bg, palette: S.palette, fps: S.fps,
       format: fmt.id, gif_fps: S.gifFps,
       subjects: usingSubjects()
-        ? S.subjects.map((s) => ({ id: s.id, palette: s.palette })) : [],
+        ? S.subjects.map((s) => ({ id: s.id, palette: s.palette,
+                                   polish: s.polish | 0 })) : [],
     });
     const r = await E().exportClip(params, (p) => {
       bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
@@ -2009,7 +2216,8 @@ function dotsParams() {
     cell: S.P.cell, dotpx: S.P.dotpx, n: S.P.n, fill: S.P.fill,
     stray: S.P.stray, band: S.P.band, gamma: S.P.gamma, invert: S.P.invert,
     seed: S.P.seed, bg: S.bg, fps: S.fps,
-    subjects: S.subjects.map((x) => ({ id: x.id, palette: x.palette })),
+    subjects: S.subjects.map((x) => ({ id: x.id, palette: x.palette,
+                                      polish: x.polish | 0 })),
   };
 }
 
@@ -2065,7 +2273,7 @@ async function dotsDoc(onProgress) {
       c.clearRect(0, 0, S.W, S.H);
       c.drawImage(rec.frame, 0, 0);
       const src = c.getImageData(0, 0, S.W, S.H).data;
-      const masks = rec.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, 'x' + k));
+      const masks = await masksFor(i, rec, 'x');
       const r = dotsOn(src, S.W, S.H, masks, S.P, BLUE);
       frames.push(r.on.map((o) => dotXY(r.F, o)));
       if (onProgress) onProgress({ done: i + 1, total: S.nFrames,
@@ -2601,6 +2809,30 @@ async function checkModels() {
         out[sub.id] = n;
       });
       return out;
+    },
+  };
+  /* mask polish, for the verifiers and for anyone driving the page from a
+   * console: strengths in, the algorithm's own numbers out. */
+  window.DV_polish = {
+    set: (id, strength) => {
+      const k = S.subjects.findIndex((x) => String(x.id) === String(id));
+      if (k < 0) throw new Error('no subject ' + id);
+      setPolish(k, strength);
+      return S.subjects[k].polish;
+    },
+    all: (strength) => { S.subjects.forEach((x, k) => setPolish(k, strength));
+                         return S.subjects.map((x) => x.polish); },
+    get: () => S.subjects.map((x) => ({ id: x.id, polish: x.polish | 0 })),
+    params: (strength) => MaskPolish.params(strength),
+    /* the polished mask for one subject on one frame, 8-bit, as the renderer
+     * sees it — the browser half of the preview/export parity check */
+    mask: async (id, frame) => {
+      const k = S.subjects.findIndex((x) => String(x.id) === String(id));
+      checkPolishKey();
+      const m = await polishedMask(k, frame);
+      const u8 = new Uint8Array(m.length);
+      for (let q = 0; q < m.length; q++) u8[q] = Math.round(m[q] * 255);
+      return Array.from(u8);
     },
   };
   window.DV_formats = engineFormats;

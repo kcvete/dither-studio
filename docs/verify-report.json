@@ -1,52 +1,84 @@
 {
- "base": "http://127.0.0.1:8770",
+ "base": "http://127.0.0.1:8790",
  "clip": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/clip5s.mp4",
  "still": "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/still.jpg",
  "consoleErrors": [],
  "pageErrors": [],
  "requestFailures": [
   {
-   "url": "http://127.0.0.1:8770/api/jobs/0d50436baac6/output/mp4?t=1787219966905",
+   "url": "blob:http://127.0.0.1:8790/ba8c010b-7f93-4fd6-90f6-f43dfbc92fdb",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/0d50436baac6/output/mp4?t=1787219966905",
+   "url": "http://127.0.0.1:8790/api/jobs/e020b34eeeb9/output/mp4?t=1787222334846",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8770/9e398f05-1c62-4a2b-91e8-df7ce5fcd749",
+   "url": "http://127.0.0.1:8790/api/jobs/e020b34eeeb9/output/mp4?t=1787222334846",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/f06d5777976b/output/mp4?t=1787219992140",
+   "url": "blob:http://127.0.0.1:8790/9ccae9a4-0fb2-47e5-8dba-4e3ac41b284b",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/f06d5777976b/output/mp4?t=1787220010833",
+   "url": "blob:http://127.0.0.1:8790/9ccae9a4-0fb2-47e5-8dba-4e3ac41b284b",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/f06d5777976b/output/mp4?t=1787220010833",
+   "url": "http://127.0.0.1:8790/api/jobs/22e210c08b64/output/mp4?t=1787222363037",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "blob:http://127.0.0.1:8770/a03bb106-e9fe-4b5e-bc37-ae6e0ad05bce",
+   "url": "http://127.0.0.1:8790/api/jobs/22e210c08b64/output/mp4?t=1787222381866",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/c4a7e6986045/output/mp4?t=1787220040040",
+   "url": "http://127.0.0.1:8790/api/jobs/22e210c08b64/output/mp4?t=1787222381866",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/c4a7e6986045/output/webm?t=1787220043759",
+   "url": "http://127.0.0.1:8790/api/jobs/030c311d46f5/output/mp4?t=1787222411856",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/c4a7e6986045/output/webm-alpha?t=1787220052877",
+   "url": "http://127.0.0.1:8790/api/jobs/030c311d46f5/output/mp4?t=1787222411856",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8770/api/jobs/c4a7e6986045/output/webm-alpha?t=1787220052877",
+   "url": "http://127.0.0.1:8790/api/jobs/030c311d46f5/output/mp4?t=1787222411856",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8790/api/jobs/030c311d46f5/output/webm?t=1787222415571",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8790/api/jobs/030c311d46f5/output/webm?t=1787222415571",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8790/api/jobs/030c311d46f5/output/webm-alpha?t=1787222424689",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "blob:http://127.0.0.1:8790/cf51dec5-c458-47a2-9a71-93fab38a7f59",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "blob:http://127.0.0.1:8790/d58dcf3c-4bf3-4edd-9e90-1d4394c5b215",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8790/api/jobs/f784c3252e75/output/mp4?t=1787222576063",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8790/api/jobs/f784c3252e75/output/mp4?t=1787222576063",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8790/api/jobs/f784c3252e75/output/mp4?t=1787222576063",
    "why": "net::ERR_ABORTED"
   }
  ],
@@ -211,7 +243,7 @@
    "exportedProbe": "1280,720"
   },
   "stillDots": {
-   "fps": "1280×720 · 39 ms · 31500 dots",
+   "fps": "1280×720 · 36 ms · 31500 dots",
    "dots": 31500,
    "census": {
     "w": 1280,
@@ -253,7 +285,7 @@
    "promptFrameHidden": true,
    "trackButton": "Use this selection",
    "info": "1 subject in 0.09 s (768 px) · #1 12750 px",
-   "liveSeconds": 5.1,
+   "liveSeconds": 1.1,
    "segmentSeconds": 0.09,
    "areas": {
     "1": 12750
@@ -300,7 +332,7 @@
      ]
     ]
    },
-   "dotsFps": "1280×720 · 32 ms · 712 dots",
+   "dotsFps": "1280×720 · 36 ms · 712 dots",
    "subjectDots": 712,
    "alphaUiShown": true,
    "export": "1280×720 PNG · 27 KB · 712 dots · 1 subject, cutout · transparent background",
@@ -314,7 +346,7 @@
   },
   "whole": {
    "source": "150 frames · 1280×720 · 30 fps",
-   "job": "0d50436baac6",
+   "job": "e020b34eeeb9",
    "preview": {
     "w": 1280,
     "h": 720,
@@ -338,7 +370,7 @@
      ]
     ]
    },
-   "previewFps": "57.5 fps",
+   "previewFps": "57.1 fps",
    "previewFrame20": {
     "w": 1280,
     "h": 720,
@@ -362,7 +394,7 @@
      ]
     ]
    },
-   "render": "rendered 150 frames in 10.3 s (14.6 fps) · 7.2 MB",
+   "render": "rendered 150 frames in 10.5 s (14.3 fps) · 7.2 MB",
    "ffprobe": {
     "width": 1280,
     "height": 720,
@@ -371,7 +403,7 @@
    }
   },
   "tracked": {
-   "job": "f06d5777976b",
+   "job": "22e210c08b64",
    "subjectChips": [
     "#1 · 1pt+box @ 0✕",
     "#2 · 1pt+box @ 0✕"
@@ -394,14 +426,14 @@
     }
    ],
    "qualityDefault": 768,
-   "trackInfo": "tracked 150 frames in 14.0 s (10.7 fps) on MPS coreml · 2 subjects",
-   "trackWallSeconds": 14.6,
+   "trackInfo": "tracked 150 frames in 16.9 s (8.8 fps) on MPS coreml · 2 subjects",
+   "trackWallSeconds": 17.1,
    "status": {
     "state": "done",
     "done_frames": 150,
     "n_frames": 150,
-    "elapsed_s": 14.04,
-    "fps": 10.69,
+    "elapsed_s": 16.95,
+    "fps": 8.85,
     "error": null,
     "device": "mps",
     "backend": "coreml",
@@ -445,8 +477,8 @@
      ]
     ]
    },
-   "dotsFps": "37.2 fps · 3989 dots",
-   "dotsRender": "rendered 150 frames in 4.0 s (37.2 fps) · 0.6 MB",
+   "dotsFps": "39.7 fps · 3989 dots",
+   "dotsRender": "rendered 150 frames in 4.1 s (36.5 fps) · 0.6 MB",
    "dotsProbe": {
     "width": 1280,
     "height": 720,
@@ -497,7 +529,7 @@
      ]
     ]
    },
-   "mixedRender": "rendered 150 frames in 12.6 s (11.9 fps) · 27.5 MB",
+   "mixedRender": "rendered 150 frames in 12.5 s (12.0 fps) · 27.5 MB",
    "mixedProbe": {
     "width": 1280,
     "height": 720,
@@ -511,14 +543,14 @@
    }
   },
   "trackedFast": {
-   "job": "c4a7e6986045",
+   "job": "030c311d46f5",
    "selected": 512,
-   "trackInfo": "tracked 150 frames in 10.2 s (14.8 fps) on MPS coreml · 1 subject",
+   "trackInfo": "tracked 150 frames in 10.4 s (14.5 fps) on MPS coreml · 1 subject",
    "trackWallSeconds": 10.6,
    "imageSize": 512,
    "backend": "coreml",
    "doneFrames": 150,
-   "fps": 14.77,
+   "fps": 14.47,
    "maskBytes": 7260,
    "maskSize": [
     1280,
@@ -558,7 +590,7 @@
       "nb_read_frames": "150",
       "tags": {}
      },
-     "info": "rendered 150 frames in 2.8 s (53.6 fps) · 0.4 MB"
+     "info": "rendered 150 frames in 3.0 s (50.7 fps) · 0.4 MB"
     },
     "webm": {
      "seconds": 3.7,
@@ -585,7 +617,7 @@
       "r_frame_rate": "15/1",
       "nb_read_frames": "75"
      },
-     "info": "rendered 150 frames in 2.9 s (52.6 fps) · 0.2 MB"
+     "info": "rendered 150 frames in 2.9 s (51.6 fps) · 0.2 MB"
     },
     "webm-alpha": {
      "seconds": 5.2,
@@ -601,10 +633,10 @@
        "alpha_mode": "1"
       }
      },
-     "info": "rendered 150 frames in 4.8 s (31.0 fps) · 0.8 MB · alpha channel written"
+     "info": "rendered 150 frames in 4.7 s (32.0 fps) · 0.8 MB · alpha channel written"
     },
     "prores": {
-     "seconds": 5.5,
+     "seconds": 5,
      "bytes": 19711207,
      "probe": {
       "codec_name": "prores",
@@ -615,10 +647,10 @@
       "nb_read_frames": "150",
       "tags": {}
      },
-     "info": "rendered 150 frames in 4.0 s (37.6 fps) · 19.7 MB · ProRes 4444 does not play in a browser — download it"
+     "info": "rendered 150 frames in 3.5 s (42.2 fps) · 19.7 MB · ProRes 4444 does not play in a browser — download it"
     }
    },
-   "job": "c4a7e6986045",
+   "job": "030c311d46f5",
    "offered": [
     {
      "available": true,
@@ -682,7 +714,7 @@
   },
   "trim": {
    "whole": {
-    "job": "febb3a8ee23e",
+    "job": "91c1e674fd8c",
     "n_frames": 150,
     "w": 1280,
     "h": 720,
@@ -693,7 +725,7 @@
     "seconds": 5
    },
    "middle": {
-    "job": "b74fd0821e44",
+    "job": "9016e46541d7",
     "n_frames": 60,
     "w": 1280,
     "h": 720,
@@ -704,7 +736,7 @@
     "seconds": 2
    },
    "capped": {
-    "job": "03716f734a9a",
+    "job": "03c483135bc0",
     "n_frames": 30,
     "w": 1280,
     "h": 720,
@@ -717,9 +749,9 @@
    "firstFrameMeanAbsDiff": 0
   },
   "dots": {
-   "job": "c4a7e6986045",
+   "job": "030c311d46f5",
    "stats": {
-    "job": "c4a7e6986045",
+    "job": "030c311d46f5",
     "frames": 150,
     "bytes": 69703,
     "raw_bytes": 362047,
@@ -734,10 +766,10 @@
     ],
     "dots_mean": 1184.6,
     "dots_max": 2300,
-    "elapsed_s": 2.05,
-    "url": "/api/jobs/c4a7e6986045/out.dots.gz",
+    "elapsed_s": 2.08,
+    "url": "/api/jobs/030c311d46f5/out.dots.gz",
     "json_bytes": 1753313,
-    "json_url": "/api/jobs/c4a7e6986045/out.dots.json"
+    "json_url": "/api/jobs/030c311d46f5/out.dots.json"
    },
    "mp4Bytes": 432303,
    "sizes": {
@@ -756,14 +788,14 @@
     ]
    },
    "sequence": {
-    "sequence": "seq-5e566ffcc1",
+    "sequence": "seq-862dbda88d",
     "frames": 150,
     "w": 1280,
     "h": 720,
     "format": "mp4",
     "bytes": 432303,
-    "elapsed_s": 0.7,
-    "url": "/api/sequence/seq-5e566ffcc1/output/mp4"
+    "elapsed_s": 0.72,
+    "url": "/api/sequence/seq-862dbda88d/output/mp4"
    },
    "sequenceProbe": {
     "width": 1280,
@@ -773,8 +805,8 @@
    }
   },
   "lasso": {
-   "job": "a6d451ec8312",
-   "boxPreviewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12767 px",
+   "job": "1ce11a0f5f14",
+   "boxPreviewText": "frame 0 · 1 subject in 0.35 s (768 px) · #1 12767 px",
    "boxPreviewWallSeconds": 0.52,
    "boxPreviewOverlay": 1,
    "shapes": [
@@ -783,10 +815,10 @@
    "maskDataURLBytes": 36138,
    "lassoPreviewText": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12093 px",
    "lassoPreviewWallSeconds": 0.53,
-   "trackInfo": "tracked 150 frames in 10.7 s (14.0 fps) on MPS coreml · 1 subject",
-   "trackWallSeconds": 11.1,
+   "trackInfo": "tracked 150 frames in 11.7 s (12.9 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 12.1,
    "doneFrames": 150,
-   "fps": 14.02,
+   "fps": 12.87,
    "backend": "coreml",
    "promptRecorded": {
     "frame_idx": 0,
@@ -837,6 +869,107 @@
     "mean": 0.9777,
     "min": 0.9282
    }
+  },
+  "polish": {
+   "params": [
+    {
+     "strength": 0,
+     "u": 0,
+     "radius": 0,
+     "morph": 0,
+     "blur": 0,
+     "alpha": 0.35
+    },
+    {
+     "strength": 30,
+     "u": 0.3,
+     "radius": 1,
+     "morph": 1,
+     "blur": 1,
+     "alpha": 0.35
+    },
+    {
+     "strength": 70,
+     "u": 0.7,
+     "radius": 2,
+     "morph": 1,
+     "blur": 1,
+     "alpha": 0.35
+    },
+    {
+     "strength": 100,
+     "u": 1,
+     "radius": 3,
+     "morph": 2,
+     "blur": 2,
+     "alpha": 0.35
+    }
+   ],
+   "gate": {
+    "slow": [
+     0.293,
+     0.626,
+     1,
+     0.626,
+     0.293
+    ],
+    "fast": [
+     0,
+     0,
+     1,
+     0,
+     0
+    ],
+    "slowTotal": 2.838,
+    "fastTotal": 1
+   },
+   "job": "f784c3252e75",
+   "trackInfo": "tracked 150 frames in 10.9 s (13.8 fps) on MPS coreml · 1 subject",
+   "dotsOff": "84.0 fps · 782 dots",
+   "rowsBefore": [
+    "#1off"
+   ],
+   "before": [
+    {
+     "id": 1,
+     "polish": 0
+    }
+   ],
+   "after": [
+    {
+     "id": 1,
+     "polish": 70
+    }
+   ],
+   "dotsOn": "38.5 fps · 923 dots",
+   "maskParity": {
+    "pixels": 921600,
+    "lit": 19008,
+    "differing": 0,
+    "worst": 0,
+    "w": 1280,
+    "h": 720
+   },
+   "wipeVisible": true,
+   "wipe": {
+    "leftColours": 33,
+    "rightColours": 1
+   },
+   "render": "rendered 150 frames in 3.0 s (50.1 fps) · 0.5 MB",
+   "renderWallSeconds": 3.5,
+   "probe": {
+    "width": 1280,
+    "height": 720,
+    "r_frame_rate": "30/1",
+    "nb_read_frames": "150"
+   },
+   "cached": true,
+   "previewVsExport": {
+    "pixels": 921600,
+    "within30": 915236,
+    "pct": 99.31
+   }
   }
- }
+ },
+ "only": []
 }
