@@ -6017,7 +6017,7 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
 
   function setSheet(d) {
     document.body.dataset.sheet = d;
-    panel.style.transform = '';
+    panel.style.height = '';
     document.body.classList.remove('sheetdrag');
   }
   window.DV_sheet = setSheet;            // additive hook; track() peeks it
@@ -6050,22 +6050,19 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
 
   /* drag the grabber between detents; a plain tap toggles collapsed ⁄ half */
   let drag = null;
-  const tabH = () => (tabs.getBoundingClientRect().height || 56);
   grab.addEventListener('pointerdown', (e) => {
     if (!mq.matches) return;
     grab.setPointerCapture(e.pointerId);
-    const natTop = window.innerHeight - tabH() - panel.offsetHeight;
-    drag = { y0: e.clientY, ty0: panel.getBoundingClientRect().top - natTop,
-             moved: false };
+    drag = { y0: e.clientY, h0: panel.offsetHeight, moved: false };
     document.body.classList.add('sheetdrag');
     e.preventDefault();
   });
   grab.addEventListener('pointermove', (e) => {
     if (!drag) return;
-    const dy = e.clientY - drag.y0;
+    const dy = e.clientY - drag.y0;                 // down = smaller sheet
     if (Math.abs(dy) > 5) drag.moved = true;
-    const ty = clamp(drag.ty0 + dy, 0, panel.offsetHeight - 46);
-    panel.style.transform = `translateY(${ty}px)`;
+    const h = clamp(drag.h0 - dy, 46, window.innerHeight * 0.86);
+    panel.style.height = h + 'px';
   });
   const dragEnd = (e) => {
     if (!drag) return;
@@ -6074,10 +6071,9 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
       setSheet(document.body.dataset.sheet === 'collapsed' ? 'half' : 'collapsed');
       return;
     }
-    const ty = clamp(d.ty0 + (e.clientY - d.y0), 0, panel.offsetHeight - 46);
-    const visible = panel.offsetHeight - ty;
-    setSheet(visible < panel.offsetHeight * 0.3 ? 'collapsed'
-      : visible < panel.offsetHeight * 0.78 ? 'half' : 'full');
+    const h = clamp(d.h0 - (e.clientY - d.y0), 46, window.innerHeight * 0.86);
+    const vh = window.innerHeight;
+    setSheet(h < vh * 0.25 ? 'collapsed' : h < vh * 0.66 ? 'half' : 'full');
   };
   grab.addEventListener('pointerup', dragEnd);
   grab.addEventListener('pointercancel', dragEnd);

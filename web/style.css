@@ -334,26 +334,34 @@ body.dragging #drop b{opacity:1}
   #pstage,#vstage,#camstage,#seqstage{max-height:100%}
   .hero h1{font-size:19px}
   .hero p{font-size:12px}
-  #transport{padding:6px 10px;gap:8px;border-radius:10px}
+  #transport{padding:6px 10px;gap:8px;border-radius:10px;flex-wrap:wrap;row-gap:2px}
   #transport .chip{padding:8px 12px}
+  /* a 390px transport keeps the verbs; the diagnostics wait for desktop */
+  #transport #fps{display:none}
+  #transport #rangelbl:not(.on){display:none}
   .hint{display:none}
 
   /* -------- the rail becomes the sheet -------- */
+  /* the sheet is SIZED, not translated: a translated panel keeps its
+     scrollport bottom off-screen and no sticky CTA could ever pin to it */
   #panel{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom));
-    top:auto;width:auto;flex:none;height:74vh;z-index:20;
+    top:auto;width:auto;flex:none;height:46px;z-index:20;
     border-right:0;border-top:1px solid var(--line);border-radius:16px 16px 0 0;
     background:#0e1512f2;overscroll-behavior:contain;
-    transform:translateY(calc(100% - 46px));transition:transform .28s cubic-bezier(.3,.9,.3,1);
-    padding-top:0;will-change:transform}
-  body[data-sheet="half"] #panel{transform:translateY(calc(100% - 46vh))}
-  body[data-sheet="full"] #panel{transform:translateY(0)}
+    transition:height .28s cubic-bezier(.3,.9,.3,1);
+    padding-top:0}
+  body[data-sheet="half"] #panel{height:46vh}
+  body[data-sheet="full"] #panel{height:86vh}
   body.sheetdrag #panel{transition:none}
   #grab{all:unset;display:block;position:sticky;top:0;z-index:3;width:100%;
     padding:7px 0 9px;background:inherit;cursor:grab;touch-action:none;text-align:center}
   #grab i{display:inline-block;width:44px;height:4px;border-radius:99px;
     background:#ffffff3a}
 
-  /* the active step's primary verb stays under the thumb at every detent */
+  /* the active step's primary verb stays under the thumb at every detent.
+     .step's own overflow:hidden would become the sticky containing block and
+     swallow it, so the sheet relaxes that (the corner rounding survives). */
+  .step{overflow:visible}
   #st2 .row:has(#bTrack),#st5 .row:has(#bExport),#sq4 .row:has(#bSeqPrev){
     position:sticky;bottom:0;z-index:2;background:#0e1512f2;
     padding:8px 0;margin-top:6px;backdrop-filter:blur(10px)}
