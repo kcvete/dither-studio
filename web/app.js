@@ -77,6 +77,7 @@ const S = {
     n: 8000, cell: 4, dotpx: 3, fill: 0.7, stray: 0.02, band: 9,
   },
   palette: ['#000000', '#ffffff'],   // background / whole-frame palette
+  lookPreset: 'custom',              // which look-preset tile is lit
   paletteTouched: false,             // has anyone chosen one yet?
   dotsTuned: false,                  // has the dot count been set for this still?
   bg: '#c9d4c5',
@@ -180,6 +181,11 @@ const fmtBytes = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB'
 const fmtDur = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
   : `${s < 10 ? s.toFixed(1) : Math.round(s)}s`);
 
+/* The tracker resolutions, in words a first-timer can pick between. The
+ * engine's own ids/labels survive as the secondary text on each chip. */
+const TQ_HUMAN = { fast: 'Draft', balanced: 'Standard', best: 'Fine' };
+const tqName = (t) => (t && (TQ_HUMAN[t.id] || t.label.split(' ')[0])) || '';
+
 /** Seconds the current trim covers (the whole clip when nothing is trimmed). */
 function trimSeconds() {
   if (S.trim) return Math.max(0, S.trim.end - S.trim.start);
@@ -200,10 +206,24 @@ function clipEstimate() {
   const fps = (t && t.fps) || 0;
   return { secs, n, w, h, jpeg, tabBytes: jpeg + lru + masks,
            trackFps: fps, trackS: fps ? n / fps : 0,
-           quality: t ? t.label.split(' ')[0] : '', size: t ? t.size : 0 };
+           quality: tqName(t), size: t ? t.size : 0 };
+}
+
+/** The Track button carries the honest estimate: what it costs, before it is
+ *  pressed. Stills keep their own label ("Use this selection"). */
+function paintTrackCTA() {
+  const b = $('#bTrack');
+  if (!b || S.kind !== 'video') return;
+  if (b.dataset.running === '1') return;      // progress copy owns it mid-run
+  const nSub = Math.max(1, S.subjects.length || 1);
+  let est = 0;
+  try { est = clipEstimate().trackS * nSub; } catch (e) { est = 0; }
+  b.textContent = (nSub > 1 ? `Track ${nSub} subjects` : 'Track subject')
+    + (est ? ` — ≈ ${fmtDur(est)}` : '');
 }
 
 function paintEstimate() {
+  paintTrackCTA();
   if (S.kind === 'image' || !S.srcFile) { $('#vidopts').hidden = true; return; }
   const e = clipEstimate();
   const browser = E().id === 'browser';
@@ -747,6 +767,7 @@ async function loadStill(f) {
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = true;
     S.range = null; S.extend = null; paintRange(); paintTrimOffer();
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
+    $('#sharerow') && ($('#sharerow').hidden = true);
     $('#outimg').hidden = true; $('#pvinfo').hidden = true; $('#tinfo').hidden = true;
     $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
     $('#fmtui').hidden = true; $('#trimui').hidden = true;
@@ -823,6 +844,7 @@ async function uploadClip(f, trim, opts = {}) {
     $('#sFrame').max = j.nFrames - 1;
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = false;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
+    $('#sharerow') && ($('#sharerow').hidden = true);
     $('#tinfo').hidden = true; $('#s5sum').textContent = '';
     $('#outimg').hidden = true; $('#dlorig').hidden = true;
     buildFormats();
@@ -906,13 +928,14 @@ function paintStep2(kind) {
   $('#pfui').hidden = still;
   $('#bPrev').hidden = still;
   $('#stillnote').hidden = !still;
-  $('#tqlbl').textContent = still ? 'Selection quality' : 'Tracking quality';
+  $('#tqlbl').textContent = still ? 'Detail' : 'Detail';
   $('#tqnote').textContent = still
     ? 'Your picture keeps its own resolution — this only changes the square the '
       + 'model looks at, and so how fine an outline it can cut.'
     : 'Your clip keeps its own resolution — this only changes the square the '
       + 'tracker looks at, and so how fine an outline it can draw.';
-  $('#bTrack').textContent = still ? 'Use this selection' : 'Track';
+  if (still) $('#bTrack').textContent = 'Use this selection';
+  else paintTrackCTA();
   $('#wholenote').textContent = still
     ? 'Every pixel of the image gets dithered. Switch to select subjects to '
       + 'dither only what you point at — or to cut it out of its background.'
@@ -1287,13 +1310,28 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && S.curPath) { S.curPath = null; S.hoverXY = null; drawOverlay(); }
 });
 
-/* ---- prompt tool ---- */
-const TOOLHINT = {
+/* ---- prompt tool ----
+ * Two sets of words for the same tools: a phone has no shift key and no esc,
+ * so on a coarse pointer every hint speaks in taps and the ⊕/⊖ pair. */
+const COARSE = window.matchMedia
+  && window.matchMedia('(pointer: coarse)').matches;
+const TOOLHINT = COARSE ? {
+  point: 'tap = keep · ⊖ mode = remove · drag a box',
+  lasso: 'draw around it with one finger · ⊖ mode subtracts',
+  poly: 'tap each corner · ✓ closes · ✕ cancels',
+} : {
   point: "click what you want · shift-click what you don't · drag a box",
   lasso: 'drag around the subject · shift-drag to subtract · esc cancels',
   poly: 'click each corner · double-click or enter to close · esc cancels',
 };
-const TOOLNOTE = {
+const TOOLNOTE = COARSE ? {
+  point: 'Tap = keep this · tap inside the tint (or ⊖ mode) = not this · '
+       + 'drag = a box. The tracker re-derives the outline itself on every frame.',
+  lasso: 'Draw around the subject with one finger · switch to ⊖ to subtract. '
+       + 'A drawn shape replaces this subject\'s taps and box.',
+  poly: 'Tap each corner, then ✓ to close · ⊖ makes a subtracting shape. '
+      + 'A drawn shape replaces this subject\'s taps and box.',
+} : {
   point: 'Click = keep this · shift-click = not this · drag = a box. '
        + 'The tracker re-derives the outline itself on every frame.',
   lasso: 'Drag to draw around the subject · shift-drag subtracts · esc cancels. '
@@ -1305,8 +1343,8 @@ const TOOLNOTE = {
 function paintTool() {
   $$('#ptool .chip').forEach((c) => c.setAttribute('aria-pressed',
     String(c.dataset.tool === S.tool)));
-  $('#vTool').textContent = S.tool === 'point' ? 'point / box'
-    : S.tool === 'lasso' ? 'lasso' : 'polygon';
+  $('#vTool').textContent = S.tool === 'point' ? 'tap / box'
+    : S.tool === 'lasso' ? 'draw around' : 'trace corners';
   $('#toolnote').textContent = TOOLNOTE[S.tool];
   $('#phint').textContent = TOOLHINT[S.tool];
   $('#bUndo').hidden = S.tool === 'point';
@@ -1338,7 +1376,8 @@ function buildTrackSizes() {
     b.className = 'chip';
     b.dataset.size = t.size;
     b.setAttribute('aria-pressed', String(t.size === S.trackSize));
-    b.innerHTML = `${t.label} · ${t.size} px`
+    b.title = t.label;
+    b.innerHTML = `${tqName(t)} · ${t.size} px`
       + (t.fps ? ` <em class="fl">${t.fps.toFixed(0)} fps</em>` : '');
     b.addEventListener('click', () => {
       S.trackSize = t.size;
@@ -1353,7 +1392,7 @@ function buildTrackSizes() {
 
 function paintTrackSize() {
   const t = (S.meta.track_sizes || []).find((x) => x.size === S.trackSize);
-  $('#vTQ').textContent = t ? t.label : `${S.trackSize} px`;
+  $('#vTQ').textContent = t ? tqName(t) : `${S.trackSize} px`;
   // the estimate quotes THIS quality's fps, so it moves when the chip does
   paintEstimate();
 }
@@ -2507,6 +2546,7 @@ async function draw(i) {
     $('#fps').textContent = `${W}×${H} · ${r.ms.toFixed(0)} ms`
       + (S.P.mode === 'dots' ? ` · ${r.lit} dots` : '');
     paintCanvasUI();
+    scheduleLookThumbs();
     return;
   }
   if (S.kind !== 'video') return;
@@ -2533,6 +2573,7 @@ async function draw(i) {
   paintRange();
   $('#fps').textContent = `${(1000 / Math.max(r.ms, 0.01)).toFixed(1)} fps`
     + (S.P.mode === 'dots' ? ` · ${r.lit} dots` : '');
+  scheduleLookThumbs();
   return r.lit;
 }
 
@@ -2623,10 +2664,14 @@ function setMode(id) {
   if (id === 'dots' && S.kind === 'image' && !usingSubjects()) tuneWholeImageDots();
   const dotsUI = $('#dotsexp');
   if (dotsUI) dotsUI.hidden = !(id === 'dots' && dotsAvailable());
+  const dev = $('#devexp');
+  if (dev) dev.hidden = !(id === 'dots' && dotsAvailable());
   const ed = id === 'errordiff';
   $('#edui').hidden = !ed;
   $('#mxui').hidden = !(id === 'ordered' || id === 'halftone');
   $('#dotsui').hidden = id !== 'dots';
+  const adv = $('#advui');
+  if (adv) adv.hidden = id !== 'dots';
   $('#pxui').hidden = id === 'dots';
   renderPolish();
   const m = (S.meta.modes || []).find((x) => x.id === id);
@@ -2738,10 +2783,218 @@ function renderModes() {
     }
     b.addEventListener('click', () => {
       if (!ok) { toast('on a clip the dots look needs a tracked subject', true); return; }
-      setMode(m.id); draw();
+      setMode(m.id); markCustom(); draw();
     });
     wrap.append(b);
   });
+  paintLookRow();
+}
+
+/* ================================================= look presets ==========
+ * A look is a whole answer — style + colours + the dot dials — applied in one
+ * tap. Presets are pure parameter dictionaries over the existing engine: no
+ * new render path, and every slider underneath stays live. Touching one flips
+ * the row to "Custom"; the tiles are small live renders of the actual frame.
+ */
+const LOOK_BASE = {
+  algo: 'floyd-steinberg', matrix: 4, serpentine: false, strength: 1,
+  brightness: 0, contrast: 1, gamma: 1, invert: false, pixel: 1,
+  n: 8000, cell: 4, dotpx: 3, fill: 0.7, stray: 0.02, band: 9,
+};
+const LOOKS = [
+  { id: 'solvd', name: 'Solvd',
+    P: { mode: 'dots', n: 9000, cell: 4, dotpx: 3, fill: 0.7, stray: 0.02, band: 9 },
+    bg: '#c9d4c5', ink: ['#0f1f18', '#b0413e'], palette: ['#c9d4c5', '#0f1f18'] },
+  { id: 'newsprint', name: 'Newsprint',
+    P: { mode: 'halftone', matrix: 8, pixel: 2 },
+    bg: '#f6ece2', ink: ['#1c1b18'], palette: ['#f6ece2', '#1c1b18'] },
+  { id: 'gameboy', name: 'Game Boy',
+    P: { mode: 'ordered', matrix: 4, pixel: 3 },
+    bg: '#9bbc0f', ink: ['#0f380f'],
+    palette: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f'] },
+  { id: 'blueprint', name: 'Blueprint',
+    P: { mode: 'ordered', matrix: 8, pixel: 2 },
+    bg: '#10214b', ink: ['#dce8ff'], palette: ['#10214b', '#3b5bbf', '#dce8ff'] },
+  { id: 'ember', name: 'Ember',
+    P: { mode: 'bluenoise', pixel: 2 },
+    bg: '#e8804a', ink: ['#f6ece2'], palette: ['#e8804a', '#f6ece2'] },
+  { id: 'ghost', name: 'Ghost',
+    P: { mode: 'dots', n: 5000, cell: 5, dotpx: 2, fill: 0.6, stray: 0.05, band: 14 },
+    bg: '#0f1f18', ink: ['#e8efe6'], palette: ['#0f1f18', '#e8efe6'] },
+  { id: 'comic', name: 'Comic',
+    P: { mode: 'errordiff', algo: 'atkinson', pixel: 2 },
+    bg: '#ffffff', ink: ['#d02f26'], palette: ['#000000', '#ffffff', '#d02f26'] },
+  { id: 'terminal', name: 'Terminal',
+    P: { mode: 'ordered', matrix: 4, pixel: 2 },
+    bg: '#001a05', ink: ['#2dff6a'], palette: ['#001a05', '#2dff6a'] },
+  { id: 'film', name: 'Film grain',
+    P: { mode: 'whitenoise' },
+    bg: '#000000', ink: ['#ffffff'], palette: ['#000000', '#555555', '#aaaaaa', '#ffffff'] },
+];
+let APPLYING_LOOK = false;
+
+/** Any manual change to a look control makes the look "Custom". */
+function markCustom() {
+  if (APPLYING_LOOK || S.lookPreset === 'custom') return;
+  S.lookPreset = 'custom';
+  paintLookRow();
+}
+
+/** Write every look control's DOM state from S.P — one place, so a preset and
+ *  a verifier-driven change repaint the same way. */
+function syncLookUI() {
+  const set = (id, v, out, txt) => {
+    const el = $(id); if (el) el.value = String(v);
+    if (out) $(out).textContent = txt;
+  };
+  set('#sN', S.P.n, '#vN', String(S.P.n));
+  set('#sCell', S.P.cell, '#vCell', S.P.cell + ' px');
+  set('#sDot', S.P.dotpx, '#vDot', S.P.dotpx + ' px');
+  set('#sFill', S.P.fill, '#vFill', S.P.fill.toFixed(2));
+  set('#sStray', S.P.stray, '#vStray', S.P.stray.toFixed(3));
+  set('#sBand', S.P.band, '#vBand', String(S.P.band));
+  set('#sStr', S.P.strength, '#vStr', S.P.strength.toFixed(2));
+  set('#sPx', S.P.pixel, '#vPx', S.P.pixel + '×');
+  set('#sBri', S.P.brightness, '#vBri', S.P.brightness.toFixed(2));
+  set('#sCon', S.P.contrast, '#vCon', S.P.contrast.toFixed(2));
+  set('#sGam', S.P.gamma, '#vGam', S.P.gamma.toFixed(2));
+  $('#tInv').setAttribute('aria-pressed', String(!!S.P.invert));
+  $('#tSerp').setAttribute('aria-pressed', String(!!S.P.serpentine));
+  const alg = $('#sAlgo'); if (alg) alg.value = S.P.algo;
+  $$('[data-mx]').forEach((o) => o.setAttribute('aria-pressed',
+    String(+o.dataset.mx === S.P.matrix)));
+}
+
+function applyLook(l) {
+  if (l.P.mode === 'dots' && !dotsAvailable()) {
+    toast('on a clip the dots look needs a tracked subject', true);
+    return;
+  }
+  APPLYING_LOOK = true;
+  try {
+    Object.assign(S.P, LOOK_BASE, l.P);
+    S.bg = l.bg; const cbg = $('#cBg'); if (cbg) cbg.value = l.bg;
+    S.paletteTouched = true; S.dotsTuned = true;
+    S.palette = l.palette.slice();
+    S.subjects.forEach((s, i) => { s.palette = [l.bg, l.ink[i % l.ink.length]]; });
+    S.lookPreset = l.id;
+    syncLookUI();
+    setMode(S.P.mode);
+    renderSwatches(); renderSubjects(); buildTargets(); renderPolish();
+    DOTS_CACHE = null;
+    draw();
+  } finally { APPLYING_LOOK = false; }
+  paintLookRow();
+}
+
+/** A tiny render of the current frame under one preset — a live thumbnail. */
+const LT = { w: 72, h: 40, src: null, at: 0 };
+async function lookThumbSource() {
+  const { w, h } = LT;
+  const c = ctx2d(w, h, 'lt');
+  c.clearRect(0, 0, w, h);
+  if (S.kind === 'image' && S.bitmap) c.drawImage(S.bitmap, 0, 0, w, h);
+  else if (S.kind === 'video' && S.nFrames) {
+    try {
+      const rec = await frameAt(S.cur | 0);
+      c.drawImage(rec.frame, 0, 0, w, h);
+    } catch (e) { return null; }
+  } else {
+    // no source yet: a soft diagonal ramp, so the tiles still show their looks
+    const g = c.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, '#e8e8e8'); g.addColorStop(0.5, '#777');
+    g.addColorStop(1, '#111');
+    c.fillStyle = g; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#ddd'; c.beginPath();
+    c.arc(w * 0.62, h * 0.45, h * 0.3, 0, Math.PI * 2); c.fill();
+  }
+  return c.getImageData(0, 0, w, h);
+}
+
+function renderLookThumb(cv, l, srcData) {
+  const { w, h } = LT;
+  if (cv.width !== w) { cv.width = w; cv.height = h; }
+  const g = cv.getContext('2d');
+  if (!srcData || !BLUE) { g.fillStyle = l.bg; g.fillRect(0, 0, w, h); return; }
+  const P = Object.assign({}, LOOK_BASE, l.P,
+                          { compose: 'cutout', seed: S.P.seed, pixel: 1 });
+  let out;
+  if (P.mode === 'dots') {
+    P.n = 700; P.cell = 2; P.dotpx = 1;
+    out = renderDots(srcData.data, w, h, [fullMask(w, h)], P,
+                     [l.palette, [l.bg, l.ink[0]]], l.bg, BLUE).out;
+  } else {
+    out = Dither.composeFrame(srcData.data, w, h, [], P, [l.palette], l.bg);
+  }
+  g.putImageData(new ImageData(out, w, h), 0, 0);
+}
+
+function paintLookRow() {
+  const wrap = $('#looks');
+  if (!wrap) return;
+  $$('#looks .chip').forEach((b) => b.setAttribute(
+    'aria-pressed', String(b.dataset.look === (S.lookPreset || 'custom'))));
+  const cur = LOOKS.find((x) => x.id === S.lookPreset);
+  $('#vLook').textContent = cur ? cur.name : 'custom';
+  // dots-based tiles are gated exactly like the dots mode chip
+  $$('#looks .chip[data-dots="1"]').forEach((b) => {
+    const ok = dotsAvailable();
+    b.classList.toggle('off', !ok);
+    b.title = ok ? '' : 'track a subject first';
+  });
+}
+
+let LOOKS_BUILT = false;
+function buildLookRow() {
+  const wrap = $('#looks');
+  if (!wrap || LOOKS_BUILT) return;
+  LOOKS_BUILT = true;
+  LOOKS.forEach((l) => {
+    const b = document.createElement('button');
+    b.className = 'chip look';
+    b.dataset.look = l.id;
+    if (l.P.mode === 'dots') b.dataset.dots = '1';
+    const cv = document.createElement('canvas');
+    cv.width = LT.w; cv.height = LT.h;
+    const nm = document.createElement('span');
+    nm.textContent = l.name;
+    b.append(cv, nm);
+    b.addEventListener('click', () => applyLook(l));
+    wrap.append(b);
+  });
+  const cust = document.createElement('button');
+  cust.className = 'chip look custom';
+  cust.dataset.look = 'custom';
+  const nm = document.createElement('span');
+  nm.textContent = 'Custom';
+  cust.title = 'your own mix — touch any dial below and the look is yours';
+  cust.append(nm);
+  wrap.append(cust);
+  paintLookRow();
+}
+
+let LT_TIMER = 0;
+/** Repaint the tiles from the frame that is on screen, at most ~every 1.5 s. */
+function scheduleLookThumbs(force) {
+  if (!LOOKS_BUILT) buildLookRow();
+  // tiles that nobody can see are not repainted mid-playback
+  const st3 = $('#st3');
+  if (!force && st3 && (st3.hidden || st3.getAttribute('data-open') !== '1')) return;
+  const now = performance.now();
+  if (!force && now - LT.at < 1500) {
+    if (!LT_TIMER) LT_TIMER = setTimeout(() => { LT_TIMER = 0; scheduleLookThumbs(); },
+                                         1600 - (now - LT.at));
+    return;
+  }
+  LT.at = now;
+  lookThumbSource().then((src) => {
+    if (!src) return;
+    $$('#looks .chip.look').forEach((b) => {
+      const l = LOOKS.find((x) => x.id === b.dataset.look);
+      const cv = b.querySelector('canvas');
+      if (l && cv) renderLookThumb(cv, l, src);
+    });
+  }).catch(() => {});
 }
 
 function bindSlider(id, out, key, fmt, int) {
@@ -2749,6 +3002,7 @@ function bindSlider(id, out, key, fmt, int) {
   el.addEventListener('input', () => {
     S.P[key] = int ? parseInt(el.value, 10) : parseFloat(el.value);
     $(out).textContent = fmt(S.P[key]);
+    markCustom();
     draw();
   });
 }
@@ -2775,6 +3029,7 @@ $('#bTone').addEventListener('click', () => {
 $('#tInv').addEventListener('click', () => {
   S.P.invert = !S.P.invert;
   $('#tInv').setAttribute('aria-pressed', String(S.P.invert));
+  markCustom();
   draw();
 });
 $('#tSerp').addEventListener('click', () => {
@@ -2782,10 +3037,11 @@ $('#tSerp').addEventListener('click', () => {
   $('#tSerp').setAttribute('aria-pressed', String(S.P.serpentine));
   draw();
 });
-$('#sAlgo').addEventListener('change', (e) => { S.P.algo = e.target.value; draw(); });
+$('#sAlgo').addEventListener('change', (e) => { S.P.algo = e.target.value; markCustom(); draw(); });
 $$('[data-mx]').forEach((b) => b.addEventListener('click', () => {
   S.P.matrix = +b.dataset.mx;
   $$('[data-mx]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+  markCustom();
   draw();
 }));
 $$('[data-compose]').forEach((b) => b.addEventListener('click', () => {
@@ -2816,6 +3072,7 @@ function currentPalette() {
 }
 function setPalette(list) {
   S.paletteTouched = true;
+  markCustom();
   if (S.target === 'bg') S.palette = list;
   else {
     const s = S.subjects.find((x) => String(x.id) === String(S.target));
@@ -3025,6 +3282,7 @@ async function exportPNG() {
     dl.download = `${S.fileName || 'dither'}-${S.P.mode}`
       + (canvasOn() ? '-' + canvasSlug() : '') + (alpha ? '-alpha' : '') + '.png';
     dl.hidden = false;
+    offerShare(url, dl.download, 'image/png');
     const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
     box.textContent = `${ow}×${oh} PNG · ${(blob.size / 1024).toFixed(0)} KB`
       + (canvasOn() ? ` · ${canvasLabel()}` : '')
@@ -3052,6 +3310,8 @@ function currentFormat() {
   return list.find((f) => f.id === S.format)
     || list.find((f) => f.available) || { id: 'webm', ext: 'webm', alpha: false };
 }
+const FMT_SHORT = { mp4: 'MP4', webm: 'WebM', gif: 'GIF',
+                    'webm-alpha': 'Alpha', prores: 'ProRes' };
 function buildFormats() {
   const sel = $('#sFmt'), list = engineFormats();
   $('#fmtui').hidden = S.kind !== 'video' || !list.length;
@@ -3068,11 +3328,32 @@ function buildFormats() {
     S.format = first ? first.id : '';
   }
   sel.value = S.format;
+  // the select stays in the DOM (and settable); these chips are its face
+  const chips = $('#fmtchips');
+  if (chips) {
+    chips.textContent = '';
+    list.forEach((f) => {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.dataset.fmt = f.id;
+      b.textContent = FMT_SHORT[f.id] || (f.ext || f.id).toUpperCase();
+      b.title = f.label + (f.available ? (f.note ? ' — ' + f.note : '')
+                                       : ' — ' + (f.note || 'unavailable here'));
+      if (!f.available) b.classList.add('off');
+      b.addEventListener('click', () => {
+        if (!f.available) { toast(f.note || 'unavailable on this engine', true); return; }
+        S.format = f.id; sel.value = f.id; paintFormat();
+      });
+      chips.append(b);
+    });
+  }
   paintFormat();
   buildSeqFormats();
 }
 function paintFormat() {
   const f = currentFormat();
+  $$('#fmtchips .chip').forEach((b) => b.setAttribute(
+    'aria-pressed', String(b.dataset.fmt === f.id)));
   $('#vFmt').textContent = f.ext ? f.ext.toUpperCase() : '';
   $('#fmtnote').textContent = f.note || '';
   $('#giffps').hidden = f.id !== 'gif';
@@ -3138,8 +3419,37 @@ $$('[data-gfps]').forEach((b) => b.addEventListener('click', () => {
   $$('[data-gfps]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
 }));
 
+/* ---- the share sheet (phones mostly). The File is prepared as soon as the
+ * export lands, because navigator.share must be called synchronously in the
+ * tap handler — no await between the tap and the call. Falls back silently:
+ * the #dl anchor is always there (Android in-app WebViews have no Web Share). */
+async function offerShare(url, name, mime) {
+  const row = $('#sharerow');
+  if (!row) return;
+  row.hidden = true; S.shareFile = null;
+  if (!navigator.canShare || !navigator.share) return;
+  try {
+    const blob = await (await fetch(url)).blob();
+    const f = new File([blob], name, { type: mime || blob.type });
+    if (!navigator.canShare({ files: [f] })) return;
+    S.shareFile = f;
+    $('#bShare').textContent = `share… · ${(blob.size / 1e6).toFixed(1)} MB`;
+    row.hidden = false;
+  } catch (e) { /* the download button is the fallback */ }
+}
+$('#bShare') && $('#bShare').addEventListener('click', () => {
+  const f = S.shareFile;
+  if (!f) return;
+  navigator.share({ files: [f] }).catch((e) => {
+    if (e && e.name !== 'AbortError') {
+      toast('sharing failed — use download instead', true);
+    }
+  });
+});
+
 async function exportClip() {
   const btn = $('#bExport'); btn.disabled = true;
+  $('#sharerow') && ($('#sharerow').hidden = true);
   $('#dl').hidden = true; $('#dlorig').hidden = true;
   $('#dl').textContent = 'download';
   $('#outvid').hidden = true; $('#outimg').hidden = true;
@@ -3189,6 +3499,7 @@ async function exportClip() {
     dl.hidden = false;
     if (r.image) { const im = $('#outimg'); im.src = r.url; im.hidden = false; }
     else if (r.playable) { const v = $('#outvid'); v.src = r.url; v.hidden = false; }
+    offerShare(r.url, 'clip.' + r.ext, fmt.mime);
     const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
     box.textContent = `rendered ${r.frames} frames in ${r.elapsedS.toFixed(1)} s `
       + `(${r.fps.toFixed(1)} fps)`
@@ -5030,6 +5341,8 @@ async function afterEngine() {
   DOTS.key = null;
   setMode(S.P.mode);
   buildTargets();
+  buildLookRow();
+  scheduleLookThumbs(true);
   await checkModels();
   paintStorage();
 }

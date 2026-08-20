@@ -247,6 +247,8 @@ async function runStillDots(page) {
   if (!r.dotsExportShown) throw new Error('no .dots.gz export offered for a dotted still');
   await page.screenshot({ path: path.join(DOCS, 'a2-still-dots.png') });
 
+  // the dot-data buttons live under the "for developers" disclosure now
+  await page.evaluate(() => { const d = document.querySelector('#devexp'); if (d) d.open = true; });
   const [d] = await Promise.all([
     page.waitForEvent('download', { timeout: 60000 }).catch(() => null),
     page.click('#bDots'),

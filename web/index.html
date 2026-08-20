@@ -112,7 +112,7 @@
         <div id="trackui" hidden>
           <div id="nomodels" class="stat err" hidden></div>
           <div id="pfui">
-            <div class="lbl"><span>Prompt frame</span><span id="vPF">0</span></div>
+            <div class="lbl"><span>Pick a frame</span><span id="vPF">0</span></div>
             <input type="range" id="sPF" min="0" max="0" step="1" value="0">
           </div>
           <div class="note" id="stillnote" hidden>One picture, one prediction:
@@ -125,20 +125,25 @@
             <button class="btn" id="bAdd">+ add subject</button>
             <button class="btn" id="bClr">clear</button>
           </div>
-          <div class="lbl"><span>Prompt tool</span><span id="vTool"></span></div>
+          <div class="lbl"><span>Tapping means</span><span id="vPolarity"></span></div>
+          <div class="chips seg" id="polarity">
+            <button class="chip" data-polarity="add" aria-pressed="true">&#8853; keep this</button>
+            <button class="chip" data-polarity="sub" aria-pressed="false">&#8854; not this</button>
+          </div>
+          <div class="lbl"><span>Pick with</span><span id="vTool"></span></div>
           <div class="chips seg" id="ptool">
-            <button class="chip" data-tool="point" aria-pressed="true">point / box</button>
-            <button class="chip" data-tool="lasso" aria-pressed="false">lasso</button>
-            <button class="chip" data-tool="poly" aria-pressed="false">polygon</button>
+            <button class="chip" data-tool="point" aria-pressed="true">tap / box</button>
+            <button class="chip" data-tool="lasso" aria-pressed="false">draw around</button>
+            <button class="chip" data-tool="poly" aria-pressed="false">trace corners</button>
           </div>
           <div class="note" id="toolnote"></div>
           <div class="note" id="offframe" hidden></div>
           <div class="row">
-            <button class="btn" id="bPrev">preview this frame</button>
+            <button class="btn" id="bPrev">re-check this frame</button>
             <button class="btn" id="bUndo">undo shape</button>
           </div>
           <div id="pvinfo" class="stat" hidden></div>
-          <div class="lbl"><span id="tqlbl">Tracking quality</span><span id="vTQ"></span></div>
+          <div class="lbl"><span id="tqlbl">Detail</span><span id="vTQ"></span></div>
           <div class="chips seg" id="tq"></div>
           <div class="note" id="tqnote">Your clip keeps its own resolution &mdash; this
             only changes the square the tracker looks at, and so how fine an outline
@@ -157,7 +162,13 @@
       <div class="sh"><i>3</i><span>Look</span><em id="s3sum"></em></div>
       <div class="sb">
 
-        <div class="lbl"><span>Algorithm</span></div>
+        <div class="lbl"><span>Looks</span><span id="vLook"></span></div>
+        <div id="looks" class="chips"></div>
+        <div class="note small" id="looknote">One tap sets the style, the colours and
+          the dials below in one go &mdash; every slider stays live, and touching one
+          makes the look yours.</div>
+
+        <div class="lbl"><span>Style</span></div>
         <div class="chips" id="modes"></div>
         <div id="modenote" class="note"></div>
 
@@ -179,23 +190,27 @@
           </div>
         </div>
 
-        <div id="dotsui" hidden>
-          <div class="lbl"><span>Dots</span><span id="vN">8000</span></div>
-          <input type="range" id="sN" min="500" max="120000" step="500" value="8000">
-          <div class="lbl"><span>Cell</span><span id="vCell">4 px</span></div>
-          <input type="range" id="sCell" min="2" max="12" step="1" value="4">
-          <div class="lbl"><span>Dot size</span><span id="vDot">3 px</span></div>
-          <input type="range" id="sDot" min="1" max="8" step="1" value="3">
-          <div class="lbl"><span>Fill cap</span><span id="vFill">0.70</span></div>
-          <input type="range" id="sFill" min="0.1" max="1" step="0.05" value="0.7">
-          <div class="lbl"><span>Stray</span><span id="vStray">0.020</span></div>
-          <input type="range" id="sStray" min="0" max="0.2" step="0.005" value="0.02">
-          <div class="lbl"><span>Halo band</span><span id="vBand">9</span></div>
-          <input type="range" id="sBand" min="0" max="30" step="1" value="9">
-        </div>
+        <details id="advui" hidden>
+          <summary class="advsum">fine dot controls
+            <em>density &middot; grid &middot; ink &middot; scatter</em></summary>
+          <div id="dotsui" hidden>
+            <div class="lbl"><span>Density</span><span id="vN">8000</span></div>
+            <input type="range" id="sN" min="500" max="120000" step="500" value="8000">
+            <div class="lbl"><span>Grid</span><span id="vCell">4 px</span></div>
+            <input type="range" id="sCell" min="2" max="12" step="1" value="4">
+            <div class="lbl"><span>Dot size</span><span id="vDot">3 px</span></div>
+            <input type="range" id="sDot" min="1" max="8" step="1" value="3">
+            <div class="lbl"><span>Ink</span><span id="vFill">0.70</span></div>
+            <input type="range" id="sFill" min="0.1" max="1" step="0.05" value="0.7">
+            <div class="lbl"><span>Scatter</span><span id="vStray">0.020</span></div>
+            <input type="range" id="sStray" min="0" max="0.2" step="0.005" value="0.02">
+            <div class="lbl"><span>Edge glow</span><span id="vBand">9</span></div>
+            <input type="range" id="sBand" min="0" max="30" step="1" value="9">
+          </div>
+        </details>
 
         <div id="pxui">
-          <div class="lbl"><span>Dither strength</span><span id="vStr">1.00</span></div>
+          <div class="lbl"><span>Strength</span><span id="vStr">1.00</span></div>
           <input type="range" id="sStr" min="0" max="2" step="0.05" value="1">
           <div class="lbl"><span>Pixel size</span><span id="vPx">1×</span></div>
           <input type="range" id="sPx" min="1" max="12" step="1" value="1">
@@ -204,14 +219,14 @@
         <div class="lbl"><span>Tone</span><button class="lnk" id="bTone">reset</button></div>
         <div class="mini"><span>bright</span><input type="range" id="sBri" min="-0.5" max="0.5" step="0.01" value="0"><b id="vBri">0.00</b></div>
         <div class="mini"><span>contrast</span><input type="range" id="sCon" min="0.2" max="3" step="0.05" value="1"><b id="vCon">1.00</b></div>
-        <div class="mini"><span>gamma</span><input type="range" id="sGam" min="0.3" max="3" step="0.05" value="1"><b id="vGam">1.00</b></div>
+        <div class="mini"><span>midtones</span><input type="range" id="sGam" min="0.3" max="3" step="0.05" value="1"><b id="vGam">1.00</b></div>
         <div class="chips" style="margin-top:8px">
           <button class="chip" id="tInv" aria-pressed="false">invert</button>
           <button class="chip" id="bSeed">reseed</button>
         </div>
 
         <div id="polui" hidden>
-          <div class="lbl"><span>Mask polish</span><span id="vPol">off</span></div>
+          <div class="lbl"><span>Steady outline</span><span id="vPol">off</span></div>
           <div id="pollist"></div>
           <div class="note" id="polnote">Steadies each subject's mask: a few
             frames averaged together, pinholes closed, the edge softened. The
@@ -222,15 +237,15 @@
         <div id="composeui" hidden>
           <div class="lbl"><span>Background</span></div>
           <div class="chips seg" id="compose">
-            <button class="chip" data-compose="cutout" aria-pressed="true">flat</button>
-            <button class="chip" data-compose="overlay" aria-pressed="false">keep scene</button>
+            <button class="chip" data-compose="cutout" aria-pressed="true">a colour</button>
+            <button class="chip" data-compose="overlay" aria-pressed="false">the scene</button>
           </div>
         </div>
 
         <!-- The canvas: what shape the export comes out. 'source' is the
              default and means every line of this is inert. -->
         <div id="canvasui" hidden>
-          <div class="lbl"><span>Canvas</span><span id="vCanvas">source</span></div>
+          <div class="lbl"><span>Frame</span><span id="vCanvas">source</span></div>
           <div class="chips seg" id="canvaspresets"></div>
           <div id="canvascustom" hidden>
             <div class="mini"><span>width</span>
@@ -281,8 +296,9 @@
       <div class="sh"><i>5</i><span>Export</span><em id="s5sum"></em></div>
       <div class="sb">
         <div id="fmtui" hidden>
-          <div class="lbl"><span>Format</span><span id="vFmt"></span></div>
-          <select id="sFmt"></select>
+          <div class="lbl"><span>Save as</span><span id="vFmt"></span></div>
+          <div class="chips seg" id="fmtchips"></div>
+          <select id="sFmt" class="proxied"></select>
           <div id="giffps" hidden>
             <div class="lbl"><span>GIF frame rate</span></div>
             <div class="chips seg" id="gfps">
@@ -304,21 +320,30 @@
           <div class="lbl"><span>The original</span></div>
           <div class="chips">
             <label class="chip cbx"><input type="checkbox" id="cOrig">
-              <span>also save the original (matched cut)</span></label>
+              <span>+ the untouched original (same cut)</span></label>
           </div>
           <div class="note" id="orignote"></div>
         </div>
         <div class="row"><button class="btn go" id="bExport">Export</button></div>
-        <div id="dotsexp" hidden>
-          <div class="lbl"><span>Dot data</span></div>
-          <div class="row">
-            <button class="btn" id="bDots">.dots.gz</button>
-            <button class="btn" id="bDotsJson">.dots.json</button>
-          </div>
-          <div class="note">The dots as positions instead of pixels — replayed by
-            <b>web/player/</b> at any colour, size or background. The JSON variant
-            is the same numbers, readable, about 8&times; the bytes.</div>
+        <div class="row" id="sharerow" hidden>
+          <button class="btn" id="bShare">share&hellip;</button>
         </div>
+        <details id="devexp" hidden>
+          <summary class="advsum">for developers
+            <em>the dots as data</em></summary>
+          <div id="dotsexp" hidden>
+            <div class="lbl"><span>Dot data</span></div>
+            <div class="row">
+              <button class="btn" id="bDots">.dots.gz</button>
+              <button class="btn" id="bDotsJson">.dots.json</button>
+            </div>
+            <div class="note">The dots as positions instead of pixels — replayed by
+              <b>web/player/</b> at any colour, size or background
+              (<a href="./player/demo.html" target="_blank" rel="noopener">live demo
+              + embed snippet</a>). The JSON variant is the same numbers, readable,
+              about 8&times; the bytes.</div>
+          </div>
+        </details>
         <div id="rprog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
         <div id="rinfo" class="stat" hidden></div>
         <a id="dl" class="btn dl" hidden download>download</a>

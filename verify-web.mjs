@@ -408,6 +408,8 @@ async function runStillDots() {
   check('still · the .dots.gz export is offered',
         await page.getAttribute('#dotsexp', 'hidden') === null);
   const gz = path.join(DOCS, 'w-still-dots-export.dots.gz');
+  // the dot-data buttons live under the "for developers" disclosure now
+  await page.evaluate(() => { const d = document.querySelector('#devexp'); if (d) d.open = true; });
   const [d] = await Promise.all([
     page.waitForEvent('download', { timeout: 60000 }).catch(() => null),
     page.click('#bDots'),
@@ -774,6 +776,7 @@ async function runRangeBrowser() {
 
   /* --- the .dots.gz follows the window too --- */
   const gz = path.join(DOCS, 'w-range-dots.gz');
+  await page.evaluate(() => { const d = document.querySelector('#devexp'); if (d) d.open = true; });
   const [d3] = await Promise.all([
     page.waitForEvent('download', { timeout: 300000 }),
     page.click('#bDots'),
