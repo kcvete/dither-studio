@@ -51,6 +51,9 @@ html,body{height:100%;margin:0;background:var(--bgdeep);color:var(--ink);overflo
 .chip.pal .pv{display:flex;gap:2px}
 .chip.pal .pv b{width:7px;height:12px;border-radius:2px;display:block}
 .chip.sw1{padding:3px 5px}
+.chip.cbx{gap:6px;cursor:pointer}
+.chip.cbx input[type=checkbox]{width:13px;height:13px;margin:0;accent-color:#d7e3d5;cursor:pointer}
+.chip.cbx:has(input:checked){background:var(--ink);color:#0e1512;border-color:transparent;opacity:1}
 input[type=range]{width:100%;margin:0;accent-color:#d7e3d5;height:16px;display:block}
 input[type=color]{width:24px;height:18px;padding:0;border:1px solid var(--line);
   border-radius:4px;background:none;cursor:pointer}

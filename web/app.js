@@ -1,10 +1,13 @@
 /* ---------------------------------------------------------------------------
    DITHER STUDIO — one flow for three jobs.
 
-     still           drop an image, dither it, download a PNG (never leaves the tab)
-     clip            drop a video, every frame gets dithered, export an MP4
-     clip + subject  point at something, EdgeTAM tracks it through the clip, and
-                     only that gets dithered
+     still            drop an image, dither it, download a PNG (never leaves the tab)
+     still + subject  point at something in the photograph and EdgeTAM cuts it
+                      out on the spot — one frame, no propagation, ~0.15 s, so
+                      the mask follows every click live
+     clip             drop a video, every frame gets dithered, export an MP4
+     clip + subject   point at something, EdgeTAM tracks it through the clip, and
+                      only that gets dithered
 
    The preview is not an approximation: it runs web/dither.js, which
    server/dither.py mirrors pixel for pixel (server/parity.py is the gate).
@@ -31,8 +34,10 @@ const CACHE_MAX = 40;
 
 const S = {
   kind: 'none',                // none | image | video
-  // still
+  // still. `stillMasks` is id -> a soft mask image at S.W x S.H; it is to a
+  // photograph what the per-frame mask files are to a clip.
   bitmap: null, natW: 0, natH: 0, fileName: '',
+  stillMasks: new Map(), stillURL: null, stillFile: null, pngAlpha: false,
   // source file + trim (video only) — kept so a trim can re-open the same file
   srcFile: null, srcDuration: 0, trim: null, recordedS: 0, photo: null,
   // clip
@@ -51,6 +56,8 @@ const S = {
     n: 8000, cell: 4, dotpx: 3, fill: 0.7, stray: 0.02, band: 9,
   },
   palette: ['#000000', '#ffffff'],   // background / whole-frame palette
+  paletteTouched: false,             // has anyone chosen one yet?
+  dotsTuned: false,                  // has the dot count been set for this still?
   bg: '#c9d4c5',
   target: 'bg',                      // which palette the editor is editing: 'bg' | subject id
   meta: null,
@@ -78,6 +85,17 @@ const busy = (on) => { $('#busy').hidden = !on; };
 /* Nothing here talks to a URL any more; this is only for the odd bit of code
  * that wants a readable message out of an engine failure. */
 const why = (err) => (err && err.message) || String(err);
+
+/* Which of the four things that can occupy the stage is showing. Every place
+ * that used to poke #pwrap/#vwrap by hand goes through this, because a still
+ * with subjects has the same two views a clip does. */
+function showStage(which) {
+  $('#pwrap').hidden = which !== 'prompt';
+  $('#vwrap').hidden = which !== 'result';
+  $('#camwrap').hidden = which !== 'camera';
+  $('#seqwrap').hidden = which !== 'sequence';
+  $('#empty').hidden = which !== 'empty';
+}
 
 function openStep(n) {
   $$('.step').forEach((el) => el.setAttribute('data-open', el.id === 'st' + n ? '1' : '0'));
@@ -288,11 +306,16 @@ function camClose() {
   CAM.stream = null;
   $('#camvid').srcObject = null;
   $('#camui').hidden = true;
-  $('#camwrap').hidden = true;
   $('#bCam').textContent = 'record from camera';
-  $('#empty').hidden = S.kind !== 'none';
-  $('#pwrap').hidden = !(S.kind === 'video' && S.scope === 'track' && !S.tracked);
-  $('#vwrap').hidden = S.kind === 'none' || !$('#pwrap').hidden;
+  restoreStage();
+}
+
+/** Back to whatever the current source was showing before the camera opened. */
+function restoreStage() {
+  if (S.kind === 'none') return showStage('empty');
+  const prompting = S.scope === 'track'
+    && (S.kind === 'image' ? !S.stillMasks.size : !S.tracked);
+  showStage(prompting ? 'prompt' : 'result');
 }
 
 /** A photo: the frame the preview is showing, at the camera's own resolution,
@@ -362,7 +385,8 @@ $('#bRec').addEventListener('click', () => (CAM.rec ? camStop() : camStart()));
 $('#bCamOff').addEventListener('click', camClose);
 
 function showSteps(kind) {
-  $('#st2').hidden = kind !== 'video';
+  $('#st2').hidden = kind === 'none';
+  paintStep2(kind);
   $('#st3').hidden = $('#st4').hidden = $('#st5').hidden = kind === 'none';
   // the sequence step outlives the clip: a morph from one clip into another
   // needs the segment captured from the first one to still be there
@@ -382,24 +406,43 @@ async function loadStill(f) {
     const bmp = await createImageBitmap(f);
     S.kind = 'image'; S.bitmap = bmp; S.natW = bmp.width; S.natH = bmp.height;
     S.fileName = f.name.replace(/\.[^.]+$/, '');
-    S.tracked = false; S.subjects = []; S.scope = 'whole';
-    if (S.P.mode === 'dots') setMode('bluenoise');
+    S.tracked = false; S.subjects = []; S.nextId = 1; S.scope = 'whole';
+    S.promptFrame = 0; S.previewMasks = null; S.curPath = null;
+    S.paletteTouched = false; S.dotsTuned = false;
+    dropStill();
+    S.stillFile = f;
+    S.stillURL = URL.createObjectURL(f);
+    // The still prompts, segments and previews at S.W x S.H — the preview
+    // budget — and only the PNG goes back to the file's own resolution. One
+    // coordinate space for clicks, masks and the overlay, on both engines.
+    const [pw, ph] = previewSize();
+    S.W = pw; S.H = ph;
     box.textContent = `${bmp.width} × ${bmp.height} · ${(f.size / 1024).toFixed(0)} KB · stays in this tab`;
     $('#s1sum').textContent = `${bmp.width}×${bmp.height}`;
     showSteps('image');
-    $('#pwrap').hidden = true; $('#vwrap').hidden = false;
+    showStage('result');
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = true;
-    $('#composeui').hidden = true; $('#bgui').hidden = true;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
-    $('#outimg').hidden = true;
+    $('#outimg').hidden = true; $('#pvinfo').hidden = true; $('#tinfo').hidden = true;
     $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
     $('#fmtui').hidden = true; $('#trimui').hidden = true;
     $('#offframe').hidden = true;
-    buildTargets(); renderModes(); openStep(3);
+    setScope('whole');
+    buildTargets(); renderModes(); paintCompose(); paintAlphaUI(); openStep(2);
     await draw();
   } catch (err) {
     box.classList.add('err'); box.textContent = 'could not read that image: ' + err.message;
   }
+}
+
+/** Throw away everything that belonged to the previous still. */
+function dropStill() {
+  S.stillMasks.forEach((m) => m && m.close && m.close());
+  S.stillMasks.clear();
+  if (S.stillURL) { URL.revokeObjectURL(S.stillURL); S.stillURL = null; }
+  S.stillFile = null;
+  stillJobKey = null;
+  DOTS_CACHE = null;
 }
 
 async function uploadClip(f, trim) {
@@ -416,6 +459,7 @@ async function uploadClip(f, trim) {
       onProgress: (p) => { if (p.text) box.textContent = p.text; },
     });
     S.trim = t;
+    dropStill();
     S.kind = 'video'; S.job = j.job; S.nFrames = j.nFrames; S.W = j.w; S.H = j.h; S.fps = j.fps;
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.cur = 0; S.promptFrame = 0;
@@ -449,22 +493,78 @@ $$('[data-scope]').forEach((b) => b.addEventListener('click', () => setScope(b.d
 
 function setScope(v) {
   S.scope = v;
+  const still = S.kind === 'image';
   $$('[data-scope]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.scope === v)));
   $('#trackui').hidden = v !== 'track';
   $('#wholenote').hidden = v === 'track';
-  $('#composeui').hidden = !(v === 'track' && S.tracked);
-  $('#bgui').hidden = !(v === 'track' && S.tracked && S.P.compose === 'cutout');
+  paintCompose();
   if (v === 'track') {
     if (!S.subjects.length) addSubject();
-    $('#pwrap').hidden = S.tracked; $('#vwrap').hidden = !S.tracked;
-    if (!S.tracked) showPromptFrame(S.promptFrame);
+    if (still) {
+      showStage(S.stillMasks.size ? 'result' : 'prompt');
+      showStillPrompt();
+    } else {
+      showStage(S.tracked ? 'result' : 'prompt');
+      if (!S.tracked) showPromptFrame(S.promptFrame);
+    }
   } else {
-    $('#pwrap').hidden = true; $('#vwrap').hidden = false;
+    showStage('result');
     draw();
   }
-  buildTargets(); renderModes();
-  $('#s2sum').textContent = v === 'track'
-    ? (S.tracked ? `${S.subjects.length} tracked` : `${S.subjects.length} subj`) : 'whole clip';
+  buildTargets(); renderModes(); paintAlphaUI();
+  paintScopeSummary();
+}
+
+function paintScopeSummary() {
+  const still = S.kind === 'image';
+  if (S.scope !== 'track') {
+    $('#s2sum').textContent = still ? 'whole image' : 'whole clip';
+    return;
+  }
+  const n = S.subjects.length;
+  $('#s2sum').textContent = still
+    ? (S.stillMasks.size ? `${S.stillMasks.size} selected` : `${n} subj`)
+    : (S.tracked ? `${n} tracked` : `${n} subj${n > 1 ? 's' : ''}`);
+}
+
+/* Compose (flat background vs keep the scene) only means something when part
+ * of the picture is left alone: a subject cut out of it, or the dots look,
+ * which paints on a background of its own whatever else is going on. */
+const composeMatters = () => usingSubjects()
+  || (S.kind === 'image' && S.P.mode === 'dots');
+const flatBg = () => composeMatters() && S.P.compose === 'cutout';
+function paintCompose() {
+  $('#composeui').hidden = !composeMatters();
+  $('#bgui').hidden = !flatBg();
+}
+
+/* Step 2 is "track subjects through a clip" or "select subjects in a photo".
+ * Same tools, same prompts, same six-subject ceiling; what changes is that a
+ * photograph has no frames to propagate through, so there is no prompt-frame
+ * slider, no Track run and no progress bar — the mask is simply there. */
+function paintStep2(kind) {
+  const still = kind === 'image';
+  const whole = $('#scope [data-scope="whole"]');
+  const track = $('#scope [data-scope="track"]');
+  if (whole) whole.textContent = still ? 'whole image' : 'whole clip';
+  if (track) track.textContent = still ? 'select subjects' : 'track subjects';
+  $('#st2 .sh span').textContent = still ? 'Subject' : 'Subjects';
+  $('#pfui').hidden = still;
+  $('#bPrev').hidden = still;
+  $('#stillnote').hidden = !still;
+  $('#tqlbl').textContent = still ? 'Selection quality' : 'Tracking quality';
+  $('#tqnote').textContent = still
+    ? 'Your picture keeps its own resolution — this only changes the square the '
+      + 'model looks at, and so how fine an outline it can cut.'
+    : 'Your clip keeps its own resolution — this only changes the square the '
+      + 'tracker looks at, and so how fine an outline it can draw.';
+  $('#bTrack').textContent = still ? 'Use this selection' : 'Track';
+  $('#wholenote').textContent = still
+    ? 'Every pixel of the image gets dithered. Switch to select subjects to '
+      + 'dither only what you point at — or to cut it out of its background.'
+    : 'Every pixel of every frame gets dithered. Switch to track subjects to '
+      + 'dither only what you point at.';
+  if (still) { $('#prog').hidden = true; $('#tinfo').hidden = true; }
 }
 
 function subjectColor(i) { return (S.meta.subject_colors || ['#b0413e'])[i % 6]; }
@@ -483,15 +583,21 @@ function addSubject() {
  * edits a prompt has to hand the prompt canvas back — otherwise there is no way
  * to correct a bad track short of reloading. The masks stay until you re-track. */
 function backToPrompt() {
-  if (S.kind !== 'video' || S.scope !== 'track') return;
-  $('#pwrap').hidden = false; $('#vwrap').hidden = true;
+  if (S.kind === 'none' || S.scope !== 'track') return;
   S.playing = false;
-  showPromptFrame(S.promptFrame);
+  showStage('prompt');
+  if (S.kind === 'image') showStillPrompt();
+  else showPromptFrame(S.promptFrame);
 }
 $('#bAdd').addEventListener('click', () => { addSubject(); backToPrompt(); });
 $('#bClr').addEventListener('click', () => {
   S.subjects.forEach((s) => { s.points = []; s.box = null; s.paths = []; s.promptFrame = null; });
   S.curPath = null; S.previewMasks = null; $('#pvinfo').hidden = true;
+  if (S.kind === 'image') {
+    S.stillMasks.forEach((m) => m && m.close && m.close());
+    S.stillMasks.clear(); S.tracked = false;
+    buildTargets(); renderModes(); paintCompose(); paintAlphaUI();
+  }
   renderSubjects(); backToPrompt(); drawOverlay();
 });
 
@@ -538,7 +644,7 @@ function renderSubjects() {
     const bits = [];
     if (nl) bits.push(`${nl} shape${nl > 1 ? 's' : ''}`);
     else if (np || s.box) bits.push(`${np}pt${s.box ? '+box' : ''}`);
-    if (s.promptFrame !== null) bits.push('@ ' + s.promptFrame);
+    if (s.promptFrame !== null && S.kind !== 'image') bits.push('@ ' + s.promptFrame);
     nm.textContent = `#${s.id}` + (bits.length ? ' · ' + bits.join(' ') : '');
     if (hasPrompt(s) && !onThisFrame(s)) b.classList.add('away');
     b.append(sw, nm);
@@ -560,6 +666,13 @@ function renderSubjects() {
         e.stopPropagation();
         S.subjects.splice(i, 1);
         S.active = Math.min(S.active, S.subjects.length - 1);
+        if (S.kind === 'image') {
+          const m = S.stillMasks.get(s.id);
+          if (m && m.close) m.close();
+          S.stillMasks.delete(s.id);
+          S.tracked = S.stillMasks.size > 0;
+          paintCompose(); paintAlphaUI(); draw();
+        }
         renderSubjects(); drawOverlay(); buildTargets();
       });
       b.append(x);
@@ -567,11 +680,7 @@ function renderSubjects() {
     wrap.append(b);
   });
   $('#vSubs').textContent = `${S.subjects.length} / ${MAX_SUBJECTS}`;
-  if (S.scope === 'track') {
-    const n = S.subjects.length;
-    $('#s2sum').textContent = S.tracked ? `${n} tracked`
-      : `${n} subj${n > 1 ? 's' : ''}`;
-  }
+  paintScopeSummary();
   paintOffFrame();
 }
 
@@ -599,8 +708,18 @@ $('#sPF').addEventListener('input', (e) => {
   $('#vPF').textContent = e.target.value; showPromptFrame(+e.target.value);
 });
 
+/** The still, on the prompt stage. One picture, no seeking, no frame index. */
+function showStillPrompt() {
+  if (S.kind !== 'image') return;
+  S.promptFrame = 0;
+  pov.width = S.W; pov.height = S.H;
+  if (S.stillURL && pimg.src !== S.stillURL) pimg.src = S.stillURL;
+  drawOverlay();
+  renderSubjects();
+}
+
 function drawOverlay() {
-  if (!S.W || S.kind !== 'video') return;
+  if (!S.W || S.kind === 'none') return;
   pov.width = S.W; pov.height = S.H;
   pctx.clearRect(0, 0, S.W, S.H);
   S.subjects.forEach((s, i) => {
@@ -673,19 +792,43 @@ function drawPaths() {
   }
 }
 
+/* A mask image carries its coverage in the RED channel and is fully opaque —
+ * that is what makes it readable by `bitmapAlpha` and by the exporters. Tinting
+ * it with `source-in` therefore keeps every pixel, which washed the whole frame
+ * instead of showing the subject. Move the coverage into alpha first.
+ *
+ * Cached against the image object: a lasso drag repaints the overlay on every
+ * pointermove, and a megapixel loop per move is not a thing to do twice. */
+const TINT = new WeakMap();
+function tintedMask(im, col) {
+  const rec = TINT.get(im);
+  if (rec && rec.col === col && rec.w === S.W && rec.h === S.H) return rec.canvas;
+  const t = document.createElement('canvas');
+  t.width = S.W; t.height = S.H;
+  const g = t.getContext('2d', { willReadFrequently: true });
+  g.drawImage(im, 0, 0, S.W, S.H);
+  const px = g.getImageData(0, 0, S.W, S.H), d = px.data;
+  const [r, gr, b] = Dither.hexRGB(col);
+  for (let p = 0, n = S.W * S.H * 4; p < n; p += 4) {
+    d[p + 3] = d[p]; d[p] = r; d[p + 1] = gr; d[p + 2] = b;
+  }
+  g.putImageData(px, 0, 0);
+  TINT.set(im, { col, canvas: t, w: S.W, h: S.H });
+  return t;
+}
+
 function drawPreviewMasks() {
-  if (!S.previewMasks) return;
+  const still = S.kind === 'image';
+  if (!still && !S.previewMasks) return;
   S.subjects.forEach((s) => {
-    const im = S.previewMasks[String(s.id)];
-    if (!im || !im.complete) return;
-    const t = document.createElement('canvas');
-    t.width = S.W; t.height = S.H;
-    const g = t.getContext('2d');
-    g.drawImage(im, 0, 0, S.W, S.H);          // white-ish where the mask is
-    g.globalCompositeOperation = 'source-in';
-    g.fillStyle = s.palette[s.palette.length - 1];
-    g.fillRect(0, 0, S.W, S.H);
-    pctx.save(); pctx.globalAlpha = 0.45; pctx.drawImage(t, 0, 0); pctx.restore();
+    const im = still ? S.stillMasks.get(s.id) : S.previewMasks[String(s.id)];
+    // an <img> that has not loaded yet is `complete === false`; an ImageBitmap
+    // has no such property at all, and must not be skipped for lacking one
+    if (!im || im.complete === false) return;
+    pctx.save();
+    pctx.globalAlpha = 0.55;
+    pctx.drawImage(tintedMask(im, s.palette[s.palette.length - 1]), 0, 0, S.W, S.H);
+    pctx.restore();
   });
 }
 
@@ -722,6 +865,7 @@ function commitPath() {
     const s = S.subjects[S.active];
     claimFrame(s);
     s.paths.push(c); S.previewMasks = null;
+    afterPromptEdit();
   }
   renderSubjects(); drawOverlay();
 }
@@ -775,6 +919,7 @@ pov.addEventListener('pointerup', (e) => {
   else s.points.push([Math.round(p[0]), Math.round(p[1]), down.neg ? 0 : 1]);
   down = null; S.dragBox = null; S.previewMasks = null;
   renderSubjects(); drawOverlay();
+  afterPromptEdit();
 });
 pov.addEventListener('dblclick', (e) => {
   if (S.tool === 'poly' && S.curPath) { e.preventDefault(); commitPath(); }
@@ -817,7 +962,7 @@ $('#bUndo').addEventListener('click', () => {
   const s = S.subjects[S.active];
   if (!s) return;
   if (S.curPath) { S.curPath = null; S.hoverXY = null; }
-  else if (s.paths.length) s.paths.pop();
+  else if (s.paths.length) { s.paths.pop(); afterPromptEdit(); }
   renderSubjects(); drawOverlay();
 });
 paintTool();
@@ -853,7 +998,10 @@ function paintTrackSize() {
   $('#vTQ').textContent = t ? t.label : `${S.trackSize} px`;
 }
 
-$('#bTrack').addEventListener('click', track);
+$('#bTrack').addEventListener('click', () => {
+  if (S.kind === 'image') return useStillSelection();
+  return track();
+});
 
 /* The engine-neutral prompt: clip-pixel coordinates, one prompt frame each. */
 function promptPayload(only) {
@@ -865,6 +1013,104 @@ function promptPayload(only) {
       return mask ? { id: s.id, mask, frameIdx }
                   : { id: s.id, points: s.points, box: s.box, frameIdx };
     });
+}
+
+/* ===================================== a still: segment it, live =========
+ * A photograph has one frame, so there is nothing to propagate: the whole of
+ * "select a subject" is the conditioning step the clip flow runs on frame 0.
+ * It costs an image encode and the SAM heads — about 0.15 s — which is fast
+ * enough that there is no button. Every click, box or drawn shape re-runs it
+ * and the mask overlay follows.
+ *
+ * The picture is handed to the engine once (the browser keeps it as a clip of
+ * one frame; the server takes it as a one-frame job), and every prompt after
+ * that reuses it. */
+let stillJobKey = null;
+let segBusy = false, segAgain = false;
+
+async function ensureStillJob() {
+  const key = [E().id, S.fileName, S.natW, S.natH, S.W, S.H].join('|');
+  if (stillJobKey === key) return;
+  const c = ctx2d(S.W, S.H, 'seg');
+  c.clearRect(0, 0, S.W, S.H);
+  c.drawImage(S.bitmap, 0, 0, S.W, S.H);
+  const blob = await new Promise((ok) => c.canvas.toBlob(ok, 'image/png'));
+  if (!blob) throw new Error('could not read the image back out of the canvas');
+  await E().openStill(blob, { w: S.W, h: S.H, maxSide: PREVIEW_MAX,
+                              name: (S.fileName || 'still') + '.png' });
+  stillJobKey = key;
+}
+
+/** Called after anything that changes a prompt. Coalesces: a click that lands
+ *  while an inference is in flight schedules exactly one more run. */
+function afterPromptEdit() {
+  if (S.kind === 'image' && S.scope === 'track') segmentStill();
+}
+
+async function segmentStill() {
+  if (S.kind !== 'image' || S.scope !== 'track') return;
+  if (!(E().segmentImage && E().openStill && E().supports.stillSubjects)) {
+    const info = $('#pvinfo'); info.hidden = false; info.classList.add('err');
+    info.textContent = 'this engine cannot segment a still — switch to the '
+      + 'browser engine, or update the server';
+    return;
+  }
+  const here = S.subjects.filter(hasPrompt);
+  if (!here.length) {
+    S.stillMasks.forEach((m) => m && m.close && m.close());
+    S.stillMasks.clear(); S.tracked = false;
+    $('#pvinfo').hidden = true;
+    buildTargets(); renderModes(); paintCompose(); paintAlphaUI();
+    drawOverlay(); paintScopeSummary();
+    return;
+  }
+  if (segBusy) { segAgain = true; return; }
+  segBusy = true;
+  const info = $('#pvinfo'); info.hidden = false; info.classList.remove('err');
+  if (!info.textContent) info.textContent = 'reading the selection…';
+  try {
+    await ensureStillJob();
+    const r = await E().segmentImage(
+      { objects: promptPayload(here), imageSize: S.trackSize },
+      (m) => { info.textContent = m; });
+    const live = new Set(here.map((x) => x.id));
+    S.stillMasks.forEach((m, id) => {
+      if (!live.has(id)) { if (m && m.close) m.close(); S.stillMasks.delete(id); }
+    });
+    for (const o of r.objects) {
+      const id = +o.id, old = S.stillMasks.get(id);
+      if (old && old.close && old !== o.image) old.close();
+      S.stillMasks.set(id, o.image);
+    }
+    S.tracked = S.stillMasks.size > 0;
+    info.classList.remove('err');
+    info.textContent = `${r.objects.length} subject${r.objects.length > 1 ? 's' : ''} `
+      + `in ${r.elapsedS.toFixed(2)} s (${r.imageSize} px) · `
+      + r.objects.map((o) => '#' + o.id + ' ' + o.area + ' px').join(' · ')
+      + (r.note ? ' · ' + r.note : '');
+    buildTargets(); renderModes(); paintCompose(); paintAlphaUI();
+    drawOverlay(); paintScopeSummary();
+    DOTS_CACHE = null;
+    if (!$('#vwrap').hidden) await draw();
+  } catch (err) {
+    info.classList.add('err');
+    info.textContent = 'selection failed: ' + why(err);
+  }
+  segBusy = false;
+  if (segAgain) { segAgain = false; segmentStill(); }
+}
+
+/** "Use this selection": the masks are already there, this is only the move
+ *  from the prompt stage to the picture. `backToPrompt` is the way back. */
+function useStillSelection() {
+  if (!S.stillMasks.size) {
+    toast('click the subject first — the outline appears as you do', true);
+    return;
+  }
+  showStage('result');
+  buildTargets(); renderModes(); paintCompose(); paintAlphaUI();
+  openStep(3);
+  draw();
 }
 
 /* ---- preview: the first-frame prediction only, no propagation ---- */
@@ -950,7 +1196,7 @@ const CACHE = new Map();
 async function frameAt(i) {
   const hit = CACHE.get(i);
   if (hit) { CACHE.delete(i); CACHE.set(i, hit); return hit; }
-  const ids = usingSubjects() ? S.subjects.map((s) => s.id) : [];
+  const ids = (S.kind === 'video' && usingSubjects()) ? S.subjects.map((s) => s.id) : [];
   const [frame, ...masks] = await Promise.all([
     E().frame(i),
     ...ids.map((id) => E().mask(id, i)),
@@ -967,8 +1213,34 @@ function dropCache() {
   CACHE.forEach((v) => { v.frame.close(); v.masks.forEach((m) => m.close()); });
   CACHE.clear();
 }
-const usingSubjects = () => S.kind === 'video' && S.scope === 'track' && S.tracked
-  && S.subjects.length > 0;
+/* "there are masks, and they belong to subjects" — true for a tracked clip and
+ * for a still whose subjects have been segmented. Everything downstream (the
+ * compose split, the per-subject palettes, the dots renderer, the exports)
+ * asks this and not the source kind. */
+const usingSubjects = () => S.scope === 'track' && S.subjects.length > 0
+  && (S.kind === 'video' ? S.tracked
+    : S.kind === 'image' ? S.stillMasks.size > 0 : false);
+
+/* A whole-image dither has no mask; the dots renderer still wants one, because
+ * density is measured inside a mask. This is the "all of it" mask. */
+let FULLMASK = { w: 0, h: 0, m: null };
+function fullMask(w, h) {
+  if (FULLMASK.w !== w || FULLMASK.h !== h) {
+    FULLMASK = { w, h, m: new Float32Array(w * h).fill(1) };
+  }
+  return FULLMASK.m;
+}
+
+/** The still's per-subject coverage, resampled to whatever size is being
+ *  rendered. Subjects with no mask yet contribute an empty one so the array
+ *  stays index-aligned with the palette list. */
+function stillMasksAt(w, h, slot) {
+  const pre = slot || 'sm';
+  return S.subjects.map((s, k) => {
+    const im = S.stillMasks.get(s.id);
+    return im ? bitmapAlpha(im, w, h, pre + k) : new Float32Array(w * h);
+  });
+}
 
 /* ------------------------------------------------------ offscreen contexts */
 const CTX = {};
@@ -1178,8 +1450,12 @@ function paint(cv, srcData, W, H, masks, opts) {
   const t0 = performance.now();
   const pal = palettesForRender();
   let out, lit = 0;
-  if (S.P.mode === 'dots' && masks.length) {
-    const r = renderDots(srcData, W, H, masks, S.P, pal, S.bg, BLUE);
+  // a still with no subject selected is dotted whole-image, the way the
+  // original demo did it: one mask covering everything, density from luminance
+  const dotMasks = masks.length ? masks
+    : (S.kind === 'image' ? [fullMask(W, H)] : null);
+  if (S.P.mode === 'dots' && dotMasks) {
+    const r = renderDots(srcData, W, H, dotMasks, S.P, pal, S.bg, BLUE);
     out = r.out; lit = r.lit;
   } else {
     out = Dither.composeFrame(srcData, W, H, masks, S.P, pal, S.bg);
@@ -1202,11 +1478,14 @@ async function draw(i) {
   if (S.kind === 'image') {
     const [w, h] = previewSize();
     const c = ctx2d(w, h, 'src');
+    c.clearRect(0, 0, w, h);
     c.drawImage(S.bitmap, 0, 0, w, h);
     const src = c.getImageData(0, 0, w, h).data;
     if (seq !== drawSeq) return;
-    const r = paint($('#vcv'), src, w, h, [], { original: S.bitmap });
-    $('#fps').textContent = `${w}×${h} · ${r.ms.toFixed(0)} ms`;
+    const masks = usingSubjects() ? stillMasksAt(w, h) : [];
+    const r = paint($('#vcv'), src, w, h, masks, { original: S.bitmap });
+    $('#fps').textContent = `${w}×${h} · ${r.ms.toFixed(0)} ms`
+      + (S.P.mode === 'dots' ? ` · ${r.lit} dots` : '');
     return;
   }
   if (S.kind !== 'video') return;
@@ -1276,10 +1555,17 @@ async function loop() {
 }
 
 /* ========================================================= step 3: look */
+/* Dots need a mask to measure density inside. A tracked clip has one per
+ * subject; a still is its own mask when nothing is selected — which is where
+ * this look came from in the first place. A whole-frame CLIP still needs a
+ * tracked subject: there is nothing to hold the dots still against otherwise. */
+const dotsAvailable = () => S.kind === 'image' || usingSubjects();
+
 function setMode(id) {
   S.P.mode = id;
+  if (id === 'dots' && S.kind === 'image' && !usingSubjects()) tuneWholeImageDots();
   const dotsUI = $('#dotsexp');
-  if (dotsUI) dotsUI.hidden = !(id === 'dots' && usingSubjects());
+  if (dotsUI) dotsUI.hidden = !(id === 'dots' && dotsAvailable());
   const ed = id === 'errordiff';
   $('#edui').hidden = !ed;
   $('#mxui').hidden = !(id === 'ordered' || id === 'halftone');
@@ -1290,7 +1576,39 @@ function setMode(id) {
   $('#modenote').textContent = m ? m.note : '';
   $('#modenote').classList.toggle('warn', !!risky);
   $('#s3sum').textContent = m ? m.name : id;
+  paintCompose(); paintAlphaUI();
   renderModes();
+}
+
+/* Two defaults that are right for a subject and wrong for a whole picture, and
+ * are therefore adjusted once, the first time dots is chosen on a still that
+ * has nothing selected. Both sliders stay where they land and anything the user
+ * has already touched is left alone.
+ *
+ *   palette   black-and-white is right for a dither, which covers every pixel,
+ *             and wrong for dots, which paint ON a background: white dots on
+ *             the default sage are invisible. A whole picture takes the same
+ *             pairing a subject gets — the one the look was designed around.
+ *   count     8,000 is a subject-sized number. A whole 720p frame at cell 4 is
+ *             57,600 cells, and 8,000 of them lit is a scatter with no picture
+ *             in it — measured: the tree and the wall only come out of the
+ *             noise somewhere north of half the cells. `fill` never bites at
+ *             this scale (its 0.7 x 57,600 is far above n), so `n` is the knob
+ *             that matters, and it is aimed at 55 % coverage.
+ */
+function tuneWholeImageDots() {
+  if (S.meta && !S.paletteTouched) {
+    S.palette = [S.bg, subjectColor(0)];
+    renderSwatches();
+  }
+  if (S.dotsTuned) return;
+  S.dotsTuned = true;
+  const [w, h] = previewSize();
+  const cells = Math.max(1, ((w / S.P.cell) | 0) * ((h / S.P.cell) | 0));
+  const el = $('#sN');
+  const n = Math.min(+el.max, Math.max(+el.min,
+    Math.round(cells * 0.55 / 500) * 500));
+  S.P.n = n; el.value = String(n); $('#vN').textContent = String(n);
 }
 
 function renderModes() {
@@ -1302,15 +1620,14 @@ function renderModes() {
     b.dataset.mode = m.id;
     b.setAttribute('aria-pressed', String(S.P.mode === m.id));
     b.textContent = m.name;
-    const needsSubjects = m.id === 'dots';
-    const ok = !needsSubjects || usingSubjects();
+    const ok = m.id !== 'dots' || dotsAvailable();
     if (!ok) { b.classList.add('off'); b.title = 'track a subject first'; }
     if (S.kind === 'video' && S.meta.stable[m.id] === false) {
       const w = document.createElement('i'); w.className = 'fl'; w.textContent = '≈';
       w.title = 'flickers frame to frame'; b.append(w);
     }
     b.addEventListener('click', () => {
-      if (!ok) { toast('the dots look needs a tracked subject', true); return; }
+      if (!ok) { toast('on a clip the dots look needs a tracked subject', true); return; }
       setMode(m.id); draw();
     });
     wrap.append(b);
@@ -1326,6 +1643,7 @@ function bindSlider(id, out, key, fmt, int) {
   });
 }
 bindSlider('#sN', '#vN', 'n', String, true);
+$('#sN').addEventListener('input', () => { S.dotsTuned = true; });
 bindSlider('#sCell', '#vCell', 'cell', (v) => v + ' px', true);
 bindSlider('#sDot', '#vDot', 'dotpx', (v) => v + ' px', true);
 bindSlider('#sFill', '#vFill', 'fill', (v) => v.toFixed(2));
@@ -1363,7 +1681,7 @@ $$('[data-mx]').forEach((b) => b.addEventListener('click', () => {
 $$('[data-compose]').forEach((b) => b.addEventListener('click', () => {
   S.P.compose = b.dataset.compose;
   $$('[data-compose]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
-  $('#bgui').hidden = S.P.compose !== 'cutout';
+  paintCompose(); paintAlphaUI(); buildTargets();
   draw();
 }));
 $('#bSeed').addEventListener('click', async () => {
@@ -1387,6 +1705,7 @@ function currentPalette() {
   return s ? s.palette : S.palette;
 }
 function setPalette(list) {
+  S.paletteTouched = true;
   if (S.target === 'bg') S.palette = list;
   else {
     const s = S.subjects.find((x) => String(x.id) === String(S.target));
@@ -1500,16 +1819,50 @@ async function composeAt(i, opts) {
   return new ImageData(out, S.W, S.H);
 }
 
+/* Whether "transparent background" is a question worth asking: only where the
+ * picture has a flat background to remove. A whole-image dither covers every
+ * pixel, so there is nothing to key out and the checkbox stays away. */
+const alphaMatters = () => S.kind === 'image' && S.P.compose !== 'overlay'
+  && (S.P.mode === 'dots' || usingSubjects());
+function paintAlphaUI() {
+  const box = $('#pngalpha');
+  if (!box) return;
+  box.hidden = !alphaMatters();
+  if (box.hidden) return;
+  $('#alphanote').textContent = usingSubjects()
+    ? 'The subject stays; everything that would have been flat background '
+      + 'becomes transparent.'
+    : 'Only the dots stay opaque; the flat background becomes transparent.';
+}
+$('#cAlpha').addEventListener('change', (e) => { S.pngAlpha = e.target.checked; });
+
+/** The finished still, at the file's own resolution: the same renderer the
+ *  preview runs, with the masks resampled up and — for a cutout — the flat
+ *  background optionally left transparent. */
+function composeStill(w, h, opts) {
+  const c = ctx2d(w, h, 'exp');
+  c.clearRect(0, 0, w, h);
+  c.drawImage(S.bitmap, 0, 0, w, h);
+  const src = c.getImageData(0, 0, w, h).data;
+  const masks = usingSubjects() ? stillMasksAt(w, h, 'xm') : [];
+  const P = (opts && opts.alpha) ? Object.assign({}, S.P, { alpha: true }) : S.P;
+  const pal = palettesForRender();
+  if (S.P.mode === 'dots') {
+    const r = renderDots(src, w, h, masks.length ? masks : [fullMask(w, h)],
+                         P, pal, S.bg, BLUE);
+    return { out: r.out, lit: r.lit, masks };
+  }
+  return { out: Dither.composeFrame(src, w, h, masks, P, pal, S.bg), lit: 0, masks };
+}
+
 async function exportPNG() {
   const info = $('#rinfo'); info.hidden = true; info.textContent = '';
   busy(true);
   await sleep(16);
   try {
     // re-render at the source's native resolution, not the preview's
-    const c = ctx2d(S.natW, S.natH, 'exp');
-    c.drawImage(S.bitmap, 0, 0, S.natW, S.natH);
-    const src = c.getImageData(0, 0, S.natW, S.natH).data;
-    const out = Dither.composeFrame(src, S.natW, S.natH, [], S.P, palettesForRender(), S.bg);
+    const alpha = alphaMatters() && S.pngAlpha;
+    const { out, lit } = composeStill(S.natW, S.natH, { alpha });
     const cv = document.createElement('canvas');
     cv.width = S.natW; cv.height = S.natH;
     cv.getContext('2d').putImageData(new ImageData(out, S.natW, S.natH), 0, 0);
@@ -1518,10 +1871,15 @@ async function exportPNG() {
     if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
     const url = URL.createObjectURL(blob);
     dl.dataset.url = url; dl.href = url;
-    dl.download = `${S.fileName || 'dither'}-${S.P.mode}.png`;
+    dl.download = `${S.fileName || 'dither'}-${S.P.mode}`
+      + (alpha ? '-alpha' : '') + '.png';
     dl.hidden = false;
     const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
-    box.textContent = `${S.natW}×${S.natH} PNG · ${(blob.size / 1024).toFixed(0)} KB`;
+    box.textContent = `${S.natW}×${S.natH} PNG · ${(blob.size / 1024).toFixed(0)} KB`
+      + (S.P.mode === 'dots' ? ` · ${lit} dots` : '')
+      + (usingSubjects() ? ` · ${S.stillMasks.size} subject`
+        + `${S.stillMasks.size > 1 ? 's' : ''}, ${S.P.compose}` : '')
+      + (alpha ? ' · transparent background' : '');
     $('#s5sum').textContent = 'ready';
   } catch (err) {
     const box = $('#rinfo'); box.hidden = false; box.classList.add('err');
@@ -1663,9 +2021,33 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+/** A still as a one-frame dots document. The player shows it as a static
+ *  frame; it is the same file a clip writes, with n_frames = 1. Computed at
+ *  the picture's own resolution so the positions match the exported PNG. */
+async function dotsDocStill() {
+  const P = await playerLib();
+  const w = S.natW, h = S.natH;
+  const c = ctx2d(w, h, 'exp');
+  c.clearRect(0, 0, w, h);
+  c.drawImage(S.bitmap, 0, 0, w, h);
+  const src = c.getImageData(0, 0, w, h).data;
+  const use = usingSubjects();
+  const masks = use ? stillMasksAt(w, h, 'xm') : [fullMask(w, h)];
+  const r = dotsOn(src, w, h, masks, S.P, BLUE);
+  const cols = use ? S.subjects.map((x) => x.palette[x.palette.length - 1])
+    : [S.palette[S.palette.length - 1]];
+  const doc = { w, h, fps: 1, dotpx: S.P.dotpx,
+                palette: [S.bg].concat(cols), bgIndex: 0, bg: S.bg,
+                subjects: cols.map((col) => ({ color: col })),
+                frames: [r.on.map((o) => dotXY(r.F, o))] };
+  return { key: 'still', doc, bytes: await P.pack(doc) };
+}
+
 /** The current clip as a dots document, cached against the look it was made
- *  with — the sequence step asks for this repeatedly. */
+ *  with — the sequence step asks for this repeatedly. A still short-circuits:
+ *  one frame, nothing to cache against. */
 async function dotsDoc(onProgress) {
+  if (S.kind === 'image') return dotsDocStill();
   const P = await playerLib();
   const params = dotsParams();
   const key = JSON.stringify([E().id, S.job, S.nFrames, params]);
@@ -1713,6 +2095,7 @@ async function exportDots(asJSON) {
     });
     const counts = doc.frames.map((f) => f.reduce((a, x) => a + (x.length >> 1), 0));
     const mean = counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length);
+    const one = doc.frames.length === 1;
     const name = `${S.fileName || 'dither'}.dots`;
     let size;
     if (asJSON) {
@@ -1723,7 +2106,8 @@ async function exportDots(asJSON) {
       size = bytes.length;
       download(new Blob([bytes], { type: 'application/octet-stream' }), name + '.gz');
     }
-    info.textContent = `${doc.frames.length} frames · ${mean.toFixed(0)} dots/frame `
+    info.textContent = (one ? `1 frame · ${mean.toFixed(0)} dots `
+      : `${doc.frames.length} frames · ${mean.toFixed(0)} dots/frame `)
       + `· ${(size / 1024).toFixed(0)} KB ${asJSON ? 'JSON' : '.dots.gz'} `
       + `· ${((performance.now() - t0) / 1000).toFixed(1)} s`;
   } catch (err) {
@@ -2112,12 +2496,12 @@ function resetClip() {
   S.kind = 'none'; S.job = null; S.bitmap = null; S.tracked = false;
   S.subjects = []; S.nextId = 1; S.scope = 'whole'; S.promptFrame = 0;
   S.previewMasks = null; S.curPath = null;
-  dropCache();
+  dropCache(); dropStill();
   $('#upstat').hidden = true; $('#tinfo').hidden = true; $('#rinfo').hidden = true;
   $('#dl').hidden = true; $('#outvid').hidden = true; $('#pvinfo').hidden = true;
   $('#outimg').hidden = true; $('#fmtui').hidden = true; $('#trimui').hidden = true;
   S.srcFile = null; S.trim = null; S.srcDuration = 0;
-  $('#pwrap').hidden = true; $('#vwrap').hidden = true;
+  showStage('empty');
   showSteps('none');
 }
 
@@ -2160,9 +2544,10 @@ async function checkModels() {
   } catch (err) {
     S.modelsMissing = why(err);
     box.hidden = false;
-    box.textContent = 'Subject tracking needs the EdgeTAM model files, and they '
-      + 'are not here. ' + S.modelsMissing + '  Stills and whole-frame clips work '
-      + 'without them.';
+    box.textContent = 'Selecting a subject — in a photograph or a clip — needs the '
+      + 'EdgeTAM model files, and they are not here. ' + S.modelsMissing
+      + '  Whole-image stills and whole-frame clips, dots included, work without '
+      + 'them.';
     $('#bTrack').disabled = true;
     $('#bPrev').disabled = true;
   }
@@ -2202,6 +2587,22 @@ async function checkModels() {
                               tried: S.engineTried });
   window.DV_switchEngine = switchEngine;
   window.DV_composeAt = composeAt;
+  window.DV_still = {
+    segment: segmentStill, use: useStillSelection, doc: dotsDocStill,
+    masks: () => Array.from(S.stillMasks.keys()),
+    alpha: (on) => { S.pngAlpha = !!on; $('#cAlpha').checked = !!on; },
+    /* mask coverage in the picture's own pixels — what the verifiers assert on */
+    areas: () => {
+      const out = {};
+      const ms = stillMasksAt(S.W, S.H, 'vm');
+      S.subjects.forEach((sub, k) => {
+        let n = 0;
+        for (let q = 0; q < ms[k].length; q++) if (ms[k][q] >= 0.5) n++;
+        out[sub.id] = n;
+      });
+      return out;
+    },
+  };
   window.DV_formats = engineFormats;
   window.DV_camera = { open: camOpen, start: camStart, stop: camStop,
                        close: camClose, snap: camSnap,

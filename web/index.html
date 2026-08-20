@@ -92,8 +92,14 @@
         </div>
         <div id="trackui" hidden>
           <div id="nomodels" class="stat err" hidden></div>
-          <div class="lbl"><span>Prompt frame</span><span id="vPF">0</span></div>
-          <input type="range" id="sPF" min="0" max="0" step="1" value="0">
+          <div id="pfui">
+            <div class="lbl"><span>Prompt frame</span><span id="vPF">0</span></div>
+            <input type="range" id="sPF" min="0" max="0" step="1" value="0">
+          </div>
+          <div class="note" id="stillnote" hidden>One picture, one prediction:
+            the outline is re-cut after every click, box or drawn shape &mdash;
+            no propagation and no Track run. Add up to six subjects and each
+            gets its own palette in step&nbsp;4.</div>
           <div class="lbl"><span>Subjects</span><span id="vSubs">1 / 6</span></div>
           <div class="chips" id="subs"></div>
           <div class="row">
@@ -113,7 +119,7 @@
             <button class="btn" id="bUndo">undo shape</button>
           </div>
           <div id="pvinfo" class="stat" hidden></div>
-          <div class="lbl"><span>Tracking quality</span><span id="vTQ"></span></div>
+          <div class="lbl"><span id="tqlbl">Tracking quality</span><span id="vTQ"></span></div>
           <div class="chips seg" id="tq"></div>
           <div class="note" id="tqnote">Your clip keeps its own resolution &mdash; this
             only changes the square the tracker looks at, and so how fine an outline
@@ -156,7 +162,7 @@
 
         <div id="dotsui" hidden>
           <div class="lbl"><span>Dots</span><span id="vN">8000</span></div>
-          <input type="range" id="sN" min="500" max="30000" step="500" value="8000">
+          <input type="range" id="sN" min="500" max="120000" step="500" value="8000">
           <div class="lbl"><span>Cell</span><span id="vCell">4 px</span></div>
           <input type="range" id="sCell" min="2" max="12" step="1" value="4">
           <div class="lbl"><span>Dot size</span><span id="vDot">3 px</span></div>
@@ -231,6 +237,14 @@
           </div>
           <div class="note" id="fmtnote"></div>
         </div>
+        <div id="pngalpha" hidden>
+          <div class="lbl"><span>Transparency</span></div>
+          <div class="chips">
+            <label class="chip cbx"><input type="checkbox" id="cAlpha">
+              <span>transparent background</span></label>
+          </div>
+          <div class="note" id="alphanote"></div>
+        </div>
         <div class="row"><button class="btn go" id="bExport">Export</button></div>
         <div id="dotsexp" hidden>
           <div class="lbl"><span>Dot data</span></div>
@@ -303,9 +317,9 @@
     <div id="empty">
       <div class="hero">
         <h1>Dither Studio</h1>
-        <p>Drop a <b>still</b> to dither it, a <b>clip</b> to dither every frame, or a clip
-           plus a click on whatever you want isolated — the tracker follows it and only
-           that gets dithered.</p>
+        <p>Drop a <b>still</b> to dither it, a <b>clip</b> to dither every frame, or click on
+           whatever you want isolated — in a photograph it is cut out on the spot, in a
+           clip the tracker follows it — and only that gets dithered.</p>
         <button class="btn go" id="bPick">choose a file</button>
       </div>
     </div>
