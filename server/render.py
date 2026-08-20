@@ -14,7 +14,7 @@ Subjects are optional. With no subjects the whole frame is dithered; with
 subjects each one is dithered with its own palette and, in `cutout` compose
 mode, everything else is flat background.
 
-static/dither.js + static/app.js reproduce all of this in the browser; parity.py
+web/dither.js + web/app.js reproduce all of this in the browser; parity.py
 is the gate that keeps the two honest.
 """
 import os

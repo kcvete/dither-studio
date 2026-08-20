@@ -3,12 +3,12 @@
 server's masks.
 
 This is the reference implementation of the tracking loop that
-`static/track-web/track.js` mirrors: same memory-bank bookkeeping, same
+`web/track.js` mirrors: same memory-bank bookkeeping, same
 padding, same token selection. Getting it right here first means a JS bug
 later is a JS bug, not a design bug.
 
     PYTHONPATH=<pylibs> env/venv/bin/python onnxexport/verify_loop.py \
-        --clip <dir> --models static/track-web/models [--fp16] [--limit N]
+        --clip <dir> --models web/models [--fp16] [--limit N]
 """
 import argparse
 import json

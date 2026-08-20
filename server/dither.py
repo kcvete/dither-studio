@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Dither engine — the Python mirror of static/dither.js.
+"""Dither engine — the Python mirror of web/dither.js.
 
 Threshold modes are vectorised numpy. The two serial modes (error diffusion and
 Riemersma) call into env/libcdither.dylib through ctypes; a pure-Python fallback
 exists but is ~500x slower and only meant to keep the tool working if the C
 build is unavailable.
 
-Any rule changed here must be changed in static/dither.js too — the browser
+Any rule changed here must be changed in web/dither.js too — the browser
 preview and this exporter are supposed to produce the same pixels.
 """
 import ctypes
@@ -166,7 +166,7 @@ def _u32(x):
 
 
 def hash01(i, j, salt, seed):
-    """Deterministic uniform [0,1). Mirrored in static/dither.js."""
+    """Deterministic uniform [0,1). Mirrored in web/dither.js."""
     x = _u32(_u32(i * 73856093) ^ _u32(j * 19349663) ^
              _u32(salt * 83492791) ^ _u32(seed * 2654435761))
     x = _u32(x ^ (x >> 16))

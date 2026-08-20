@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Engine parity gate: static/dither.js vs dither.py, pixel-exact.
+"""Engine parity gate: web/dither.js vs server/dither.py, pixel-exact.
 
 Runs every mode, all 14 error-diffusion kernels (serpentine on and off), three
 palettes and the tone controls through both implementations and requires byte

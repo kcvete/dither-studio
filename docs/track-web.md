@@ -1,41 +1,46 @@
-# track-web — EdgeTAM video tracking with no server
+# The browser tracker — EdgeTAM with no server
 
-A standalone page that runs the *whole* tracker in the tab: image encoder,
-memory attention, SAM heads and memory encoder as four ONNX graphs on
+How `web/track.js` and `web/models/` work: the image encoder, memory attention,
+SAM heads, mask prompt and memory encoder as five ONNX graphs on
 onnxruntime-web's WebGPU backend, with sam2's memory-bank bookkeeping
-reimplemented in `track.js`. Nothing is uploaded and nothing is fetched from a
+reimplemented in JavaScript. Nothing is uploaded and nothing is fetched from a
 CDN.
 
-It exists to answer one question — *can Dither Studio ship as a static site?* —
-so it is a measuring instrument, not a product: it hard-codes the parkour clip
-and its prompt, and prints timings and an IoU against the server's masks.
+This started as a measuring instrument — *can Dither Studio ship as a static
+site?* — and the answer turned out to be yes, so it is now the free tier and the
+default engine anywhere there is no server. `web/track-probe.html` is what is
+left of the instrument: a bench page that runs the graphs in isolation, prints
+per-stage timings and scores an IoU against the server's masks.
 
-## Running it
+## Building the graphs
 
-The models and the onnxruntime build are large binaries and are **not
-committed**; regenerate/copy them first.
+The weights are large and are **not** committed. `./setup.sh` does all of this;
+these are the individual steps.
 
 ```sh
-# 1. the five graphs (needs the EdgeTAM checkpoint in ~/dither-video/env)
-../../env/venv/bin/pip install onnx onnxruntime
-../../env/venv/bin/python ../../onnxexport/export_onnx.py \
-    --image-size 768                    # -> static/track-web/models/
+# the five graphs (needs the EdgeTAM checkpoint under env/)
+env/venv/bin/pip install onnx onnxruntime
+env/venv/bin/python onnxexport/export_onnx.py --image-size 768   # -> web/models/
 
-# 2. the runtime
+# the runtime
 npm install onnxruntime-web@1.27
-cp node_modules/onnxruntime-web/dist/{ort.all.bundle.min.mjs,ort-wasm-simd-threaded*.{mjs,wasm}} \
-   static/track-web/ort/
-
-# 3. serve with cross-origin isolation (multi-threaded WASM needs
-#    SharedArrayBuffer; the WebGPU path does not, but the comparison should be
-#    fair) from a directory that also exposes the clip as ../parkour/
-python serve.py <dir> 8777
-open -a "Google Chrome" http://127.0.0.1:8777/track-web/
+cp node_modules/onnxruntime-web/dist/ort.all.bundle.min.mjs web/ort/
+cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded{,.jsep}.{mjs,wasm} web/ort/
 ```
 
-`onnxexport/verify_loop.py` is the same loop in Python against the CPU
-execution provider — the reference this page is checked against, and the place
-to debug a numeric difference before blaming JS.
+`onnxexport/verify_loop.py` is the same loop in Python against the CPU execution
+provider — the reference this port is checked against, and the place to debug a
+numeric difference before blaming JS. `onnxexport/verify_mask_prompt.py` does
+the same for the mask-prompt graph against torch's `add_new_mask`.
+
+## Running the bench page
+
+`web/track-probe.html` hard-codes a clip directory (`../parkour/`) holding
+`frames/%04d.jpg`, `prompt.json` and `masks_edgetam/%04d.png` — the server's own
+output for a clip, which `bench/bench.py` produces. It is a development harness,
+not something a visitor is meant to find; serve `web/` with cross-origin
+isolation (multi-threaded WASM needs `SharedArrayBuffer`; the WebGPU path does
+not, but the comparison should be fair) and open `/track-probe.html`.
 
 ## What the five graphs are
 

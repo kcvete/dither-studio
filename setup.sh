@@ -158,7 +158,7 @@ LIB="$ENVD/libcdither.dylib"
 if [ ! -f "$LIB" ] || [ "$HERE/server/cdither.c" -nt "$LIB" ]; then
   echo "[setup] building libcdither"
   # -ffp-contract=off keeps clang from fusing multiply-add, which would round once
-  # where JavaScript rounds twice and break pixel parity with static/dither.js
+  # where JavaScript rounds twice and break pixel parity with web/dither.js
   cc -O3 -ffp-contract=off -shared -fPIC -o "$LIB" "$HERE/server/cdither.c"
 fi
 

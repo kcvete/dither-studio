@@ -1,6 +1,10 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Dither Studio — client-side tracking probe</title>
+<title>Dither Studio — tracking bench</title>
+<!-- A development harness, not part of the page. It expects a clip directory at
+     ../parkour/ holding frames/%04d.jpg, prompt.json and masks_edgetam/%04d.png
+     -- the server's own output, which bench/bench.py produces. See
+     docs/track-web.md. The product itself is index.html. -->
 <style>
   body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 20px; background:#111; color:#ddd }
   canvas { border:1px solid #333; max-width:100%; image-rendering:auto }
