@@ -1074,6 +1074,7 @@ function renderSubjects() {
   paintScopeSummary();
   paintOffFrame();
   renderPolish();
+  paintTrackCTA();
 }
 
 const pimg = $('#pimg'), pov = $('#pov'), pctx = pov.getContext('2d');
@@ -1632,11 +1633,15 @@ function coachOnMasks(objects) {
 async function runPreview(here) {
   const info = $('#pvinfo'); info.hidden = false; info.classList.remove('err');
   if (!info.textContent) info.textContent = 'predicting this frame…';
+  const seq = promptSeq;              // the frame this prediction belongs to
   try {
     const r = await E().previewFrame({
       frameIdx: S.promptFrame, imageSize: S.trackSize,
       objects: promptPayload(here),
     }, (m) => { info.textContent = m; });
+    // the scrubber moved while we were predicting: this tint belongs to a
+    // frame that is no longer on the stage — drop it, another run will come
+    if (seq !== promptSeq) return;
     const imgs = {};
     for (const o of r.objects) imgs[String(o.id)] = o.image;
     S.previewMasks = imgs;
