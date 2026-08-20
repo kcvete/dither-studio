@@ -7,7 +7,34 @@
 
 <div id="app">
   <aside id="panel">
-    <div class="hd"><b>Dither Studio</b><span id="dev" class="tag">mps</span></div>
+    <div class="hd">
+      <b>Dither Studio</b>
+      <button id="engine" class="tag eng" aria-haspopup="true" aria-expanded="false"
+              title="where the tracking and the export happen">
+        <i class="dot"></i><span id="engName">starting…</span>
+      </button>
+      <span id="dev" class="tag" hidden></span>
+    </div>
+    <div id="engpop" class="pop" hidden>
+      <div class="poph">Where the work happens</div>
+      <button class="opt" data-eng="browser">
+        <b>Browser</b><em>free · nothing leaves this tab</em>
+      </button>
+      <button class="opt" data-eng="local">
+        <b>Local server</b><em>this machine · faster</em>
+      </button>
+      <button class="opt" data-eng="custom">
+        <b>Custom URL</b><em>another machine running server.py</em>
+      </button>
+      <div id="engcustom" hidden>
+        <input id="engUrl" type="url" spellcheck="false"
+               placeholder="https://gpu.example.com">
+        <input id="engKey" type="password" spellcheck="false"
+               placeholder="API key (only if the server sets DV_API_KEY)">
+        <div class="row"><button class="btn" id="engGo">connect</button></div>
+      </div>
+      <div id="engstat" class="note"></div>
+    </div>
 
     <!-- ---------------------------------------------------------- step 1 -->
     <section class="step" id="st1" data-open="1">
@@ -36,6 +63,7 @@
           <button class="chip" data-scope="track" aria-pressed="false">track subjects</button>
         </div>
         <div id="trackui" hidden>
+          <div id="nomodels" class="stat err" hidden></div>
           <div class="lbl"><span>Prompt frame</span><span id="vPF">0</span></div>
           <input type="range" id="sPF" min="0" max="0" step="1" value="0">
           <div class="lbl"><span>Subjects</span><span id="vSubs">1 / 6</span></div>
@@ -51,6 +79,7 @@
             <button class="chip" data-tool="poly" aria-pressed="false">polygon</button>
           </div>
           <div class="note" id="toolnote"></div>
+          <div class="note" id="offframe" hidden></div>
           <div class="row">
             <button class="btn" id="bPrev">preview this frame</button>
             <button class="btn" id="bUndo">undo shape</button>

@@ -6,11 +6,19 @@
      clip + subject  point at something, EdgeTAM tracks it through the clip, and
                      only that gets dithered
 
-   The preview is not an approximation: it runs static/dither.js, which dither.py
-   mirrors pixel for pixel (parity.py is the gate). What plays here is what the
-   MP4 contains.
+   The preview is not an approximation: it runs web/dither.js, which
+   server/dither.py mirrors pixel for pixel (server/parity.py is the gate).
+   What plays here is what the export contains.
+
+   Nothing below knows whether the tracking happened in this tab or on a
+   server -- every call that could need one goes through `S.engine`, which is
+   one of web/engines/{browser,remote}.js. That is the whole of the free /
+   local / paid split.
 --------------------------------------------------------------------------- */
 'use strict';
+
+import { chooseEngine, probeRemote, loadPref, savePref,
+         BrowserEngine, RemoteEngine } from './engines/index.js';
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -27,6 +35,9 @@ const S = {
   bitmap: null, natW: 0, natH: 0, fileName: '',
   // clip
   job: null, nFrames: 0, W: 0, H: 0, fps: 30,
+  // `promptFrame` is where the SCRUBBER is. Each subject remembers the frame it
+  // was actually prompted on -- a ball that flies in at frame 80 does not exist
+  // on frame 0, so one prompt frame per clip was never enough.
   scope: 'whole', subjects: [], active: 0, nextId: 1, promptFrame: 0,
   tool: 'point', curPath: null, hoverXY: null, previewMasks: null,
   trackSize: 1024, tracked: false, playing: false, cur: 0,
@@ -42,7 +53,11 @@ const S = {
   target: 'bg',                      // which palette the editor is editing: 'bg' | subject id
   meta: null,
   compare: false, split: 0.5,
+  // engine
+  engine: null, enginePref: null, modelsMissing: null,
+  exportURL: null, frameURL: null,
 };
+const E = () => S.engine;
 
 /* ------------------------------------------------------------------ chrome */
 function toast(msg, err) {
@@ -53,15 +68,9 @@ function toast(msg, err) {
 }
 const busy = (on) => { $('#busy').hidden = !on; };
 
-async function api(path, opts) {
-  const r = await fetch(path, opts);
-  if (!r.ok) {
-    let d = r.statusText;
-    try { d = (await r.json()).detail || d; } catch (e) { /* not json */ }
-    throw new Error(d);
-  }
-  return r.json();
-}
+/* Nothing here talks to a URL any more; this is only for the odd bit of code
+ * that wants a readable message out of an engine failure. */
+const why = (err) => (err && err.message) || String(err);
 
 function openStep(n) {
   $$('.step').forEach((el) => el.setAttribute('data-open', el.id === 'st' + n ? '1' : '0'));
@@ -122,6 +131,7 @@ async function loadStill(f) {
     $('#composeui').hidden = true; $('#bgui').hidden = true;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
     $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
+    $('#offframe').hidden = true;
     buildTargets(); renderModes(); openStep(3);
     await draw();
   } catch (err) {
@@ -131,32 +141,35 @@ async function loadStill(f) {
 
 async function uploadClip(f) {
   const box = $('#upstat'); box.hidden = false; box.classList.remove('err');
-  box.textContent = 'uploading ' + f.name + '…';
+  box.textContent = (E().id === 'browser' ? 'decoding ' : 'uploading ') + f.name + '…';
   busy(true);
-  const fd = new FormData();
-  fd.append('file', f);
-  fd.append('max_seconds', $('#sSec').value);
   try {
-    const j = await api('/api/upload', { method: 'POST', body: fd });
-    S.kind = 'video'; S.job = j.job; S.nFrames = j.n_frames; S.W = j.w; S.H = j.h; S.fps = j.fps;
+    const j = await E().open(f, {
+      maxSeconds: +$('#sSec').value,
+      onProgress: (p) => { if (p.text) box.textContent = p.text; },
+    });
+    S.kind = 'video'; S.job = j.job; S.nFrames = j.nFrames; S.W = j.w; S.H = j.h; S.fps = j.fps;
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.cur = 0; S.promptFrame = 0;
     S.scope = 'whole';
     dropCache();
-    box.textContent = `${j.n_frames} frames · ${j.w}×${j.h} · ${j.fps} fps`;
-    $('#s1sum').textContent = `${j.n_frames}f`;
-    $('#sPF').max = j.n_frames - 1; $('#sPF').value = 0; $('#vPF').textContent = '0';
-    $('#sFrame').max = j.n_frames - 1;
+    box.textContent = `${j.nFrames} frames · ${j.w}×${j.h} · ${j.fps} fps`
+      + (E().id === 'browser' ? ' · stays in this tab' : '');
+    $('#s1sum').textContent = `${j.nFrames}f`;
+    $('#sPF').max = j.nFrames - 1; $('#sPF').value = 0; $('#vPF').textContent = '0';
+    $('#sFrame').max = j.nFrames - 1;
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = false;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
     $('#tinfo').hidden = true; $('#s5sum').textContent = '';
-    $('#bExport').textContent = 'Render MP4';
+    $('#bExport').textContent = 'Render ' + E().supports.exportExt.toUpperCase();
     if (S.P.mode === 'dots') setMode('bluenoise');
     showSteps('video'); setScope('whole');
     buildTargets(); renderModes(); openStep(2);
     await draw();
   } catch (err) {
-    box.classList.add('err'); box.textContent = 'upload failed: ' + err.message;
+    box.classList.add('err');
+    box.textContent = (E().id === 'browser' ? 'could not read that clip: '
+      : 'upload failed: ') + why(err);
   }
   busy(false);
 }
@@ -189,8 +202,10 @@ function subjectColor(i) { return (S.meta.subject_colors || ['#b0413e'])[i % 6];
 function addSubject() {
   if (S.subjects.length >= MAX_SUBJECTS) return;
   const i = S.subjects.length;
+  // promptFrame stays null until the subject actually gets a prompt, so it
+  // adopts whatever frame the user was looking at when they drew it
   S.subjects.push({ id: S.nextId++, palette: [S.bg, subjectColor(i)],
-                    points: [], box: null, paths: [] });
+                    points: [], box: null, paths: [], promptFrame: null });
   S.active = S.subjects.length - 1;
   renderSubjects(); buildTargets();
 }
@@ -205,10 +220,40 @@ function backToPrompt() {
 }
 $('#bAdd').addEventListener('click', () => { addSubject(); backToPrompt(); });
 $('#bClr').addEventListener('click', () => {
-  S.subjects.forEach((s) => { s.points = []; s.box = null; s.paths = []; });
+  S.subjects.forEach((s) => { s.points = []; s.box = null; s.paths = []; s.promptFrame = null; });
   S.curPath = null; S.previewMasks = null; $('#pvinfo').hidden = true;
   renderSubjects(); backToPrompt(); drawOverlay();
 });
+
+/* A subject's prompt frame is decided by the first mark placed on it, and never
+ * moves afterwards unless the subject is cleared. */
+const hasPrompt = (s) => !!(s.points.length || s.box || (s.paths || []).length);
+const frameOf = (s) => (s.promptFrame === null ? S.promptFrame : s.promptFrame);
+const onThisFrame = (s) => frameOf(s) === S.promptFrame;
+
+function claimFrame(s) {
+  if (s.promptFrame === null) { s.promptFrame = S.promptFrame; paintOffFrame(); }
+}
+
+/* Subjects prompted on some other frame: named, with a way back to them. */
+function paintOffFrame() {
+  const box = $('#offframe');
+  const away = S.subjects.filter((s) => hasPrompt(s) && !onThisFrame(s));
+  if (!away.length || S.tracked) { box.hidden = true; box.textContent = ''; return; }
+  box.hidden = false; box.textContent = '';
+  away.forEach((s, i) => {
+    if (i) box.append(document.createTextNode(' · '));
+    const a = document.createElement('button');
+    a.className = 'lnk';
+    a.textContent = `#${s.id} prompted @ ${s.promptFrame} — jump`;
+    a.addEventListener('click', () => {
+      $('#sPF').value = s.promptFrame; $('#vPF').textContent = String(s.promptFrame);
+      S.active = S.subjects.indexOf(s);
+      showPromptFrame(s.promptFrame); renderSubjects();
+    });
+    box.append(a);
+  });
+}
 
 function renderSubjects() {
   const wrap = $('#subs'); wrap.textContent = '';
@@ -223,9 +268,21 @@ function renderSubjects() {
     const bits = [];
     if (nl) bits.push(`${nl} shape${nl > 1 ? 's' : ''}`);
     else if (np || s.box) bits.push(`${np}pt${s.box ? '+box' : ''}`);
+    if (s.promptFrame !== null) bits.push('@ ' + s.promptFrame);
     nm.textContent = `#${s.id}` + (bits.length ? ' · ' + bits.join(' ') : '');
+    if (hasPrompt(s) && !onThisFrame(s)) b.classList.add('away');
     b.append(sw, nm);
-    b.addEventListener('click', () => { S.active = i; renderSubjects(); drawOverlay(); });
+    // selecting a subject that lives on another frame goes there, otherwise
+    // its marks would be invisible and the next click would land on the wrong
+    // frame and be silently ignored
+    b.addEventListener('click', () => {
+      S.active = i;
+      if (s.promptFrame !== null && s.promptFrame !== S.promptFrame && !S.tracked) {
+        $('#sPF').value = s.promptFrame; $('#vPF').textContent = String(s.promptFrame);
+        showPromptFrame(s.promptFrame);
+      }
+      renderSubjects(); drawOverlay();
+    });
     if (S.subjects.length > 1) {
       const x = document.createElement('span');
       x.className = 'x'; x.textContent = '✕';
@@ -240,16 +297,28 @@ function renderSubjects() {
     wrap.append(b);
   });
   $('#vSubs').textContent = `${S.subjects.length} / ${MAX_SUBJECTS}`;
+  paintOffFrame();
 }
 
 const pimg = $('#pimg'), pov = $('#pov'), pctx = pov.getContext('2d');
 
-function showPromptFrame(n) {
+let promptSeq = 0;
+async function showPromptFrame(n) {
   S.promptFrame = n;
   S.previewMasks = null; $('#pvinfo').hidden = true;
-  pimg.src = `/api/jobs/${S.job}/frame/${n}`;
   pov.width = S.W; pov.height = S.H;
   drawOverlay();
+  renderSubjects();
+  const seq = ++promptSeq;
+  try {
+    const got = await E().frameURL(n);
+    if (seq !== promptSeq) { if (got.revoke) URL.revokeObjectURL(got.url); return; }
+    if (S.frameURL) URL.revokeObjectURL(S.frameURL);
+    S.frameURL = got.revoke ? got.url : null;
+    pimg.src = got.url;
+  } catch (err) {
+    toast('could not read frame ' + n + ': ' + why(err), true);
+  }
 }
 $('#sPF').addEventListener('input', (e) => {
   $('#vPF').textContent = e.target.value; showPromptFrame(+e.target.value);
@@ -260,6 +329,7 @@ function drawOverlay() {
   pov.width = S.W; pov.height = S.H;
   pctx.clearRect(0, 0, S.W, S.H);
   S.subjects.forEach((s, i) => {
+    if (!onThisFrame(s)) return;              // its marks belong to another frame
     const col = s.palette[s.palette.length - 1], on = i === S.active;
     pctx.globalAlpha = on ? 1 : 0.4;
     if (s.box) {
@@ -315,6 +385,7 @@ function strokeShape(p, col, open, hover) {
 
 function drawPaths() {
   S.subjects.forEach((s, i) => {
+    if (!onThisFrame(s)) return;
     const col = s.palette[s.palette.length - 1];
     pctx.globalAlpha = i === S.active ? 1 : 0.4;
     (s.paths || []).forEach((p) => strokeShape(p, p.op === 'add' ? col : '#ff9d7c', false));
@@ -372,11 +443,21 @@ const MINSTEP = 4;                      // lasso: drop points closer than this
 function commitPath() {
   const c = S.curPath;
   S.curPath = null; S.hoverXY = null;
-  if (c && c.pts.length >= 3) { S.subjects[S.active].paths.push(c); S.previewMasks = null; }
+  if (c && c.pts.length >= 3) {
+    const s = S.subjects[S.active];
+    claimFrame(s);
+    s.paths.push(c); S.previewMasks = null;
+  }
   renderSubjects(); drawOverlay();
 }
 pov.addEventListener('pointerdown', (e) => {
   if (!S.subjects.length) return;
+  const act = S.subjects[S.active];
+  if (!onThisFrame(act)) {
+    toast(`subject #${act.id} was prompted on frame ${act.promptFrame} — `
+      + 'jump back to it, or add a new subject for this frame', true);
+    return;
+  }
   const p = povXY(e), neg = e.shiftKey || e.altKey;
   if (S.tool === 'point') {
     pov.setPointerCapture(e.pointerId);
@@ -414,6 +495,7 @@ pov.addEventListener('pointerup', (e) => {
   if (!down) return;
   if (down.lasso) { down = null; commitPath(); return; }
   const p = povXY(e), s = S.subjects[S.active];
+  claimFrame(s);
   if (down.moved && S.dragBox) s.box = S.dragBox.map(Math.round);
   else s.points.push([Math.round(p[0]), Math.round(p[1]), down.neg ? 0 : 1]);
   down = null; S.dragBox = null; S.previewMasks = null;
@@ -498,12 +580,16 @@ function paintTrackSize() {
 
 $('#bTrack').addEventListener('click', track);
 
-function promptPayload() {
-  return S.subjects.map((s) => {
-    const mask = subjectMaskDataURL(s);
-    return mask ? { id: s.id, mask }
-                : { id: s.id, points: s.points, box: s.box };
-  });
+/* The engine-neutral prompt: clip-pixel coordinates, one prompt frame each. */
+function promptPayload(only) {
+  return S.subjects
+    .filter((s) => !only || only.includes(s))
+    .map((s) => {
+      const mask = subjectMaskDataURL(s);
+      const frameIdx = frameOf(s);
+      return mask ? { id: s.id, mask, frameIdx }
+                  : { id: s.id, points: s.points, box: s.box, frameIdx };
+    });
 }
 
 /* ---- preview: the first-frame prediction only, no propagation ---- */
@@ -511,91 +597,74 @@ $('#bPrev').addEventListener('click', previewFrame);
 async function previewFrame() {
   if (S.curPath) commitPath();
   backToPrompt();
-  const bad = S.subjects.filter((s) => !s.points.length && !s.box && !s.paths.length);
-  if (bad.length) { toast('subject #' + bad[0].id + ' has no prompt yet', true); return; }
+  // one frame, so only the subjects that were actually prompted on it
+  const here = S.subjects.filter((s) => hasPrompt(s) && onThisFrame(s));
+  if (!here.length) {
+    toast('nothing is prompted on frame ' + S.promptFrame + ' yet', true);
+    return;
+  }
   const btn = $('#bPrev'); btn.disabled = true;
   const info = $('#pvinfo'); info.hidden = false; info.classList.remove('err');
   info.textContent = 'predicting this frame…';
   try {
-    const r = await api(`/api/jobs/${S.job}/preview`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ frame_idx: S.promptFrame, image_size: S.trackSize,
-                             objects: promptPayload() }),
-    });
+    const r = await E().previewFrame({
+      frameIdx: S.promptFrame, imageSize: S.trackSize,
+      objects: promptPayload(here),
+    }, (m) => { info.textContent = m; });
     const imgs = {};
-    await Promise.all(r.objects.map((o) => new Promise((res) => {
-      const im = new Image();
-      im.onload = im.onerror = () => { imgs[o.id] = im; res(); };
-      im.src = o.mask;
-    })));
+    for (const o of r.objects) imgs[String(o.id)] = o.image;
     S.previewMasks = imgs;
     drawOverlay();
-    info.textContent = `frame ${r.frame_idx} · ${r.objects.length} subject`
-      + `${r.objects.length > 1 ? 's' : ''} in ${r.elapsed_s.toFixed(2)} s `
-      + `(${r.image_size} px) · ${r.objects.map((o) => '#' + o.id + ' ' + o.area + ' px').join(' · ')}`;
+    info.textContent = `frame ${r.frameIdx} · ${r.objects.length} subject`
+      + `${r.objects.length > 1 ? 's' : ''} in ${r.elapsedS.toFixed(2)} s `
+      + `(${r.imageSize} px) · `
+      + r.objects.map((o) => '#' + o.id + ' ' + o.area + ' px').join(' · ')
+      + (r.note ? ' · ' + r.note : '');
   } catch (err) {
     info.classList.add('err');
-    info.textContent = 'preview failed: ' + err.message;
+    info.textContent = 'preview failed: ' + why(err);
   }
   btn.disabled = false;
 }
 
 async function track() {
   if (S.curPath) commitPath();
-  const bad = S.subjects.filter((s) => !s.points.length && !s.box && !s.paths.length);
+  const bad = S.subjects.filter((s) => !hasPrompt(s));
   if (bad.length) { toast('subject #' + bad[0].id + ' has no prompt yet', true); return; }
   const btn = $('#bTrack'); btn.disabled = true;
   $('#tinfo').hidden = true; $('#tinfo').textContent = '';
   const prog = $('#prog'); prog.hidden = false;
-  $('.bar i', prog).style.width = '0%';
-  $('span', prog).textContent = 'loading model…';
+  const bar = $('.bar i', prog), lab = $('span', prog);
+  bar.style.width = '0%';
+  lab.textContent = 'loading model…';
   try {
-    await api(`/api/jobs/${S.job}/track`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        frame_idx: S.promptFrame,
-        image_size: S.trackSize,
-        objects: promptPayload(),
-      }),
-    });
-    await pollTrack();
+    const st = await E().track(
+      { objects: promptPayload(), imageSize: S.trackSize },
+      (p) => {
+        bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
+        lab.textContent = p.text;
+      });
+    prog.hidden = true; S.tracked = true;
+    const spread = new Set(S.subjects.map(frameOf));
+    const box = $('#tinfo'); box.hidden = false; box.classList.remove('err');
+    box.textContent = `tracked ${st.frames} frames in ${st.elapsedS.toFixed(1)} s `
+      + `(${st.fps.toFixed(1)} fps) on ${st.device} ${st.backend || ''} · `
+      + `${S.subjects.length} subject${S.subjects.length > 1 ? 's' : ''}`
+      + (spread.size > 1 ? ` prompted on ${spread.size} different frames` : '')
+      + (st.note ? ' · ' + st.note : '');
+    $('#s2sum').textContent = `${st.frames}f · ${st.fps.toFixed(1)} fps`;
+    $('#pwrap').hidden = true; $('#vwrap').hidden = false;
+    $('#offframe').hidden = true;
+    $('#composeui').hidden = false;
+    $('#bgui').hidden = S.P.compose !== 'cutout';
+    dropCache(); buildTargets(); renderModes(); openStep(3);
+    await draw();
   } catch (err) {
     prog.hidden = true;
     const box = $('#tinfo'); box.hidden = false; box.classList.add('err');
-    box.textContent = 'track failed: ' + err.message;
+    box.textContent = 'track failed: ' + why(err);
   }
   btn.disabled = false;
-}
-
-async function pollTrack() {
-  const prog = $('#prog'), bar = $('.bar i', prog), lab = $('span', prog);
-  for (;;) {
-    const st = await api(`/api/jobs/${S.job}/status`);
-    bar.style.width = (st.n_frames ? (st.done_frames / st.n_frames) * 100 : 0).toFixed(1) + '%';
-    lab.textContent = st.state === 'loading' ? 'loading frames…'
-      : `${st.done_frames}/${st.n_frames} · ${st.fps.toFixed(1)} fps`;
-    if (st.state === 'done') {
-      prog.hidden = true; S.tracked = true;
-      const box = $('#tinfo'); box.hidden = false; box.classList.remove('err');
-      box.textContent = `tracked ${st.done_frames} frames in ${st.elapsed_s.toFixed(1)} s `
-        + `(${st.fps.toFixed(1)} fps) on ${st.device.toUpperCase()} ${st.backend || st.precision || ''} · `
-        + `${S.subjects.length} subject${S.subjects.length > 1 ? 's' : ''}`;
-      $('#s2sum').textContent = `${st.done_frames}f · ${st.fps.toFixed(1)} fps`;
-      $('#pwrap').hidden = true; $('#vwrap').hidden = false;
-      $('#composeui').hidden = false;
-      $('#bgui').hidden = S.P.compose !== 'cutout';
-      dropCache(); buildTargets(); renderModes(); openStep(3);
-      await draw();
-      return;
-    }
-    if (st.state === 'error') {
-      prog.hidden = true;
-      const box = $('#tinfo'); box.hidden = false; box.classList.add('err');
-      box.textContent = 'track failed: ' + st.error;
-      return;
-    }
-    await sleep(350);
-  }
 }
 
 /* ===================================================== frames + masks cache */
@@ -606,9 +675,8 @@ async function frameAt(i) {
   if (hit) { CACHE.delete(i); CACHE.set(i, hit); return hit; }
   const ids = usingSubjects() ? S.subjects.map((s) => s.id) : [];
   const [frame, ...masks] = await Promise.all([
-    fetch(`/api/jobs/${S.job}/frame/${i}`).then((r) => r.blob()).then(createImageBitmap),
-    ...ids.map((id) => fetch(`/api/jobs/${S.job}/mask/${id}/${i}`)
-      .then((r) => r.blob()).then(createImageBitmap)),
+    E().frame(i),
+    ...ids.map((id) => E().mask(id, i)),
   ]);
   const rec = { frame, masks };
   CACHE.set(i, rec);
@@ -989,10 +1057,16 @@ $$('[data-compose]').forEach((b) => b.addEventListener('click', () => {
   draw();
 }));
 $('#bSeed').addEventListener('click', async () => {
+  const btn = $('#bSeed'); btn.disabled = true;
   S.P.seed = 1 + Math.floor(Math.random() * 100000);
-  BLUE = Float32Array.from((await api('/api/bluenoise?n=64&seed=' + S.P.seed)).tile);
+  try {
+    BLUE = await E().blueNoise(64, S.P.seed);
+  } catch (e) {
+    BLUE = new Float32Array(4096).map((_, i) => Dither.hash01(i >> 6, i & 63, 5, S.P.seed));
+  }
   Dither.setBlueNoise(BLUE);
   DOTS.key = null;
+  btn.disabled = false;
   draw();
 });
 
@@ -1095,7 +1169,24 @@ $('#bFromImg').addEventListener('click', async () => {
 $('#cBg').addEventListener('input', (e) => { S.bg = e.target.value; draw(); });
 
 /* ======================================================= step 5: export */
-$('#bExport').addEventListener('click', () => (S.kind === 'image' ? exportPNG() : exportMP4()));
+$('#bExport').addEventListener('click', () => (S.kind === 'image' ? exportPNG() : exportClip()));
+
+/* One frame of the finished picture at the clip's own resolution — what the
+ * browser engine feeds its recorder, frame by frame. */
+async function composeAt(i) {
+  const rec = await frameAt(i);
+  const c = ctx2d(S.W, S.H, 'exp');
+  c.clearRect(0, 0, S.W, S.H);
+  c.drawImage(rec.frame, 0, 0);
+  const src = c.getImageData(0, 0, S.W, S.H).data;
+  const masks = usingSubjects()
+    ? rec.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, 'x' + k)) : [];
+  const pal = palettesForRender();
+  const out = (S.P.mode === 'dots' && masks.length)
+    ? renderDots(src, S.W, S.H, masks, S.P, pal, S.bg, BLUE).out
+    : Dither.composeFrame(src, S.W, S.H, masks, S.P, pal, S.bg);
+  return new ImageData(out, S.W, S.H);
+}
 
 async function exportPNG() {
   const info = $('#rinfo'); info.hidden = true; info.textContent = '';
@@ -1127,67 +1218,136 @@ async function exportPNG() {
   busy(false);
 }
 
-async function exportMP4() {
+async function exportClip() {
   const btn = $('#bExport'); btn.disabled = true;
   $('#dl').hidden = true; $('#outvid').hidden = true;
   const info = $('#rinfo'); info.hidden = true; info.textContent = '';
   const prog = $('#rprog'); prog.hidden = false;
-  $('.bar i', prog).style.width = '0%'; $('span', prog).textContent = 'starting…';
+  const bar = $('.bar i', prog), lab = $('span', prog);
+  bar.style.width = '0%'; lab.textContent = 'starting…';
+  stop();
   try {
-    const body = Object.assign({}, S.P, {
-      bg: S.bg, palette: S.palette,
-      subjects: usingSubjects() ? S.subjects.map((s) => ({ id: s.id, palette: s.palette })) : [],
+    const params = Object.assign({}, S.P, {
+      bg: S.bg, palette: S.palette, fps: S.fps,
+      subjects: usingSubjects()
+        ? S.subjects.map((s) => ({ id: s.id, palette: s.palette })) : [],
     });
-    await api(`/api/jobs/${S.job}/render`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    for (;;) {
-      const st = (await api(`/api/jobs/${S.job}/status`)).render;
-      $('.bar i', prog).style.width =
-        (st.n_frames ? (st.done_frames / st.n_frames) * 100 : 0).toFixed(1) + '%';
-      $('span', prog).textContent = `${st.done_frames}/${st.n_frames}`;
-      if (st.state === 'done') {
-        prog.hidden = true;
-        const url = `/api/jobs/${S.job}/out.mp4?t=${Date.now()}`;
-        const dl = $('#dl');
-        dl.href = url; dl.download = `${S.fileName || 'dither'}-${S.P.mode}.mp4`; dl.hidden = false;
-        const v = $('#outvid'); v.src = url; v.hidden = false;
-        const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
-        box.textContent = `rendered ${st.done_frames} frames in ${st.elapsed_s.toFixed(1)} s `
-          + `(${st.fps.toFixed(1)} fps)`;
-        $('#s5sum').textContent = 'ready';
-        break;
-      }
-      if (st.state === 'error') {
-        prog.hidden = true;
-        const box = $('#rinfo'); box.hidden = false; box.classList.add('err');
-        box.textContent = 'render failed: ' + st.error;
-        break;
-      }
-      await sleep(300);
-    }
+    const r = await E().exportClip(params, (p) => {
+      bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
+      lab.textContent = p.text;
+    }, composeAt);
+    prog.hidden = true;
+    if (S.exportURL) { URL.revokeObjectURL(S.exportURL); S.exportURL = null; }
+    if (r.url.startsWith('blob:')) S.exportURL = r.url;
+    const dl = $('#dl');
+    dl.href = r.url;
+    dl.download = `${S.fileName || 'dither'}-${S.P.mode}.${r.ext}`;
+    dl.hidden = false;
+    if (r.playable) { const v = $('#outvid'); v.src = r.url; v.hidden = false; }
+    const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
+    box.textContent = `rendered ${r.frames} frames in ${r.elapsedS.toFixed(1)} s `
+      + `(${r.fps.toFixed(1)} fps)`
+      + (r.bytes ? ` · ${(r.bytes / 1e6).toFixed(1)} MB` : '')
+      + (r.note ? ` · ${r.note}` : '');
+    $('#s5sum').textContent = 'ready';
   } catch (err) {
     prog.hidden = true;
     const box = $('#rinfo'); box.hidden = false; box.classList.add('err');
-    box.textContent = 'render failed: ' + err.message;
+    box.textContent = 'render failed: ' + why(err);
   }
   btn.disabled = false;
 }
 
-/* ------------------------------------------------------------------ boot */
-(async function boot() {
-  try {
-    S.meta = await api('/api/palettes');
-  } catch (e) {
-    S.meta = { palettes: Dither.PALETTES, modes: Dither.MODES, stable: Dither.STABLE,
-               kernels: [], subject_colors: ['#b0413e'], device: '?' };
+/* ======================================================== the engine chip */
+function paintEngine() {
+  const e = E();
+  const chip = $('#engine'), name = $('#engName');
+  name.textContent = e.label + (e.sublabel ? ' · ' + e.sublabel : '');
+  chip.dataset.engine = e.id;
+  chip.title = e.id === 'browser'
+    ? 'Tracking, dithering and encoding all run in this tab. Nothing is uploaded.'
+    : `Tracking and encoding run on ${e.baseUrl || 'this origin'}.`;
+  $('#dev').hidden = true;
+  const mode = S.enginePref.mode;
+  $$('#engpop .opt').forEach((b) => b.setAttribute('aria-pressed',
+    String(b.dataset.eng === mode
+      || (mode === 'auto' && b.dataset.eng === (e.id === 'browser' ? 'browser' : 'local')))));
+  const ext = e.supports.exportExt.toUpperCase();
+  $('#bExport').textContent = S.kind === 'image' ? 'Download PNG' : 'Render ' + ext;
+}
+
+function openEnginePop(on) {
+  const pop = $('#engpop');
+  pop.hidden = !on;
+  $('#engine').setAttribute('aria-expanded', String(!!on));
+  if (on) {
+    const p = S.enginePref;
+    $('#engUrl').value = p.url || '';
+    $('#engKey').value = p.key || '';
+    $('#engcustom').hidden = p.mode !== 'custom';
   }
-  $('#dev').textContent = (S.meta.device || '')
-    + (S.meta.backend && S.meta.backend !== 'auto' ? ' ' + S.meta.backend
-       : S.meta.precision ? ' ' + S.meta.precision : '');
+}
+$('#engine').addEventListener('click', (e) => {
+  e.stopPropagation();
+  openEnginePop($('#engpop').hidden);
+});
+document.addEventListener('click', (e) => {
+  if (!$('#engpop').hidden && !$('#engpop').contains(e.target)) openEnginePop(false);
+});
+$$('#engpop .opt').forEach((b) => b.addEventListener('click', async () => {
+  const eng = b.dataset.eng;
+  if (eng === 'custom') { $('#engcustom').hidden = false; $('#engUrl').focus(); return; }
+  await switchEngine({ mode: eng, url: '', key: '' });
+}));
+$('#engGo').addEventListener('click', async () => {
+  await switchEngine({ mode: 'custom', url: $('#engUrl').value.trim(),
+                       key: $('#engKey').value.trim() });
+});
+
+/* Changing engine throws the clip away: the frames live inside whichever engine
+ * decoded them, and re-uploading silently would be a surprise on a metered
+ * connection. Say so rather than pretending the switch is free. */
+async function switchEngine(pref) {
+  const stat = $('#engstat');
+  stat.textContent = 'checking…'; stat.classList.remove('err');
+  try {
+    const r = await chooseEngine(pref);
+    if (r.warn) { stat.classList.add('err'); stat.textContent = r.warn; }
+    else stat.textContent = '';
+    savePref(pref);
+    S.enginePref = pref;
+    const had = S.kind !== 'none';
+    S.engine = r.engine;
+    S.meta = await r.engine.meta();
+    await afterEngine();
+    if (had) {
+      resetClip();
+      toast('switched to ' + r.engine.label + ' — drop the file again');
+    }
+    openEnginePop(false);
+  } catch (err) {
+    stat.classList.add('err'); stat.textContent = why(err);
+  }
+}
+
+function resetClip() {
+  S.kind = 'none'; S.job = null; S.bitmap = null; S.tracked = false;
+  S.subjects = []; S.nextId = 1; S.scope = 'whole'; S.promptFrame = 0;
+  S.previewMasks = null; S.curPath = null;
+  dropCache();
+  $('#upstat').hidden = true; $('#tinfo').hidden = true; $('#rinfo').hidden = true;
+  $('#dl').hidden = true; $('#outvid').hidden = true; $('#pvinfo').hidden = true;
+  $('#pwrap').hidden = true; $('#vwrap').hidden = true;
+  showSteps('none');
+}
+
+/* Metadata that depends on which engine is live: palettes, kernels, the noise
+ * tile, the tracker resolutions, and whether the models are actually there. */
+async function afterEngine() {
+  paintEngine();
   buildTrackSizes();
   const sel = $('#sAlgo');
+  sel.textContent = '';
   (S.meta.kernels.length ? S.meta.kernels
     : Object.entries(Dither.KERNELS).map(([id, v]) => ({ id, name: v.name })))
     .forEach((k) => {
@@ -1197,16 +1357,70 @@ async function exportMP4() {
   sel.value = S.P.algo;
   renderPalettes();
   try {
-    BLUE = Float32Array.from((await api('/api/bluenoise?n=64&seed=7')).tile);
+    BLUE = await E().blueNoise(64, S.P.seed);
   } catch (e) {
-    BLUE = new Float32Array(4096).map((_, i) => Dither.hash01(i >> 6, i & 63, 5, 7));
+    BLUE = new Float32Array(4096).map((_, i) => Dither.hash01(i >> 6, i & 63, 5, S.P.seed));
   }
   Dither.setBlueNoise(BLUE);
+  DOTS.key = null;
   setMode(S.P.mode);
   buildTargets();
+  await checkModels();
+}
+
+/* The ONNX weights are ~130 MB and deliberately not in the repo. Say that
+ * plainly where it matters — the Subjects step — rather than failing on Track. */
+async function checkModels() {
+  const box = $('#nomodels');
+  S.modelsMissing = null;
+  if (E().id !== 'browser') { box.hidden = true; $('#bTrack').disabled = false; return; }
+  try {
+    await E().init();
+    box.hidden = true; $('#bTrack').disabled = false;
+  } catch (err) {
+    S.modelsMissing = why(err);
+    box.hidden = false;
+    box.textContent = 'Subject tracking needs the EdgeTAM model files, and they '
+      + 'are not here. ' + S.modelsMissing + '  Stills and whole-frame clips work '
+      + 'without them.';
+    $('#bTrack').disabled = true;
+    $('#bPrev').disabled = true;
+  }
+}
+
+/* ------------------------------------------------------------------ boot */
+(async function boot() {
+  S.enginePref = loadPref();
+  let picked;
+  try {
+    picked = await chooseEngine(S.enginePref);
+  } catch (e) {
+    picked = { engine: new BrowserEngine(), pref: S.enginePref, tried: [] };
+  }
+  S.engine = picked.engine;
+  S.engineTried = picked.tried;
+  if (picked.warn) toast(picked.warn, true);
+  try {
+    S.meta = await S.engine.meta();
+  } catch (e) {
+    // last resort: the dither engine ships its own palette/mode tables, so the
+    // still and whole-frame flows survive an engine that cannot introspect
+    S.meta = { palettes: Dither.PALETTES, modes: Dither.MODES, stable: Dither.STABLE,
+               kernels: [], subject_colors: ['#b0413e'], device: '?',
+               track_sizes: [{ size: 768, id: 'balanced', label: 'balanced', fps: 0 }],
+               default_track_size: 768 };
+  }
+  await afterEngine();
   showSteps('none');
   window.DV = S;
   window.DV_maskURL = subjectMaskDataURL;
   window.DV_draw = draw;
+  window.DV_engine = () => ({ id: S.engine.id, label: S.engine.label,
+                              baseUrl: S.engine.baseUrl || '',
+                              supports: S.engine.supports,
+                              modelsMissing: S.modelsMissing,
+                              tried: S.engineTried });
+  window.DV_switchEngine = switchEngine;
+  window.DV_composeAt = composeAt;
   window.DV_ready = true;
 })();

@@ -165,6 +165,11 @@ export class WebTracker {
     const opt = (outs) => ({
       executionProviders: eps,
       graphOptimizationLevel: 'all',
+      // ORT routes its own WARNING lines to console.error, and graph
+      // optimisation emits dozens of them ("can't constant fold Sqrt") that
+      // are expected on the WebGPU EP. 3 = errors only, so a page that logs a
+      // console error is reporting a real one.
+      logSeverityLevel: 3,
       ...(outs ? { preferredOutputLocation: outs } : {}),
     });
     const mk = async (file, outs) => {
@@ -180,13 +185,18 @@ export class WebTracker {
     const mat = await mk(`memattn${sfx}.onnx`, { out: gpu });
     const hds = await mk(`heads${sfx}.onnx`);
     const hpr = await mk(`heads_prompt${sfx}.onnx`);
+    // A lasso/polygon prompt takes a different route through EdgeTAM entirely
+    // (`use_mask_input_as_output_without_sam`), so it is its own graph. Older
+    // model sets do not have it; the caller checks `has_mask_prompt` first.
+    const hmk = this.man.has_mask_prompt ? await mk(`heads_mask${sfx}.onnx`) : null;
     // the memory encoder always computes in fp32; only its pix_feat input dtype
     // follows the encoder, so a chained GPU buffer needs no conversion
     const mec = await mk(this.chain && this.fp16 ? 'memenc.f16in.onnx'
       : 'memenc.onnx');
     this.enc = enc.s; this.mat = mat.s; this.hds = hds.s;
-    this.hpr = hpr.s; this.mec = mec.s;
-    this.bytes = enc.bytes + mat.bytes + hds.bytes + hpr.bytes + mec.bytes;
+    this.hpr = hpr.s; this.mec = mec.s; this.hmk = hmk ? hmk.s : null;
+    this.bytes = enc.bytes + mat.bytes + hds.bytes + hpr.bytes + mec.bytes
+      + (hmk ? hmk.bytes : 0);
     this.loadMs = performance.now() - t0;
     return this;
   }
@@ -208,8 +218,16 @@ export class WebTracker {
     this.t = 0;
   }
 
-  /** One frame. `points` (only on a conditioning frame) is {coords, labels}. */
-  async step(rgba, points, timing) {
+  /** One frame.
+   *
+   * `prompt` is set only on a conditioning frame, and is either
+   *   {coords, labels}   a click / box prompt   -> heads_prompt
+   *   {mask}             a drawn shape at S*S   -> heads_mask
+   * and null on every tracking frame.
+   */
+  async step(rgba, prompt, timing) {
+    const points = prompt && prompt.coords ? prompt : null;
+    const shape = prompt && prompt.mask ? prompt : null;
     const M = this.man, G = M.grid, D = M.mem_dim, t = this.t;
     const mark = (k, t0) => { if (timing) timing[k] = (timing[k] || 0) + performance.now() - t0; };
 
@@ -223,7 +241,19 @@ export class WebTracker {
     image.dispose?.();
 
     let feats, res, k;
-    if (points) {
+    if (shape) {
+      // No f0/f1 and no no_mem_embed here: `_use_mask_as_output` branches
+      // before the memory path and discards the high-res upscaling entirely,
+      // so this graph takes the encoder's f2 and the mask, and nothing else.
+      // All four token slots carry the same answer, so k = 0.
+      t0 = performance.now();
+      res = await this.hmk.run({
+        pix_feat: e.f2,
+        mask_full: this.tensor(this.dtype, shape.mask, [1, 1, M.image_size, M.image_size]),
+      });
+      mark('hds', t0);
+      k = 0;
+    } else if (points) {
       t0 = performance.now();
       res = await this.hpr.run({
         pix_feat: e.f2, f0: e.f0, f1: e.f1,
@@ -273,7 +303,7 @@ export class WebTracker {
     mark('mec', t0);
 
     this.bank.add(t, Float32Array.from(me.lat.data), Float32Array.from(me.lpos.data),
-      ptr, !!points);
+      ptr, !!prompt);
     for (const o of [e.f0, e.f1, e.f2, feats, res.masks, res.ious, res.obj_ptrs,
       res.object_score_logits, me.lat, me.lpos]) o?.dispose?.();
     this.t++;

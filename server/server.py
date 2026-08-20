@@ -17,8 +17,9 @@ import time
 import uuid
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
@@ -36,6 +37,19 @@ CFG = "configs/edgetam.yaml"
 DEVICE = os.environ.get("DV_DEVICE", "mps")
 COREML_DIR = os.path.join(ROOT, "env", "coreml")
 MAX_OBJECTS = 6
+API_VERSION = 1
+
+# Optional shared secret. Unset (the normal local case) = wide open on
+# 127.0.0.1. Set it and every /api/* call must carry `Authorization: Bearer
+# <key>`; that is the whole of what a rented-GPU deployment needs from this
+# file. There is no billing, no accounts and no rate limiting here on purpose
+# -- put those in front of it if you sell access.
+API_KEY = os.environ.get("DV_API_KEY", "").strip()
+# A page served from somewhere else (GitHub Pages, a file:// build) has to be
+# able to reach this API, so CORS is open by default. Narrow it with
+# DV_CORS_ORIGINS="https://example.com,https://other.example".
+CORS_ORIGINS = [o.strip() for o in
+                os.environ.get("DV_CORS_ORIGINS", "*").split(",") if o.strip()]
 
 # Tracking backends, fastest first. `DV_BACKEND` picks one; the default walks
 # down the list until one builds, so a machine without the CoreML export (or
@@ -73,7 +87,24 @@ if DEVICE != "mps" and BACKEND in ("auto", "coreml"):
 
 os.makedirs(JOBS, exist_ok=True)
 
-app = FastAPI(title="Dither Video")
+app = FastAPI(title="Dither Studio")
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS,
+                   allow_credentials=False, allow_methods=["*"],
+                   allow_headers=["*"], expose_headers=["Content-Length"])
+
+
+@app.middleware("http")
+async def _require_key(request: Request, call_next):
+    """Gate /api/* behind DV_API_KEY when one is set. The page itself, the
+    static assets and the CORS preflight stay open -- a browser cannot put a
+    header on the request that loads the HTML."""
+    if API_KEY and request.url.path.startswith("/api/") \
+            and request.method != "OPTIONS":
+        got = request.headers.get("authorization", "")
+        if got[:7].lower() != "bearer " or got[7:].strip() != API_KEY:
+            return JSONResponse({"detail": "bad or missing bearer token"},
+                                status_code=401)
+    return await call_next(request)
 
 _state_lock = threading.Lock()      # guards the in-memory job table
 _gpu_lock = threading.Lock()        # only one EdgeTAM run at a time
@@ -113,6 +144,7 @@ def new_status(n_frames):
         "precision": _precision(_backend or BACKEND),
         "image_size": DEFAULT_TRACK_SIZE,
         "objects": [],
+        "prompt_frames": {},
         "render": {"state": "idle", "done_frames": 0, "n_frames": n_frames,
                    "elapsed_s": 0.0, "fps": 0.0, "error": None},
     }
@@ -258,10 +290,18 @@ def _decode_mask(data_url, w, h):
     return a > 127
 
 
-def _apply_prompts(predictor, state, frame_idx, objects, w, h):
-    """Feed one frame's prompts to the predictor. Returns its last output."""
+def _apply_prompts(predictor, state, pairs, w, h):
+    """Feed prompts to the predictor. `pairs` is [(object, frame_idx)].
+
+    SAM2/EdgeTAM keeps one conditioning frame per *object*, not per state, so
+    subjects prompted on different frames go into a single inference state and
+    one propagate pass each way. On frames before an object's own conditioning
+    frame the consolidation fills that object with NO_OBJ_SCORE, which comes
+    out as an empty mask -- which is the correct answer for a subject that has
+    not entered the shot yet.
+    """
     out = None
-    for o in objects:
+    for o, frame_idx in pairs:
         if o.mask:
             out = predictor.add_new_mask(
                 state, frame_idx=frame_idx, obj_id=int(o.id),
@@ -288,6 +328,24 @@ def _soft_png(logits):
 def index():
     with open(os.path.join(WEB, "index.html")) as f:
         return HTMLResponse(f.read())
+
+
+@app.get("/api/meta")
+def api_meta():
+    """The cheapest possible "is there a Dither Studio server here?" answer.
+
+    The page GETs this with a short timeout on load. Present and `ok` means the
+    remote engine is available (and, on this Mac, faster than the browser one);
+    a timeout, a 404 or a CORS failure means fall back to the browser engine.
+    Deliberately tiny -- it must not touch torch, the checkpoint or the disk.
+    """
+    return {"ok": True, "name": "dither-studio", "api": API_VERSION,
+            "device": DEVICE, "backend": _resolved_backend(),
+            "auth": "bearer" if API_KEY else "none",
+            "max_objects": MAX_OBJECTS,
+            "track_sizes": [t["size"] for t in TRACK_SIZES],
+            "default_track_size": DEFAULT_TRACK_SIZE,
+            "per_object_prompt_frames": True}
 
 
 @app.get("/api/bluenoise")
@@ -389,12 +447,22 @@ class TrackObject(BaseModel):
     # frame's point inputs and `add_new_points_or_box` drops its mask input --
     # so when this is present it is what the tracker sees.
     mask: str | None = None
+    # The frame this subject was prompted on. A tennis ball that flies in at
+    # frame 80 does not exist on frame 0, so each subject carries its own.
+    # None = fall back to the request-level frame_idx (the old single-frame
+    # behaviour, kept so an older client still works).
+    frame_idx: int | None = None
 
 
 class TrackReq(BaseModel):
-    frame_idx: int = 0
+    frame_idx: int = 0                      # default for objects without one
     objects: list[TrackObject]
     image_size: int = DEFAULT_TRACK_SIZE    # tracker input square, not the clip
+
+    def frames(self):
+        """[(object, its prompt frame)] in request order."""
+        return [(o, self.frame_idx if o.frame_idx is None else o.frame_idx)
+                for o in self.objects]
 
 
 @app.post("/api/jobs/{jid}/track")
@@ -408,8 +476,10 @@ def track(jid: str, req: TrackReq):
     for o in req.objects:
         if not o.points and not o.box and not o.mask:
             raise HTTPException(400, "object %s has no prompt" % o.id)
-    if not (0 <= req.frame_idx < meta["n_frames"]):
-        raise HTTPException(400, "frame_idx out of range")
+    for o, fi in req.frames():
+        if not (0 <= fi < meta["n_frames"]):
+            raise HTTPException(400, "object %s: frame_idx %d out of range"
+                                % (o.id, fi))
     if req.image_size not in [t["size"] for t in TRACK_SIZES]:
         raise HTTPException(400, "image_size must be one of %s"
                             % [t["size"] for t in TRACK_SIZES])
@@ -420,19 +490,21 @@ def track(jid: str, req: TrackReq):
             raise HTTPException(409, "already tracking")
         st.update(state="loading", done_frames=0, elapsed_s=0.0, fps=0.0, error=None,
                   n_frames=meta["n_frames"],
-                  objects=[str(o.id) for o in req.objects])
+                  objects=[str(o.id) for o in req.objects],
+                  prompt_frames={str(o.id): fi for o, fi in req.frames()})
         _jobs[jid] = st
 
     # the rasterised mask is big and reproducible from the paths the client
     # keeps, so record that it was used rather than storing it in meta.json
-    prompts = [{**o.model_dump(exclude={"mask"}), "mask": bool(o.mask)}
-               for o in req.objects]
+    prompts = [{**o.model_dump(exclude={"mask"}), "mask": bool(o.mask),
+                "frame_idx": fi} for o, fi in req.frames()]
     write_meta(jid, {**meta, "prompts": {"frame_idx": req.frame_idx,
                                         "image_size": req.image_size,
                                         "objects": prompts}})
     threading.Thread(target=_track_worker, args=(jid, d, req), daemon=True).start()
     return {"job": jid, "state": "loading", "image_size": req.image_size,
-            "objects": [str(o.id) for o in req.objects]}
+            "objects": [str(o.id) for o in req.objects],
+            "prompt_frames": {str(o.id): fi for o, fi in req.frames()}}
 
 
 def _set(jid, **kw):
@@ -464,9 +536,10 @@ def _track_worker(jid, d, req):
                 _set(jid, state="tracking", n_frames=n_frames)
 
                 meta = read_meta(jid)
-                _apply_prompts(predictor, state, req.frame_idx, req.objects,
-                               meta["w"], meta["h"])
+                pairs = req.frames()
+                _apply_prompts(predictor, state, pairs, meta["w"], meta["h"])
                 _sync()
+                start = min(fi for _, fi in pairs)
 
                 seen = set()
 
@@ -484,12 +557,14 @@ def _track_worker(jid, d, req):
                         _set(jid, done_frames=len(seen), elapsed_s=round(el, 2),
                              fps=round(len(seen) / el, 2) if el > 0 else 0.0)
 
-                # a click on a middle frame must fill the whole clip, so run both ways
-                if req.frame_idx > 0:
+                # A click on a middle frame must fill the whole clip, so run
+                # both ways -- from the EARLIEST prompt frame, since later
+                # subjects are simply absent (empty masks) until theirs.
+                if start > 0:
                     drain(predictor.propagate_in_video(
-                        state, start_frame_idx=req.frame_idx, reverse=True))
+                        state, start_frame_idx=start, reverse=True))
                 drain(predictor.propagate_in_video(
-                    state, start_frame_idx=req.frame_idx, reverse=False))
+                    state, start_frame_idx=start, reverse=False))
 
                 del state
             if DEVICE == "mps":
@@ -530,6 +605,11 @@ def preview(jid: str, req: TrackReq):
         raise HTTPException(400, "frame_idx out of range")
     if req.image_size not in [t["size"] for t in TRACK_SIZES]:
         raise HTTPException(400, "bad image_size")
+    # One frame, so only the subjects whose own prompt frame is this one.
+    pairs = [(o, fi) for o, fi in req.frames() if fi == req.frame_idx]
+    if not pairs:
+        raise HTTPException(400, "no subject is prompted on frame %d"
+                            % req.frame_idx)
 
     src = os.path.join(d, "frames", "%04d.jpg" % req.frame_idx)
     one = os.path.join(d, "preview", "%04d" % req.frame_idx)
@@ -547,7 +627,8 @@ def preview(jid: str, req: TrackReq):
                 else torch.autocast(DEVICE, dtype=torch.float16))
         with torch.inference_mode(), cast:
             state = predictor.init_state(one, offload_video_to_cpu=True)
-            out = _apply_prompts(predictor, state, 0, req.objects,
+            out = _apply_prompts(predictor, state,
+                                 [(o, 0) for o, _ in pairs],
                                  meta["w"], meta["h"])
             _, obj_ids, masks = out
             arr = masks.float().cpu().numpy()

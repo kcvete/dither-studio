@@ -130,3 +130,36 @@ body.dragging #drop b{opacity:1}
   background:#0a1310cc;border-radius:99px;padding:3px 8px;pointer-events:none}
 #wipe em{right:calc(100% - var(--x) + 12px)}
 #wipe s{left:calc(var(--x) + 12px)}
+
+/* ------------------------------------------------------- the engine chip
+ * Which of the two engines is live is the one piece of state that changes what
+ * every later step costs, so it sits in the header and is always visible. */
+.hd{gap:6px}
+.hd b{flex:0 0 auto}
+.tag.eng{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:5px;
+  font-size:9px;letter-spacing:.1em;text-transform:uppercase;opacity:.72;
+  border:1px solid var(--line);border-radius:99px;padding:3px 8px;margin-left:auto;
+  max-width:62%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag.eng:hover{opacity:1;border-color:#ffffff55}
+.tag.eng .dot{width:5px;height:5px;border-radius:99px;background:var(--warn);flex:0 0 auto}
+.tag.eng[data-engine="remote"] .dot{background:#6fd39a}
+.pop{position:relative;margin:-8px 0 14px;padding:10px;border:1px solid var(--line);
+  border-radius:10px;background:#0a1310f2}
+.pop .poph{font-size:9px;letter-spacing:.12em;text-transform:uppercase;opacity:.45;
+  margin-bottom:8px}
+.pop .opt{all:unset;display:block;cursor:pointer;width:100%;box-sizing:border-box;
+  padding:7px 9px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
+.pop .opt b{display:block;font-size:11px;font-weight:600}
+.pop .opt em{display:block;font-style:normal;font-size:9.5px;opacity:.45;margin-top:2px}
+.pop .opt:hover{border-color:#ffffff55}
+.pop .opt[aria-pressed="true"]{background:var(--ink);color:#0e1512;border-color:transparent}
+.pop .opt[aria-pressed="true"] em{opacity:.6}
+.pop input{width:100%;box-sizing:border-box;margin-bottom:6px;padding:6px 8px;
+  background:#0a1310;color:var(--ink);border:1px solid var(--line);border-radius:7px;
+  font:inherit;font-size:11px}
+#engstat:empty{display:none}
+
+/* a subject whose marks live on another frame is dimmed, not hidden */
+.chip.sub.away{opacity:.45;border-style:dashed}
+.chip.sub.away[aria-pressed="true"]{opacity:.8}
+#offframe .lnk{margin-right:2px}

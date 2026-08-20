@@ -8,6 +8,7 @@ Writes `<out>/`:
     encoder.onnx      image                       -> f0, f1, f2
     memattn.onnx      curr, memory, pos, mask     -> memory-conditioned features
     heads.onnx        pix_feat, f0, f1, prompts   -> 4 masks, ious, ptrs, score
+    heads_mask.onnx   pix_feat, 768^2 binary mask -> same four, mask-as-output
     memenc.onnx       pix_feat, low-res mask      -> 512 memory latents + pos
     consts.bin        the tensors the JS loop needs outside any graph
     manifest.json     shapes, offsets, and the fp32-vs-fp16 parity numbers
@@ -41,7 +42,8 @@ sys.path.insert(0, os.path.join(DV, 'env', 'EdgeTAM'))
 import numpy as np                      # noqa: E402
 import torch                            # noqa: E402
 
-from onnxexport.wrappers_onnx import MaskedMemAttn, HeadsGraph, MemEncPlus  # noqa: E402
+from onnxexport.wrappers_onnx import (MaskedMemAttn, HeadsGraph,   # noqa: E402
+                                      HeadsMaskPrompt, MemEncPlus)
 from coreml.wrappers import EncoderGraph                              # noqa: E402
 
 
@@ -169,6 +171,37 @@ def main():
     print('[onnx] heads_prompt.onnx: %.1f MB (dynamic point count)'
           % man['sizes_mb']['heads_prompt_fp32'], flush=True)
 
+    # A lasso/polygon prompt is a *mask* prompt, and EdgeTAM's
+    # `use_mask_input_as_output_without_sam` means the drawn mask is the
+    # answer -- the decoder runs only for the object pointer. Same output
+    # names/shapes as the other two heads graphs, so the caller's token
+    # selection is unchanged (all four slots hold the same thing; see
+    # `HeadsMaskPrompt`).
+    hm = HeadsMaskPrompt(m).eval()
+    mk = (torch.rand(1, 1, S, S) > 0.5).float()
+    p = os.path.join(a.out, 'heads_mask.onnx')
+    man['sizes_mb']['heads_mask_fp32'] = export(
+        hm, (pf, f0, f1, mk), p,
+        ['pix_feat', 'f0', 'f1', 'mask_full'], honames)
+    # `f0`/`f1` do not survive: nothing downstream of the transformer's output
+    # tokens needs them, and this graph keeps only the tokens. Record what the
+    # graph really takes so the page cannot guess wrong.
+    import onnxruntime as _ort
+    man['heads_mask_inputs'] = [i.name for i in _ort.InferenceSession(
+        p, providers=['CPUExecutionProvider']).get_inputs()]
+    print('[onnx] heads_mask.onnx inputs: %s'
+          % man['heads_mask_inputs'], flush=True)
+    # the antialias-free 4x downsample, against the torch op it replaces
+    with torch.no_grad():
+        ref = torch.nn.functional.interpolate(
+            mk * 20.0 - 10.0, size=(G * 4, G * 4), mode='bilinear',
+            align_corners=False, antialias=True)
+        got = hm._down4(mk * 20.0 - 10.0)
+    man['checks']['mask_down4_max_abs'] = float((ref - got).abs().max())
+    print('[onnx] mask 4x-downsample vs antialias max_abs=%.3e'
+          % man['checks']['mask_down4_max_abs'], flush=True)
+    man['has_mask_prompt'] = True
+
     # ------------------------------------------------------- memory encoder
     me = MemEncPlus(m).eval()
     lr = torch.randn(1, 1, G * 4, G * 4)
@@ -200,7 +233,8 @@ def main():
     # the memory encoder stays fp32: its latents *are* the memory bank, and the
     # CoreML measurements put an fp16 error of 4x the signal into them.
     if a.fp16:
-        for name in ('encoder', 'memattn', 'heads', 'heads_prompt'):
+        for name in ('encoder', 'memattn', 'heads', 'heads_prompt',
+                     'heads_mask'):
             src = os.path.join(a.out, f'{name}.onnx')
             dst = os.path.join(a.out, f'{name}.fp16.onnx')
             try:

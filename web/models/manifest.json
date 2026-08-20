@@ -14,17 +14,25 @@
     "memattn_fp32": 18.438014,
     "heads_fp32": 20.613891,
     "heads_prompt_fp32": 20.142445,
+    "heads_mask_fp32": 17.116827,
     "memenc_fp32": 6.711575,
     "memenc_f16in": 6.729636,
     "encoder_fp16": 10.000625,
     "memattn_fp16": 9.256148,
     "heads_fp16": 10.396892,
-    "heads_prompt_fp16": 10.26742
+    "heads_prompt_fp16": 10.26742,
+    "heads_mask_fp16": 8.641834
   },
   "checks": {
     "memattn_rewrite_max_abs": 1.1473894119262695e-06,
-    "memattn_ref_std": 0.5777642726898193
+    "memattn_ref_std": 0.5777642726898193,
+    "mask_down4_max_abs": 7.152557373046875e-07
   },
+  "heads_mask_inputs": [
+    "pix_feat",
+    "mask_full"
+  ],
+  "has_mask_prompt": true,
   "consts": {
     "no_mem_embed": {
       "offset": 0,
