@@ -38,6 +38,11 @@ or Cloudflare Pages with no build step — see [`web/README.md`](web/README.md).
 Subject tracking needs ~83 MB of model weights that are **not** in git; the page
 says so plainly and still does stills and whole-frame clips without them.
 
+Verified on exactly that: `python3 -m http.server -d web`, no server anywhere,
+page up in 0.6 s, 149 frames tracked at 9.6 fps and exported to WebM in 5.3 s.
+
+![the whole tool on a plain static file server](docs/w-static-only.png)
+
 ### With the local accelerator
 
 On an Apple Silicon Mac, `./run.sh` builds everything and opens the page against
@@ -406,7 +411,7 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 |---|---|
 | engine parity | **110/110 byte-identical**, and 110/110 again through a mask |
 | `verify.mjs` | 5 flows, **0 console errors** |
-| `verify-web.mjs` | 8 flows, **56/56 assertions**, **0 console errors** |
+| `verify-web.mjs` | 8 flows, **57/57 assertions**, **0 console errors** |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
 | browser: clip decode | 150 frames in **4.9 s**, in the tab |
 | browser: frame-0 preview | **0.14 s** once the graphs are warm (1.6 s including the load) |

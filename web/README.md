@@ -111,6 +111,18 @@ loads fp16 by default.
 **55.3 MB** for the fp16 set, cached by the browser after the first load.
 `docs/track-web.md` explains why each one is shaped the way it is.
 
+### One 404 is expected
+
+On a host with no Dither Studio server, the page's engine probe requests
+`/api/meta`, gets a 404 and falls back to the browser engine — which is the
+whole design. Browsers log every failed request, so devtools shows one 404 line
+on load. It is not a bug and there is no way to suppress it: `fetch` cannot ask
+the browser not to report a failure.
+
+(Serving the page from `localhost` adds a second line — the probe also tries
+`127.0.0.1:8765`, the default server port, so `./run.sh` on another port is still
+found. A real deployment never sees that one.)
+
 ## The two engines
 
 The page picks one on load: `GET /api/meta` against its own origin, with a short

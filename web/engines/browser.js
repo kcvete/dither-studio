@@ -130,7 +130,8 @@ export class BrowserEngine {
   constructor(opts = {}) {
     this.id = 'browser';
     this.label = 'Browser';
-    this.sublabel = 'free · nothing leaves this tab';
+    // the chip is narrow; the full claim lives in its title and the popover
+    this.sublabel = 'free';
     this.dir = opts.dir || './models/';
     this.ortDir = opts.ortDir || './ort/';
     this.fp16 = opts.fp16 !== false;

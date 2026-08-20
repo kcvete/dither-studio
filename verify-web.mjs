@@ -267,6 +267,11 @@ async function runEngineChip() {
         'has_mask_prompt is false — re-run ./setup.sh');
   check('browser engine exports WebM',
         r.afterSwitch.supports.exportExt === 'webm');
+  check('the chip fits without truncating',
+        await page.evaluate(() => {
+          const el = document.querySelector('#engName');
+          return el.scrollWidth <= el.clientWidth + 1;
+        }), r.browserChip);
 
   // a URL that is not a Dither Studio server must fall back, loudly
   await page.click('#engine'); await sleep(200);
