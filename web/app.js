@@ -1738,6 +1738,9 @@ async function track() {
   bar.style.width = '0%';
   lab.textContent = 'loading model…';
   holdWake();
+  if (window.DV_sheet && window.matchMedia('(max-width: 767px)').matches) {
+    window.DV_sheet('collapsed');
+  }
   // masks stream in per frame on the server engines: play them as they land
   const streamed = E().id !== 'browser';
   if (streamed) { stop(); showStage('result'); }
@@ -5854,4 +5857,95 @@ async function checkModels() {
     return currentFormat();
   };
   window.DV_ready = true;
+})();
+
+/* ===================================================== the mobile shell ===
+ * Below 768 px: #panel is a bottom sheet with three detents, the five steps
+ * get a tab bar, the canvas keeps the rest. Pure additive controller — the
+ * tabs call the same openStep()/setView() the desktop headers call, the sheet
+ * repositions #panel with a transform, and at desktop widths every listener
+ * here is inert. No DOM id moves, no state renames. (docs/ux-spec.md §2.2) */
+(function mobileShell() {
+  const tabs = $('#mtabs'), grab = $('#grab'), panel = $('#panel');
+  if (!tabs || !grab || !panel) return;
+  const mq = window.matchMedia('(max-width: 767px)');
+
+  function setSheet(d) {
+    document.body.dataset.sheet = d;
+    panel.style.transform = '';
+    document.body.classList.remove('sheetdrag');
+  }
+  window.DV_sheet = setSheet;            // additive hook; track() peeks it
+
+  function paintTabs() {
+    const open = $$('#studiopanel .step').find(
+      (el) => el.getAttribute('data-open') === '1');
+    const cur = S.view === 'sequence' ? 'seq' : (open ? open.id.slice(2) : '1');
+    $$('#mtabs .tab').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.mtab === cur));
+      if (b.dataset.mtab !== 'seq') {
+        const st = $('#st' + b.dataset.mtab);
+        b.classList.toggle('off', !!(st && st.hidden));
+      }
+    });
+  }
+  $$('#mtabs .tab').forEach((b) => b.addEventListener('click', () => {
+    const t = b.dataset.mtab;
+    if (t === 'seq') setView('sequence');
+    else {
+      if (S.view === 'sequence') setView('studio');
+      openStep(+t);
+    }
+    setSheet('half');
+    paintTabs();
+  }));
+  // whatever opens a step — header tap, code, a verifier — the tabs follow
+  new MutationObserver(paintTabs).observe(panel, {
+    subtree: true, attributes: true, attributeFilter: ['data-open', 'hidden'] });
+
+  /* drag the grabber between detents; a plain tap toggles collapsed ⁄ half */
+  let drag = null;
+  const tabH = () => (tabs.getBoundingClientRect().height || 56);
+  grab.addEventListener('pointerdown', (e) => {
+    if (!mq.matches) return;
+    grab.setPointerCapture(e.pointerId);
+    const natTop = window.innerHeight - tabH() - panel.offsetHeight;
+    drag = { y0: e.clientY, ty0: panel.getBoundingClientRect().top - natTop,
+             moved: false };
+    document.body.classList.add('sheetdrag');
+    e.preventDefault();
+  });
+  grab.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y0;
+    if (Math.abs(dy) > 5) drag.moved = true;
+    const ty = clamp(drag.ty0 + dy, 0, panel.offsetHeight - 46);
+    panel.style.transform = `translateY(${ty}px)`;
+  });
+  const dragEnd = (e) => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    if (!d.moved) {
+      setSheet(document.body.dataset.sheet === 'collapsed' ? 'half' : 'collapsed');
+      return;
+    }
+    const ty = clamp(d.ty0 + (e.clientY - d.y0), 0, panel.offsetHeight - 46);
+    const visible = panel.offsetHeight - ty;
+    setSheet(visible < panel.offsetHeight * 0.3 ? 'collapsed'
+      : visible < panel.offsetHeight * 0.78 ? 'half' : 'full');
+  };
+  grab.addEventListener('pointerup', dragEnd);
+  grab.addEventListener('pointercancel', dragEnd);
+
+  /* touching the picture asks for the picture: the sheet gets out of the way */
+  $('#stage').addEventListener('pointerdown', (e) => {
+    if (!mq.matches) return;
+    if (e.target.closest('#transport') || e.target.closest('#strip2')
+        || e.target.closest('#toast') || e.target.closest('#pathbtns')) return;
+    if (document.body.dataset.sheet !== 'collapsed') setSheet('collapsed');
+  }, { capture: true, passive: true });
+
+  const boot = () => { if (mq.matches) { setSheet('half'); paintTabs(); } };
+  mq.addEventListener ? mq.addEventListener('change', boot) : 0;
+  boot();
 })();
