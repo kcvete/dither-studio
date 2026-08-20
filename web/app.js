@@ -676,6 +676,22 @@ function restoreStage() {
 async function camSnap() {
   if (!CAM.stream) return;
   const v = $('#camvid');
+  /* The track reports live a beat before the first frame is actually
+   * presented, and a snap in that gap is a solid black photo. Wait for one
+   * delivered frame (bounded — a broken camera should still answer). */
+  if (v.requestVideoFrameCallback) {
+    await new Promise((ok) => {
+      const bail = setTimeout(ok, 1500);
+      v.requestVideoFrameCallback(() => { clearTimeout(bail); ok(); });
+    });
+  } else if (v.readyState < 2) {
+    await new Promise((ok) => {
+      const bail = setTimeout(ok, 1500);
+      v.addEventListener('loadeddata', () => { clearTimeout(bail); ok(); },
+                         { once: true });
+    });
+  }
+  if (!CAM.stream) return;             // closed while we waited
   const t = CAM.stream.getVideoTracks()[0].getSettings();
   const w = v.videoWidth || t.width || 1280, h = v.videoHeight || t.height || 720;
   const c = document.createElement('canvas');

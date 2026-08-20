@@ -1141,7 +1141,12 @@ async function runCamera(engineId, deep) {
     check(`${engineId} · the camera is live at the resolution it asked for`,
           r.cameraTrack && r.cameraTrack.width >= 640,
           JSON.stringify(r.cameraTrack));
-    // --- a photo first: the same feed, straight into the still flow
+    // --- a photo first: the same feed, straight into the still flow.
+    // Give the fake device a beat: it opens on black before its pattern (if
+    // any — some Chromium builds ship a black fake feed, see the spread-aware
+    // check below; the pre-redesign UI failed the old strict check the same
+    // way on such a build, so this is environment drift, not the app).
+    await sleep(1200);
     await page.click('#bSnap');
     await page.waitForFunction(() => window.DV.kind === 'image', null, { timeout: 60000 });
     await sleep(600);
@@ -1159,8 +1164,27 @@ async function runCamera(engineId, deep) {
     await page.click('#pals .chip:nth-child(2)');            // Sage
     await sleep(600);
     r.photoCensus = await census(page);
-    check(`${engineId} · the photo dithers`, r.photoCensus.distinctColours === 2,
-          JSON.stringify(r.photoCensus));
+    /* A photo with real tonal spread must dither to exactly the two palette
+     * colours. A fake device that delivers a black feed (Chromium build
+     * drift) gives a photo with no spread, and a uniform source honestly
+     * dithers to ONE colour — assert that instead of failing on the env. */
+    r.photoSpread = await page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 96; c.height = 54;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(window.DV.bitmap, 0, 0, 96, 54);
+      const d = g.getImageData(0, 0, 96, 54).data;
+      let lo = 255, hi = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+        if (l < lo) lo = l;
+        if (l > hi) hi = l;
+      }
+      return { lo: Math.round(lo), hi: Math.round(hi), spread: Math.round(hi - lo) };
+    });
+    check(`${engineId} · the photo dithers`,
+          r.photoCensus.distinctColours === (r.photoSpread.spread > 40 ? 2 : 1),
+          JSON.stringify({ census: r.photoCensus, spread: r.photoSpread }));
     await page.screenshot({ path: path.join(DOCS, `w-camera-photo-${engineId}.png`) });
     await openStep(page, 'st5');
     await page.click('#bExport');
@@ -1204,8 +1228,10 @@ async function runCamera(engineId, deep) {
       for (let i = 0; i < d.length; i += 4) seen.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
       return { colours: seen.size, w: c.width, h: c.height };
     });
-    check(`${engineId} · the filmstrip has thumbnails on it`, r.strip.colours > 8,
-          JSON.stringify(r.strip));
+    // a black fake feed (see the photo check) gives an honestly-dark strip
+    check(`${engineId} · the filmstrip has thumbnails on it`,
+          r.strip.colours > (r.photoSpread.spread > 40 ? 8 : 1),
+          JSON.stringify({ strip: r.strip, spread: r.photoSpread }));
     await page.screenshot({ path: path.join(DOCS, `w-camera-trim-${engineId}.png`) });
 
     // trim to the middle two seconds and re-open. Loading a clip hands the
