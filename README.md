@@ -1,35 +1,144 @@
 # Dither Studio
 
-A local, offline dithering tool for **stills, clips, and clips where you only want
-one thing dithered**. Point at a person in a video, the tracker follows them for the
-whole clip, and only they turn into dots — or turn the whole frame into a Game Boy
-screen. Nothing is uploaded anywhere; it all runs on this Mac.
+Turn a photograph into computational structure. One unit, one palette, one logic,
+repeated until the picture is made of it.
+
+That idea is having a moment. When Solvd rebranded around it, the reason the
+identity held together was not the look — it was that
+[Afternow built them a dither tool](https://www.linkedin.com/posts/filip-justic_illustrations-no-one-drew-solvd-inc-builds-activity-7495381583588339712-qOF2),
+so every new asset came out of the same machine instead of somebody's hand. A
+brand system needs that. So does anyone who wants more than one image.
+
+Dither Studio is that tool, in the open, and it goes one step further: it does
+**video**, and it can dither **one thing in the video**. Point at a person and
+EdgeTAM follows them for the whole clip — they turn into dots and the background
+stays where it is, or the other way round. Drop a still and it is a still
+ditherer with fourteen error-diffusion kernels and eighteen palettes.
 
 ![tracked subjects, per-subject palettes](docs/c-mixed.png)
 
+**It is free and it runs in your browser.** No account, no upload, no server —
+the tracker, the dither engine and the video encoder are all in the tab. There
+is also an optional local server that does the same work faster on an Apple
+Silicon Mac, and the seam for a hosted one; the page picks whichever is there.
+
 ---
 
-## Run it
+## Quickstart
 
-```bash
-cd ~/dither-video
+### The page, on its own
+
+```sh
+python3 -m http.server -d web 8080     # or any static host
+open http://127.0.0.1:8080/
+```
+
+That is the whole product. `web/` is self-contained and deploys to GitHub Pages
+or Cloudflare Pages with no build step — see [`web/README.md`](web/README.md).
+Subject tracking needs ~83 MB of model weights that are **not** in git; the page
+says so plainly and still does stills and whole-frame clips without them.
+
+### With the local accelerator
+
+On an Apple Silicon Mac, `./run.sh` builds everything and opens the page against
+a local server that tracks about **1.7x faster**:
+
+```sh
 ./run.sh
 ```
 
-`run.sh` is idempotent. It calls `setup.sh` (creates `env/venv`, clones
-`env/EdgeTAM`, fetches the checkpoint, compiles `env/libcdither.dylib`, exports the
-CoreML tracking graphs to `env/coreml/<size>/` — one minute and 183 MB the first
-time, a no-op every time after), starts `server.py` on `http://127.0.0.1:8765`,
-and opens the browser. If 8765 is taken it walks forward to the next free port and says which one.
-`DV_PORT=` overrides, `DV_NO_OPEN=1` skips the browser.
+`run.sh` is idempotent. It calls `setup.sh` — creates `env/venv`, clones
+`env/EdgeTAM`, fetches the checkpoint, compiles `env/libcdither.dylib`, exports
+the CoreML graphs *and* the ONNX graphs, vendors onnxruntime-web — then starts
+`server/server.py` on `http://127.0.0.1:8765` and opens the browser. First run is
+a few minutes and about 330 MB on disk; every run after is a no-op. If 8765 is
+taken it walks forward to the next free port and says which one. `DV_PORT=`
+overrides, `DV_NO_OPEN=1` skips the browser,
+`DV_SKIP_WEB_MODELS=1 ./setup.sh` skips the browser-engine models.
+
+The page served by that server is the same directory. There is no fork.
+
+## Three tiers, one codebase
+
+| | **Browser** | **Local server** | **Hosted** |
+|---|---|---|---|
+| what it is | `web/`, on any static host | `server/`, on your machine | `server/`, on a rented GPU |
+| price | free | free | yours to set |
+| tracking | 12.4 fps | 20.9 fps | ~150 fps on an A100 |
+| your frames | never leave the tab | never leave the machine | uploaded |
+| video out | WebM (VP9) | H.264 MP4 | H.264 MP4 |
+| status | shipped | shipped | the seam is here, the billing is not |
+
+The third column is a deployment, not a feature branch: the same `server.py`, on
+a CUDA box, with `DV_API_KEY` set. See *Hosting a paid backend* below.
+
+## Architecture
+
+```
+                    ┌──────────────────────── web/ ───────────────────────────┐
+                    │  index.html · app.js · style.css                        │
+   a file  ────────▶│                                                         │
+                    │  engines/index.js ── GET /api/meta, 1.5 s timeout       │
+                    │        │                                                │
+                    │        ├── server answered? ──▶ engines/remote.js ──────┼──▶ ┌─── server/ ────┐
+                    │        │                        {baseUrl, apiKey?}      │    │ server.py      │
+                    │        │                                                │    │  ├ ffmpeg      │
+                    │        └── nothing there?   ──▶ engines/browser.js      │    │  ├ EdgeTAM     │
+                    │                                  │                      │    │  │  └ coreml/  │
+                    │                                  ├ <video> ▶ canvas     │    │  ├ dither.py   │
+                    │                                  ├ track.js ▶ models/   │    │  │  └ cdither.c│
+                    │                                  │   (onnxruntime-web,  │    │  └ render.py   │
+                    │                                  │    WebGPU)           │    │     └ ffmpeg   │
+                    │                                  └ MediaRecorder ▶ WebM │    └────────────────┘
+                    │                                                         │
+                    │  dither.js ◀── the preview, and the browser export ──────┤
+                    └─────────────────────────────────────────────────────────┘
+                                          ▲                                          ▲
+                                          └───────── same algorithm, byte for byte ──┘
+                                                     (server/parity.py is the gate)
+```
+
+```
+web/            the deployable page. engines/, dither.js, track.js, models/
+server/         the optional accelerator. FastAPI + numpy + the C dither loop
+coreml/         EdgeTAM -> CoreML: traceable wrappers, exporter, live-swap accel
+onnxexport/     EdgeTAM -> ONNX: the five graphs the browser engine runs
+bench/          tracking benchmarks, stage profiler, the resolution A/B
+verify.mjs      headless end-to-end check, server engine
+verify-web.mjs  headless end-to-end check, browser engine + the engine seam
+env/            venv, EdgeTAM checkout, checkpoint, libcdither, CoreML  (ignored)
+jobs/<id>/      source, frames/, masks/<obj>/, out.mp4                  (ignored)
+docs/           verification screenshots, reports, the tracking test clip
+```
+
+## Which engine am I on?
+
+A chip in the header always says, and always switches:
+
+![the engine chip and its switcher](docs/w-engine-popover.png)
+
+On load the page does one thing: `GET /api/meta` against its own origin with a
+1.5 second timeout. An answer means a Dither Studio server is there, and it wins,
+because on the machine that has one it is faster. Anything else — 404, timeout,
+CORS, a page sitting on GitHub Pages — and everything runs in the tab. A choice
+you make by hand is remembered and beats the probe.
+
+**Browser · free** · **Local server** · **Custom URL** (with an optional API key,
+for a backend you are paying for). Switching engines drops the loaded clip,
+because the frames live inside whichever engine decoded them; the page says so
+rather than silently re-uploading.
 
 ## What you can do
 
-Drop **an image** or **a clip** (or paste one). The steps adapt to what you gave it.
+Drop **an image** or **a clip** (or paste one). The steps adapt to what you gave
+it, and to which engine is live.
 
 ### 1 · Source
-Images stay in the tab — they are never uploaded. Clips are decoded server-side to
-720p / 30 fps JPEG frames, capped by the *max length* slider (10 s default, 300 frames).
+Images stay in the tab on either engine — they are never uploaded. Clips are
+decoded to 720p / 30 fps, capped by the *max length* slider (10 s, 300 frames):
+in the browser engine by a `<video>` seek loop into JPEG blobs, on the server by
+ffmpeg into `jobs/<id>/frames/`. Both produce the same frame grid, so frame 42
+is the same picture either way.
 
 ### 2 · Subjects — clips only
 Two choices:
@@ -37,32 +146,45 @@ Two choices:
 * **whole clip** — every pixel of every frame gets dithered.
 * **track subjects** — scrub to any frame and prompt what you care about:
   click = keep this, shift-click = not this, drag = a box. `+ add subject` for
-  another object (up to 6), each with its own palette. Press **Track** and EdgeTAM
-  follows them forward *and* backward through the clip, so a click on a middle
-  frame still fills the whole thing.
+  another object (up to 6), each with its own palette. Press **Track** and
+  EdgeTAM follows them forward *and* backward through the clip.
+
+  **Each subject remembers its own frame.** A ball that flies into shot at frame
+  80 does not exist on frame 0, so it cannot be prompted there. Scrub to where it
+  appears, add a subject, and click it: the chip reads `#2 · 1pt+box @ 80`, and
+  that is the frame that subject is conditioned on. Marks are drawn only on their
+  own frame; a subject that lives elsewhere is dimmed, with a
+  *"#1 prompted @ 0 — jump"* line that takes you back to it. Before its subject
+  arrives, a mask is legitimately **empty** — no dots, nothing to erase, no
+  lingering ghost. That is the right answer about a ball that is not in the shot.
+
+  ![two subjects, two prompt frames](docs/w-entry-prompts-remote.png)
 
   **Prompt tool** — *point / box*, *lasso* or *polygon*. Clicks and a box are the
   fast path and the one the tracker likes best: it re-derives the outline itself
   on every frame. When that is not enough, draw the subject instead — freehand
   with the lasso, corner by corner with the polygon, shift to subtract a shape.
-  The drawing is rasterised to a binary mask at your clip's own resolution and
-  sent as a **mask prompt**.
+  The drawing is rasterised to a binary mask and sent as a **mask prompt**, on
+  both engines: the browser one has a fifth ONNX graph (`heads_mask`) for exactly
+  this, because EdgeTAM's mask path skips the memory attention entirely rather
+  than sharing the click path.
 
   A subject uses one or the other, never both: EdgeTAM's `add_new_mask` drops the
   frame's point inputs and `add_new_points_or_box` drops its mask, so a subject
   with a drawn shape ignores its clicks. The chip says which it has.
 
   **Preview this frame** runs only the first-frame prediction — no propagation —
-  and paints the mask the tracker would produce over your prompt, in about
-  **0.15 s**. It answers "is this click enough?" before you spend the whole clip
-  on it; the lasso is what you reach for when the answer is no.
+  and paints the mask the tracker would produce over your prompt. **0.13 s** on
+  the server, **0.14 s** in the browser once the graphs are warm. It answers "is
+  this click enough?" before you spend the whole clip on it. It covers only the
+  subjects prompted on the frame you are looking at.
 
-  **Tracking quality** — *fast · prototyping (512) / balanced · default (768) /
-  best · production (1024)*, with the measured fps on each chip — is the square
-  EdgeTAM resizes every frame to before it looks at it. Your clip keeps its own
-  resolution either way; only the tracker's internal view changes, and with it
-  how fine an outline it can draw. See *Tracking performance* below for what
-  that actually costs.
+  **Tracking quality** — *fast (512) / balanced (768) / best (1024)*, with the
+  measured fps on each chip — is the square EdgeTAM resizes every frame to. Your
+  clip keeps its own resolution either way. The browser engine offers **768
+  only**, because that is the one resolution it ships models for; exporting all
+  three would triple an 83 MB download for a knob that mostly matters when you
+  are waiting on a server.
 
 ### 3 · Look
 Seven algorithms, each labelled with how it behaves on video:
@@ -81,137 +203,315 @@ The error-diffusion kernels are Floyd–Steinberg, False Floyd–Steinberg,
 Jarvis–Judice–Ninke, Stucki, Atkinson, Burkes, Sierra 3, Sierra 2, Sierra 2-4A,
 Fan 93, Shiau–Fan, Shiau–Fan 2, Stevenson–Arce and Simple 2D.
 
-The flicker labels are the honest part: threshold modes reuse one fixed field every
-frame, so dots stay put and only switch on and off as tone changes. Error diffusion
-recomputes a chaotic error field per frame, so it boils. Both are offered; the chip
-carries a `≈` marker on video so you know which you picked.
+The flicker labels are the honest part: threshold modes reuse one fixed field
+every frame, so dots stay put and only switch on and off as tone changes. Error
+diffusion recomputes a chaotic error field per frame, so it boils. Both are
+offered; the chip carries a `≈` marker on video so you know which you picked.
 
 Also here: dither strength, pixel size (chunky-pixel scale, box-downsample then
-nearest-upscale), brightness / contrast / gamma / invert, and **reseed** for a new
-noise field. For tracked clips, *background* chooses between a flat colour and the
-dithered scene.
+nearest-upscale), brightness / contrast / gamma / invert, and **reseed** for a
+new noise field. For tracked clips, *background* chooses between a flat colour
+and the dithered scene.
 
 ### 4 · Palette
-18 presets — Black & White, Sage, Forest, Ember, Mist, Game Boy DMG, four monochromes,
-CMYK, RGBY, Black White Red, Purple & Green, Blue & Yellow, Commodore 64, 4 Greys,
-8 Greys — plus **from image** (median-cut extraction from the current frame) and a
-free colour editor. With tracked subjects you get one palette per subject *plus* one
-for the background, switchable at the top of the step.
+18 presets — Black & White, Sage, Forest, Ember, Mist, Game Boy DMG, four
+monochromes, CMYK, RGBY, Black White Red, Purple & Green, Blue & Yellow,
+Commodore 64, 4 Greys, 8 Greys — plus **from image** (median-cut extraction from
+the current frame) and a free colour editor. With tracked subjects you get one
+palette per subject *plus* one for the background.
 
 ### 5 · Export
-Images render at full source resolution in the browser and download as PNG. Clips go
-to the server, which renders the identical parameters with numpy + the C dither loop
-and encodes with ffmpeg (libx264, crf 18), then offers a download and an inline player.
+Stills render at full source resolution in the tab and download as PNG, on both
+engines. Clips depend on the engine:
 
-**Compare** (in the transport bar) drags a before/after divider across the frame, and
-it keeps working while the clip plays.
+* **browser** — every frame is dithered into a canvas and fed to `MediaRecorder`
+  through a capture stream, giving **WebM (VP9)**. Writing H.264 in the tab would
+  mean vendoring ~32 MB of ffmpeg.wasm to keep the no-CDN rule — a bigger
+  download than the tracker itself. The recorder timestamps each frame when the
+  page hands it over, so the loop is paced to the clip's own frame interval; if a
+  frame takes longer to dither than that, the file plays slow and the export line
+  tells you so.
+* **server** — numpy plus the C dither loop, encoded by ffmpeg to **H.264 MP4**
+  at crf 18.
 
-## Architecture
+**Compare** (in the transport bar) drags a before/after divider across the frame,
+and it keeps working while the clip plays.
 
-```
-dither.py            the engine: palettes, threshold matrices, 14 kernels,
-                     Riemersma, median-cut, tone LUT, pixel scale
-static/dither.js     the same engine in JS — used for the live preview AND for
-                     the client-side PNG export
-cdither.c            the serial inner loops (error diffusion, Riemersma) in C;
-                     built to env/libcdither.dylib, loaded with ctypes
-parity.py + .mjs     the gate that keeps the two engines byte-identical
-render.py            video renderer: frames + optional masks -> mp4 (also a CLI)
-coreml/              EdgeTAM -> CoreML: traceable wrappers, the exporter, and the
-                     accelerator that swaps three modules on a live predictor
-bench/               tracking benchmark harness, stage profiler, CoreML
-                     microbenchmark, the resolution A/B, results.md
-server.py            FastAPI on 127.0.0.1:8765
-static/              index.html + app.js + style.css — vanilla, no build, no CDN
-env/                 venv + EdgeTAM checkout + checkpoint + libcdither +
-                     env/coreml/*.mlpackage                        (gitignored)
-jobs/<id>/           source, frames/, masks/<obj>/, out.mp4              (gitignored)
-verify.mjs           headless end-to-end check of all three flows
-docs/                verification screenshots + verify-report.json
-```
+## The two engines
 
-API:
+### One dither engine, three implementations
 
-```
-POST /api/upload                    mp4/mov -> jobs/<id>/frames/%04d.jpg (720p, 30fps)
-GET  /api/jobs/<id>/meta
-GET  /api/jobs/<id>/frame/<n>       jpeg
-POST /api/jobs/<id>/track           {frame_idx, image_size, objects:[{id, points, box, mask}]}
-POST /api/jobs/<id>/preview         same body -> soft masks for that one frame,
-                                    no propagation (~0.15 s)
-GET  /api/jobs/<id>/status          {state, done_frames, fps, backend, image_size, render:{…}}
-GET  /api/jobs/<id>/mask/<obj>/<n>  png (soft mask)
-POST /api/jobs/<id>/render          {mode, algo, matrix, palette, subjects:[…], …}
-GET  /api/jobs/<id>/out.mp4
-GET  /api/bluenoise                 the 64x64 threshold tile as JSON
-GET  /api/palettes                  palettes, modes, kernels, defaults, device,
-                                    backend, track_sizes
-GET  /                              static/index.html
-```
+The browser preview is not an approximation of the export — it is the same
+algorithm. `server/parity.py` runs 110 cases (every mode, all 14 kernels with
+serpentine on and off, three palettes, the tone controls) through the Python and
+the JavaScript implementations and requires **byte-identical** output, then
+repeats the whole set through a subject mask. The browser engine's export uses
+the same `dither.js` the preview does, so it is identical by construction.
 
-### Two engines, one output
-
-The browser preview is not an approximation of the export — it is the same algorithm.
-`parity.py` runs 110 cases (every mode, all 14 kernels with serpentine on and off,
-three palettes, the tone controls) through both implementations and requires
-**byte-identical** output, then repeats the whole set through a subject mask.
-
-Getting there needed three fixes worth remembering, because each produced *visible*
-pixel differences that error diffusion then amplified:
+Getting there needed three fixes worth remembering, because each produced
+*visible* pixel differences that error diffusion then amplified:
 
 * **Float width.** JavaScript Numbers are f64 and only the `Float32Array` *store*
-  rounds. The C loop now uses `double` locals with float32 storage to match, and
+  rounds. The C loop uses `double` locals with float32 storage to match, and
   `tone_lut()` computes in float64 and casts once.
 * **FMA contraction.** `cc -O3` fuses `a + b*c` into one instruction that rounds
   once where JS rounds twice, so the build uses `-ffp-contract=off`.
 * **RNG.** Both sides use a portable integer hash (`hash01`) instead of
   `numpy.random` / `Math.random` for jitter and stray fields.
 
-## Verification
+The one thing that is *not* shared is the blue-noise tile: the server generates
+it with an FFT high-pass and numpy's RNG, which is not portable. So the server's
+default seed-7 tile ships as `web/bluenoise.json` and both engines start from the
+same field; **reseed** in the browser generates a fresh tile with the same
+construction and a portable hash, which is a different realisation of the same
+spectrum.
 
-`verify.mjs` drives a real headless browser against a real server, a real EdgeTAM
-run and real ffmpeg. No mocks. Five flows: a still through every algorithm, a
-whole-frame clip, two tracked subjects, one subject at a non-default tracking
-quality, and a polygon mask prompt with a frame preview. It uploads files, drags
-boxes, clicks points, traces a 27-point outline on the canvas, switches every
-algorithm, samples the preview canvas' pixels, exports, and `ffprobe`s the result.
+### One tracker, two ports
 
-```bash
-./run.sh &
-node verify.mjs http://127.0.0.1:8765 /path/to/clip.mp4 /path/to/still.jpg
-env/venv/bin/python parity.py && GATE=1 env/venv/bin/python parity.py
+`coreml/` runs EdgeTAM's three heaviest stages as CoreML graphs with PyTorch
+holding the rest. `onnxexport/` goes further and exports *five* graphs, because a
+browser has no PyTorch to fall back to when a shape is unusual: the memory
+attention is exported once at full memory length with an additive key mask, the
+SAM heads become a graph with `NonZero` re-derived as arithmetic, and the mask
+prompt gets its own graph. `web/track.js` reimplements sam2's memory-bank
+bookkeeping in JS around them. `docs/track-web.md` is the full account.
+
+They agree. Against the same 1024 px fp32 torch reference on the same clip, the
+server's 768 px torch path scores IoU **0.9668** and the ONNX export scores
+**0.9681** (fp32) / **0.9666** (fp16). In the actual browser it is 0.9535, and
+the gap is the canvas resampler, not the port — feeding the Python loop a box
+filter instead of bilinear moves it to 0.9295 with the model untouched.
+
+### Performance
+
+150-frame 1280×720 clip, one subject, 768 px tracker input, M4 Pro / 24 GB.
+
+| | tracking | first-frame preview | video export |
+|---|---|---|---|
+| **browser** (WebGPU fp16) | **12.4 fps** (80.7 ms/frame) | 0.14 s | 29 fps → WebM |
+| **browser** (WASM, 8 threads) | 2.05 fps | — | — |
+| **local server** (CoreML) | **20.9 fps** | 0.13 s | 14.5 fps → MP4 |
+| local server (torch MPS) | 15.4 fps | — | — |
+| **A100** (EdgeTAM's own figure) | **~150 fps** | — | — |
+
+The A100 row is EdgeTAM's published number, *"obtained with torch compile"* — not
+measured here. It is in the table because it is the reason the third tier is
+worth building: the same `server.py` on rented silicon is an order of magnitude
+faster than the Mac under it.
+
+Per stage in the browser, each graph run 20× in isolation with a CPU readback
+(the only way to get an honest number out of an async backend):
+
+| | WebGPU fp16 | WebGPU fp32 | WASM fp16 |
+|---|---|---|---|
+| image encoder | 24.5 ms | 28.6 ms | 175 ms |
+| memory attention | 42.2 ms | 49.5 ms | 252 ms |
+| SAM heads | 7.4 ms | 12.3 ms | 23 ms |
+| memory encoder | 14.6 ms | 13.7 ms | 58 ms |
+
+They sum to more than the 80.7 ms end-to-end figure, which is the point of
+chaining: `encoder → memattn → heads` is wired with
+`preferredOutputLocation: 'gpu-buffer'`, so 9.4 MB of feature maps per frame
+never come back to JS.
+
+**Download.** The page itself is ~200 KB. The first time you track something, the
+browser engine pulls **83 MB** — 55.3 MB of fp16 ONNX graphs and 27.7 MB of
+onnxruntime-web — and caches it. Nothing comes from a CDN.
+
+**Multiple subjects.** The server batches every subject through one propagate
+pass. The browser tracks them one at a time, because a `WebTracker` is a
+single-object memory bank, so N subjects cost N × the time. Two subjects over
+149 frames: 16.1 s on the server, 25.7 s in the browser.
+
+## Hosting a paid backend
+
+The seam is built; the billing is not, and this repository is not going to grow
+it.
+
+`server.py` reads one optional environment variable:
+
+```sh
+DV_API_KEY=$(openssl rand -hex 24) DV_PORT=8765 env/venv/bin/python server/server.py
 ```
 
-Latest run (M4 Pro, 24 GB, macOS 26.1, torch 2.13 / MPS + CoreML), 150-frame
-1280×720 clip:
+With it set, every `/api/*` request must carry `Authorization: Bearer <key>` or
+gets a 401. The page and the static assets stay open, because a browser cannot
+put a header on the request that loads the HTML. `GET /api/meta` reports
+`"auth": "bearer"` so a client knows before it tries. `DV_CORS_ORIGINS` narrows
+CORS from the default `*`.
+
+On the page: the engine chip → **Custom URL** → the base URL and the key. The
+same `engines/remote.js` drives it; there is no separate client and no premium
+code path.
+
+A deployment sketch, unbuilt but not hand-wavy:
+
+```
+  Cloudflare / nginx            a CUDA box (A10G, L4, A100…)
+  ┌──────────────────┐          ┌───────────────────────────────────┐
+  │ TLS              │          │ DV_API_KEY=<per-customer>         │
+  │ rate limit       │─────────▶│ DV_DEVICE=cuda DV_BACKEND=torch-  │
+  │ key -> customer  │          │            compiled               │
+  │ meter /track     │          │ server/server.py                  │
+  └──────────────────┘          │ jobs/ on a scratch disk, GC'd     │
+                                └───────────────────────────────────┘
+```
+
+What you would actually have to do:
+
+* **CUDA.** `DV_DEVICE=cuda`. The CoreML backend is Apple-only and falls through
+  to `torch-compiled` on its own; EdgeTAM's 150 fps figure *is* the compiled
+  torch path, so that is the right backend there. The `_gpu_lock` in `server.py`
+  serialises one track at a time per process — run one process per GPU behind
+  the proxy rather than trying to share.
+* **Jobs are never garbage collected.** ~13 MB per 150-frame clip, and they hold
+  the customer's frames. A hosted deployment needs a reaper and a retention
+  policy before it needs a payment form.
+* **Metering.** Count tracked frames, not requests: `POST /track` returns
+  immediately and the work is in the worker. `GET /status` already reports
+  `done_frames`, `elapsed_s` and `image_size`.
+* **The free tier does not get worse.** The browser engine is the product for
+  most people, and it costs the operator nothing. The paid tier buys speed,
+  larger clips and 1024 px tracking — not the feature list.
+
+## Verification
+
+Two headless suites, both against a real server, a real EdgeTAM run and real
+ffmpeg. No mocks.
+
+```sh
+./run.sh &
+node verify.mjs     http://127.0.0.1:8765 clip.mp4 still.jpg
+node verify-web.mjs http://127.0.0.1:8765 clip.mp4 docs/entry-clip.mp4 still.jpg
+env/venv/bin/python server/parity.py && GATE=1 env/venv/bin/python server/parity.py
+```
+
+`verify.mjs` drives the **server engine** through five flows: a still through
+every algorithm, a whole-frame clip, two tracked subjects, one subject at a
+non-default tracking quality, and a polygon mask prompt with a frame preview.
+
+`verify-web.mjs` drives the **browser engine** and the seam between the two: the
+auto probe and the manual switch, a still, a whole-frame clip, a tracked subject,
+a polygon through the `heads_mask` graph, two subjects prompted on two different
+frames — and the same two-frame test on the server engine, so the feature is
+checked on both. It also starts a second server with `DV_API_KEY` set and checks
+401 / 401 / 200. It picks a browser rather than assuming one: headless Chromium
+with the WebGPU flags, then `channel:'chrome'`, then the WASM backend over a
+shorter clip with the report saying so.
+
+Latest run (M4 Pro, 24 GB, macOS 26.1, torch 2.13 / MPS + CoreML; headless
+Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 
 | | result |
 |---|---|
 | engine parity | **110/110 byte-identical**, and 110/110 again through a mask |
-| still: 6 algorithms | 2-colour output each, 1280×720 |
+| `verify.mjs` | 5 flows, **0 console errors** |
+| `verify-web.mjs` | 8 flows, **56/56 assertions**, **0 console errors** |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
-| still: palettes | Game Boy → 4 colours, from-image → 4, pixel-scale 4× → 2 |
-| still: PNG export | 1280×720, 494 KB, downloaded and probed |
-| clip whole-frame | Bayer 8×8 + Game Boy, preview 58.8 fps, render 150 frames in 10.3 s |
-| clip tracked, 2 subjects, default quality | 150/150 frames in 15.6 s (**9.6 fps**) on the CoreML backend at 768 px |
-| clip tracked, 1 subject, fast quality | 150/150 frames in 9.9 s (**15.2 fps**), tracker at 512 px, masks still 1280×720 |
-| frame preview | box prompt **0.13 s**, 27-point polygon **0.11 s**, mask painted on the prompt canvas |
-| clip tracked from a polygon alone | 150/150 frames in 10.0 s, mask-prompt vs box-prompt IoU **0.978 mean / 0.928 worst** over 15 sampled frames |
-| tracked → dots | preview 43.1 fps · 3989 dots, render 3.8 s, ffprobe 150 frames |
-| tracked → Atkinson, 3 palettes | 12 distinct colours, render 12.3 s, ffprobe 150 frames |
+| browser: clip decode | 150 frames in **4.9 s**, in the tab |
+| browser: frame-0 preview | **0.14 s** (box), **0.13 s** (27-point polygon) |
+| browser: track | 150/150 frames in 12.2 s (**12.3 fps**), WebGPU fp16 |
+| browser: mask prompt | tracked from a polygon alone, non-empty on 150/150 frames |
+| browser: dots preview | 42.0 fps · 774 dots |
+| browser: export | 150 frames of VP9 WebM in 5.1 s, 1280×720, ffprobed |
+| server: track, 2 subjects | 150/150 in 16.0 s (**9.4 fps**) end to end |
+| server: track from a polygon | mask-prompt vs box-prompt IoU **0.978 mean / 0.928 worst** |
+| server: export | 150 frames of H.264 in 10.4 s, ffprobed |
 | preview vs exported MP4 | **97.8 %** of pixels within 30 RGB units |
-| console / page errors | **0 / 0** |
+| `DV_API_KEY` | bare 401 · wrong key 401 · right key 200 · the page still 200 |
 
-Those two tracked rows are end to end — model build, frame decode, propagate and
-PNG writing — which is why they sit below the propagate-only fps in
-`bench/results.md`.
-
-The remaining 2.2 % of the preview-vs-export comparison is not an engine difference —
-it is the browser's JPEG decoder disagreeing with Pillow's by a level or two on the
-source frames, plus h264 quantisation on the way out. Feed both the same decoded
+The remaining 2.2 % of the preview-vs-export comparison is not an engine
+difference — it is the browser's JPEG decoder disagreeing with Pillow's by a
+level or two, plus h264 quantisation on the way out. Feed both the same decoded
 pixels and they agree exactly, which is what `parity.py` measures.
 
-## Tracking performance
+### Subjects that arrive mid-clip
+
+`docs/entry-clip.mp4` is five seconds of a locked-off park shot
+([Mixkit](https://mixkit.co/free-stock-video/view-of-a-park-while-a-girl-runs-across-4831/),
+free licence) that a jogger runs into. She is **not in frame until frame 38**.
+Both engines are given two subjects: a tree prompted on frame 0, and the jogger
+prompted on frame 48, ten frames after she appears.
+
+| | tree, prompted @ 0 | jogger, prompted @ 48 |
+|---|---|---|
+| server engine | non-empty on **149/149** frames | empty 0–37, **first mask on frame 38** |
+| browser engine | non-empty on **149/149** frames | empty 0–38, **first mask on frame 39** |
+
+Neither was told when she arrives. The server finds frame 38 because SAM2's
+`max_cond_frames_in_attn` is -1, so a conditioning frame in the *future*
+participates in the memory attention from frame 0 onwards and the object score
+simply stays negative until she is there. The browser gets to the same place from
+the other direction, tracking her backwards out of frame 48 until she leaves.
+One frame apart, from entirely separate code.
+
+The renderer follows: at frame 10 the dot count is the tree's alone, and it jumps
+when she enters. Dots pop rather than fade, which is what a threshold field does
+and what the aesthetic wants.
+
+![frame 10, before she arrives](docs/w-entry-f10-remote.png)
+![frame 100, both subjects](docs/w-entry-f100-remote.png)
+
+One real bug fell out of writing that test. SAM2 consolidates *every* prompt
+frame across *every* object before propagation begins, and on frame 48 the tree
+had not been tracked yet — so it got the `NO_OBJ_SCORE` placeholder and vanished
+for exactly one frame at 30 fps. `_fill_foreign_cond_holes` in `server.py` copies
+the neighbouring frame, which is what the browser engine produces anyway.
+
+## Licence
+
+**Apache-2.0**, matching EdgeTAM, whose weights this cannot work without. MIT
+would have been fine for the JavaScript on its own, but a two-licence repository
+where the model half is Apache and the code half is MIT is a paperwork tax on
+everyone downstream for no benefit. Apache-2.0 also carries an explicit patent
+grant, which matters more than usual for something that ships model weights.
+
+What that means in practice:
+
+| | licence | committed here? |
+|---|---|---|
+| this code (`web/`, `server/`, `coreml/`, `onnxexport/`, `bench/`) | Apache-2.0 | yes |
+| [EdgeTAM](https://github.com/facebookresearch/EdgeTAM) + its checkpoint | Apache-2.0 | no — `setup.sh` clones and downloads |
+| the derived ONNX / CoreML graphs | Apache-2.0 (derived from the checkpoint) | no — regenerated or released separately |
+| [onnxruntime-web](https://github.com/microsoft/onnxruntime) in `web/ort/` | MIT | no — `setup.sh` fetches it from npm |
+| `docs/entry-clip.mp4` | Mixkit Free License | yes, **as a test fixture only** |
+
+The Mixkit clip is in the repository because the tracking tests need a real
+video where something enters the shot; it is not redistributable as a stock
+asset and it is not part of the software. Everything else used while building
+this was a test input and is not here. `NOTICE` has the full attributions, and
+anyone bundling `web/ort/` must carry the MIT notice with it.
+
+## Contributing
+
+The bar is the same one the code holds itself to: **no mocks in the tests, and a
+number in the commit message**. `verify.mjs`, `verify-web.mjs` and `parity.py`
+run against a real server, a real EdgeTAM and real ffmpeg, and they should stay
+that way — a suite that can pass while the tool is broken is worse than none.
+
+Practically:
+
+* Run both verifiers before opening a PR, and paste what they printed. Zero
+  console errors is a hard gate, not an aspiration.
+* Touching `dither.js` or `dither.py` means running
+  `server/parity.py` **and** `GATE=1 server/parity.py`. They are byte-for-byte
+  equal today and that is worth defending.
+* Anything that changes tracking speed should come with a `bench/bench.py` run —
+  interleaved, three rounds. A straight sequence of backends measures the
+  machine's temperature, not your patch.
+* Keep the browser engine honest. If a feature only works with a server, say so
+  in the UI rather than hiding the button.
+* Do not commit weights. `setup.sh` regenerates every binary in this repo.
+
+Open questions worth an issue before code: a WebCodecs decode path (faster than
+the seek loop, but frame-accuracy needs proving), 512 and 1024 ONNX exports
+behind an opt-in download, and batching multiple subjects into one browser pass.
+
+## How the server tracker got fast
+
+The browser port is documented in `docs/track-web.md`. This is the
+CoreML side, and the measurements behind the 20.9 fps above.
+
 
 EdgeTAM's README quotes **15.7 FPS on iPhone 15 Pro Max** and **150.9 FPS on A100**,
 footnoting that the A100 number is *"obtained with torch compile"*; the iPhone number
@@ -371,35 +671,68 @@ why the setting exists rather than a silently lowered default.
 
 ## Limits
 
-* **macOS + Apple Silicon.** Tracking is CoreML + MPS. `DV_BACKEND=` picks
-  `coreml` (default) / `torch-compiled` / `torch-half` / `torch` / `torch-fp32`;
-  an unavailable backend falls through to the next one, so a machine without
-  coremltools still tracks. `DV_DEVICE=cpu` works, far slower. No CUDA extension.
-* **The C library is required for error diffusion and Riemersma.** `setup.sh` builds
-  it. The pure-Python fallback is ~500× slower and Riemersma has no fallback at all.
+### The browser engine
+* **WebGPU or nothing much.** Chrome, Edge and current Safari have it. Without it
+  the page falls back to multi-threaded WASM at **2.05 fps** — usable for a short
+  clip, not for a 300-frame one — and says so on the chip.
+* **83 MB before the first track.** Cached afterwards, but it is a real cost on a
+  first visit, and the weights are not in git (see `web/README.md`).
+* **One tracker resolution.** 768 px only. 512 and 1024 would triple the
+  download.
+* **Subjects cost linearly.** One full pass each: N subjects, N × the time. The
+  server batches them into one.
+* **WebM, not MP4.** `MediaRecorder` gives VP9. Older Safari will not play it.
+* **The export is paced in real time.** A frame that takes longer to dither than
+  the clip's frame interval makes the file play slow; the export line says when
+  that happened.
+* **Memory.** A 150-frame 720p clip is ~15 MB of JPEG blobs plus ~22 MB of mask
+  logits per subject. A 300-frame clip with six subjects is not a good idea in a
+  tab.
+
+### The server engine
+* **macOS + Apple Silicon, for the fast path.** Tracking is CoreML + MPS.
+  `DV_BACKEND=` picks `coreml` (default) / `torch-compiled` / `torch-half` /
+  `torch` / `torch-fp32`; an unavailable backend falls through to the next one,
+  so a machine without coremltools still tracks. `DV_DEVICE=cpu` works, far
+  slower. `DV_DEVICE=cuda` is untested here but is the documented path for a
+  hosted deployment.
+* **The C library is required for error diffusion and Riemersma.** `setup.sh`
+  builds it. The pure-Python fallback is ~500× slower and Riemersma has no
+  fallback at all.
+* **One track at a time.** A process-wide lock serialises EdgeTAM; a second
+  request gets a 409.
+* **Jobs are never garbage collected.** ~13 MB per 150-frame clip; delete by
+  hand. A hosted deployment needs a reaper before it needs a payment form.
+* **`DV_API_KEY` is authentication, not authorisation.** One key, all or
+  nothing, no accounts, no rate limiting, no metering. Put those in front of it.
+
+### Both
 * **A drawn shape and clicks are exclusive.** Per frame and object EdgeTAM takes
   a mask prompt or points+box, never both — that is upstream's design, not a
   shortcut here. Draw the shape *or* click, and use **preview this frame** to
   find out which you need.
-* **Error diffusion and Riemersma flicker on video.** That is inherent, not a bug —
-  the UI marks them. Use dots / blue noise / Bayer / halftone for stable motion.
+* **Error diffusion and Riemersma flicker on video.** That is inherent, not a bug
+  — the UI marks them. Use dots / blue noise / Bayer / halftone for stable
+  motion.
 * **Short clips.** 720p / 30 fps, 300 frames / 10 s by default.
-* **One track at a time.** A process-wide lock serialises EdgeTAM; a second request
-  gets a 409.
-* **Objects cost time.** The fps in the quality chips is for one subject; every
-  extra object is another batch row through the memory attention and the SAM
-  heads. Track times swing up to 1.7× run to run under sustained load (thermals),
-  which is why `bench/bench.py` interleaves.
-* **Tracking quality is EdgeTAM's.** Fast motion, blur and occlusion make masks drift;
-  the fix is a better prompt, not a renderer setting.
+* **Objects cost time**, and track times swing up to 1.7× run to run under
+  sustained load (thermals), which is why `bench/bench.py` interleaves.
+* **Tracking quality is EdgeTAM's.** Fast motion, blur and occlusion make masks
+  drift; the fix is a better prompt, not a renderer setting. A subject that
+  leaves and re-enters is re-identified when EdgeTAM manages it and not when it
+  does not — the jogger in `docs/entry-clip.mp4` survives a tree occlusion around
+  frames 59–69, which is the model's doing, not this tool's.
+* **Switching engines drops the clip.** The frames live inside whichever engine
+  decoded them. The page says so rather than silently re-uploading.
 * **Preview cost.** The preview dithers at full resolution on the main thread and
   caches 40 frames of decoded bitmaps. Heavy settings (small cell, many subjects,
   Riemersma) drop below the clip's own frame rate; the fps counter tells you.
-* **Stills preview at 1600 px** on the long edge and re-render at native resolution
-  only for the download, so a large photo stays responsive while you drag sliders.
+* **Stills preview at 1600 px** on the long edge and re-render at native
+  resolution only for the download, so a large photo stays responsive while you
+  drag sliders.
 * **Compare is preview-only** — not baked into the export.
 * **No audio.** Video export is picture only.
-* **Jobs are never garbage collected.** ~13 MB per 150-frame clip; delete by hand.
-* **EdgeTAM patch.** `setup.sh` rewrites two `.view(...)` calls to `.reshape(...)` in
-  `sam2/modeling/perceiver.py`; upstream throws *"view size is not compatible with
-  input tensor's size and stride"* as soon as more than one object is tracked.
+* **EdgeTAM patch.** `setup.sh` rewrites two `.view(...)` calls to `.reshape(...)`
+  in `sam2/modeling/perceiver.py`; upstream throws *"view size is not compatible
+  with input tensor's size and stride"* as soon as more than one object is
+  tracked.

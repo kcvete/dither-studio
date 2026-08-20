@@ -173,6 +173,9 @@ export class BrowserEngine {
   async init() {
     if (this.ready) return this;
     await this.manifestOf();
+    // A HEAD that 404s prints a line in the console. That is unavoidable and,
+    // in the only case it happens, correct: the file really is not there. The
+    // alternative is finding out when the user presses Track.
     const probe = this.fp16 ? 'encoder.fp16.onnx' : 'encoder.onnx';
     const head = await fetch(this.dir + probe, { method: 'HEAD' }).catch(() => null);
     if (!head || !head.ok) {

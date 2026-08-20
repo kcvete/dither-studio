@@ -1,0 +1,43 @@
+Dither Studio
+Copyright 2026 Dither Studio contributors
+
+This product includes software developed as part of the following projects.
+
+--------------------------------------------------------------------------------
+EdgeTAM  --  https://github.com/facebookresearch/EdgeTAM
+Copyright (c) Meta Platforms, Inc. and affiliates.
+Licensed under the Apache License, Version 2.0.
+
+Dither Studio does not vendor EdgeTAM. setup.sh clones it into env/EdgeTAM at a
+pinned commit and patches two `.view(...)` calls to `.reshape(...)` in
+sam2/modeling/perceiver.py so that more than one object can be tracked at once.
+
+The EdgeTAM checkpoint (edgetam.pt) is downloaded from
+https://huggingface.co/spaces/facebook/EdgeTAM and is likewise Apache-2.0. It is
+not committed to this repository. The ONNX graphs under web/models/ and the
+CoreML packages under env/coreml/ are derived from that checkpoint and carry the
+same licence; they are also not committed.
+
+EdgeTAM builds on SAM 2 (https://github.com/facebookresearch/sam2), also
+Apache-2.0, Copyright (c) Meta Platforms, Inc. and affiliates.
+
+--------------------------------------------------------------------------------
+ONNX Runtime Web  --  https://github.com/microsoft/onnxruntime
+Copyright (c) Microsoft Corporation.
+Licensed under the MIT License.
+
+Not committed. setup.sh fetches the npm package and copies two builds into
+web/ort/. A distribution that bundles web/ort/ must carry the MIT notice with it.
+
+--------------------------------------------------------------------------------
+Test media
+
+docs/entry-clip.mp4 is trimmed from "View of a park while a girl runs across"
+(https://mixkit.co/free-stock-video/view-of-a-park-while-a-girl-runs-across-4831/)
+under the Mixkit Stock Video Free License
+(https://mixkit.co/license/#videoFree). It is included solely as a test fixture
+for the tracking verification suite. It is not part of the software and must not
+be redistributed as a stock asset.
+
+Any other clips or stills used while developing this project are test inputs
+only and are not redistributed here.

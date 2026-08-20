@@ -297,6 +297,11 @@ function renderSubjects() {
     wrap.append(b);
   });
   $('#vSubs').textContent = `${S.subjects.length} / ${MAX_SUBJECTS}`;
+  if (S.scope === 'track') {
+    const n = S.subjects.length;
+    $('#s2sum').textContent = S.tracked ? `${n} tracked`
+      : `${n} subj${n > 1 ? 's' : ''}`;
+  }
   paintOffFrame();
 }
 
