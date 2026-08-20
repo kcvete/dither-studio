@@ -74,8 +74,19 @@ export function blueNoiseTile(n = 64, seed = 7, iters = 40, sigma = 1.6) {
  * seek loop is slower and exactly reproducible, and it is what the server's
  * ffmpeg `-r 30` produces, so both engines index the same picture as frame 42.
  */
-async function decodeClip(file, { fps = 30, maxSeconds = 10, maxFrames = 300,
-                                  maxHeight = 720, trimStart = 0, trimEnd = null,
+export function clipMemoryEstimate(nFrames, w, h, subjects = 1) {
+  // What a decoded clip actually costs this tab:
+  //   the JPEG blobs it keeps           ~90 KB a frame at 1280x720
+  //   the 40-frame bitmap LRU in app.js  w*h*4 each
+  //   one 192x192 float32 mask logit per frame per subject, once tracked
+  const jpeg = nFrames * 90e3 * Math.max(1, w * h) / (1280 * 720);
+  const lru = 40 * w * h * 4;
+  const masks = nFrames * 192 * 192 * 4 * Math.max(1, subjects);
+  return { jpeg, lru, masks, total: jpeg + lru + masks };
+}
+
+async function decodeClip(file, { fps = 30, maxHeight = 720,
+                                  trimStart = 0, trimEnd = null,
                                   onProgress } = {}) {
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
@@ -91,11 +102,12 @@ async function decodeClip(file, { fps = 30, maxSeconds = 10, maxFrames = 300,
     let full = v.duration;
     if (!isFinite(full) || full <= 0) full = await probeDuration(v);
     const t0 = Math.max(0, trimStart || 0);
-    const avail = Math.max(0, (full || maxSeconds) - t0);
+    const avail = Math.max(0, (full || 0) - t0);
     const want = trimEnd ? Math.max(0, trimEnd - t0) : avail;
-    const dur = Math.min(want, avail, maxSeconds);
+    // no cap: the whole clip, or exactly the trim range
+    const dur = Math.min(want || avail, avail);
     if (!isFinite(dur) || dur <= 0) throw new Error('the clip has no duration');
-    const n = Math.max(1, Math.min(maxFrames, Math.floor(dur * fps)));
+    const n = Math.max(1, Math.floor(dur * fps));
     const scale = Math.min(1, maxHeight / (v.videoHeight || maxHeight));
     const w = Math.max(2, Math.round(v.videoWidth * scale / 2) * 2);
     const h = Math.max(2, Math.round(v.videoHeight * scale / 2) * 2);
@@ -271,6 +283,9 @@ export class BrowserEngine {
       exportExt: 'webm',
       exportPlayable: true,
       stillSubjects: true,          // single-image segmentation, no propagation
+      reextract: true,              // reopen(): the File handle is still here
+      extractProgress: true,        // decode reports frame by frame
+      uncapped: true,               // whole clip, however long it is
       formats: browserFormats(),
     };
   }
@@ -373,9 +388,19 @@ export class BrowserEngine {
   async open(file, opts = {}) {
     const c = await decodeClip(file, opts);
     this.clip = c;
+    // the File itself, so a different trim range re-decodes without a re-pick
+    this.srcFile = file;
+    this.srcOpts = opts;
     this.masks.clear(); this.promptFrames.clear();
     return { job: 'local', nFrames: c.nFrames, w: c.w, h: c.h, fps: c.fps,
              trimStart: c.trimStart, seconds: c.seconds };
+  }
+
+  /** A different range out of the same file. The tab still holds the File
+   *  handle, so this is a re-decode and nothing is read off disk twice. */
+  async reopen(opts = {}) {
+    if (!this.srcFile) throw new Error('no clip is open');
+    return this.open(this.srcFile, Object.assign({}, this.srcOpts, opts));
   }
 
   /* --------------------------------------------------------------- still

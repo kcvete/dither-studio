@@ -40,6 +40,17 @@ const S = {
   stillMasks: new Map(), stillURL: null, stillFile: null, pngAlpha: false,
   // source file + trim (video only) — kept so a trim can re-open the same file
   srcFile: null, srcDuration: 0, trim: null, recordedS: 0, photo: null,
+  // the source clip's own pixels (the estimate needs them before any decode)
+  srcW: 0, srcH: 0,
+  // set by DV_limit() before a drop: take only the first N seconds. Nothing in
+  // the UI sets it — it is how the verifiers ask for a shorter clip.
+  pendingLimit: 0,
+  // true while a long clip is sitting in the trim bar waiting for a click —
+  // the consent gate. Never a refusal: "whole clip" clears it.
+  awaitingChoice: false,
+  // the job the current frames were extracted from, so a second trim can be
+  // re-cut from the source the server already holds
+  srcJob: null,
   // clip
   job: null, nFrames: 0, W: 0, H: 0, fps: 30,
   // `promptFrame` is where the SCRUBBER is. Each subject remembers the frame it
@@ -129,24 +140,123 @@ document.addEventListener('paste', (e) => {
   const it = Array.from(e.clipboardData.files)[0];
   if (it) take(it);
 });
-$('#sSec').addEventListener('input', (e) => {
-  $('#vSec').textContent = e.target.value + ' s';
-  paintTrim();
-});
+/* ------------------------------------------------------- clip estimates ===
+ * There is no length cap. What replaces it is arithmetic done out loud before
+ * anything is decoded: how many frames that range is, what they weigh, and how
+ * long tracking them will take at the quality that is selected. Over a minute
+ * the note appears and the clip waits for a click -- it is still never
+ * refused, and the trim bar works before AND after.
+ */
+const LONG_S = 60;              // over this: say the number, wait for a click
+const TAB_MEM_WARN = 2e9;       // over this in-tab: suggest the local server
+const DECODE_FPS = 30;
+const DECODE_H = 720;
+
+const fmtBytes = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB'
+  : b >= 1e6 ? Math.round(b / 1e6) + ' MB' : Math.round(b / 1e3) + ' KB');
+const fmtDur = (s) => (s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
+  : `${s < 10 ? s.toFixed(1) : Math.round(s)}s`);
+
+/** Seconds the current trim covers (the whole clip when nothing is trimmed). */
+function trimSeconds() {
+  if (S.trim) return Math.max(0, S.trim.end - S.trim.start);
+  return S.srcDuration || 0;
+}
+
+/** Everything the estimate line says, as numbers. */
+function clipEstimate() {
+  const secs = trimSeconds();
+  const n = Math.max(1, Math.round(secs * DECODE_FPS));
+  const vw = S.srcW || S.W || 1280, vh = S.srcH || S.H || 720;
+  const h = DECODE_H, w = Math.max(2, Math.round(vw * (h / vh) / 2) * 2);
+  const jpeg = n * 90e3 * (w * h) / (1280 * 720);
+  const lru = 40 * w * h * 4;
+  const masks = n * 192 * 192 * 4 * Math.max(1, S.subjects.length || 1);
+  const t = (S.meta.track_sizes || []).find((x) => x.size === S.trackSize)
+    || (S.meta.track_sizes || [])[0];
+  const fps = (t && t.fps) || 0;
+  return { secs, n, w, h, jpeg, tabBytes: jpeg + lru + masks,
+           trackFps: fps, trackS: fps ? n / fps : 0,
+           quality: t ? t.label.split(' ')[0] : '', size: t ? t.size : 0 };
+}
+
+function paintEstimate() {
+  if (S.kind === 'image' || !S.srcFile) { $('#vidopts').hidden = true; return; }
+  const e = clipEstimate();
+  const browser = E().id === 'browser';
+  $('#vEst').textContent = `${e.secs.toFixed(1)} s · ${e.n} frames`;
+  $('#estline').innerHTML = `${e.w}×${e.h} @ ${DECODE_FPS} fps · frames `
+    + `<b>≈ ${fmtBytes(browser ? e.tabBytes : e.jpeg)}</b> `
+    + (browser ? 'in this tab' : 'on the server')
+    + (e.trackS ? ` · tracking one subject <b>≈ ${fmtDur(e.trackS)}</b>`
+        + (e.quality ? ` at ${e.quality} · ${e.size} px` : '') : '');
+  const warn = browser && e.tabBytes > TAB_MEM_WARN;
+  $('#estwarn').hidden = !warn;
+  if (warn) {
+    $('#estwarn').textContent = `≈ ${fmtBytes(e.tabBytes)} of frames and masks `
+      + 'in this tab — it will work, but the local server engine keeps them on '
+      + 'disk instead. Switch engines, or trim.';
+  }
+  const long = e.secs > LONG_S;
+  $('#estlong').hidden = !long;
+  if (long) {
+    $('#estlong').textContent = `long clip: tracking ≈ ${fmtDur(e.trackS)}`
+      + ' — consider trimming. You can also trim afterwards, and re-cut '
+      + 'without uploading again.';
+  }
+}
 
 function take(f) {
   const isVid = /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name);
   $('#vidopts').hidden = !isVid;
   $('#trimui').hidden = true;
   if (!isVid) { S.srcFile = null; return loadStill(f); }
-  // The clip loads whole, immediately, and the trim bar appears next to it:
-  // making every drop wait for a second click would be worse than the one
-  // extra decode a trim costs.
+  // A short clip loads whole, immediately, and the trim bar appears next to
+  // it. A long one shows its arithmetic first and waits for a click -- not a
+  // cap, a sentence: nothing is refused and "whole clip" is right there.
   S.srcFile = f;
   S.trim = null;
-  const done = uploadClip(f);
-  buildStrip(f);
-  return done;
+  return takeClip(f);
+}
+
+async function takeClip(f) {
+  const box = $('#upstat'); box.hidden = false; box.classList.remove('err');
+  box.textContent = 'reading ' + f.name + '…';
+  const strip = buildStrip(f);            // thumbnails, in the background
+  let dur = 0;
+  try { dur = await probeFile(f); } catch (err) { dur = 0; }
+  S.srcDuration = dur;
+  S.trim = { start: 0, end: dur };
+  if (S.pendingLimit > 0) {
+    S.trim.end = Math.min(dur || S.pendingLimit, S.pendingLimit);
+    S.pendingLimit = 0;
+  }
+  paintTrim(); paintEstimate();
+  S.awaitingChoice = false;
+  if (!dur || trimSeconds() <= LONG_S) return uploadClip(f, S.trim);
+  const e = clipEstimate();
+  S.awaitingChoice = true;
+  box.textContent = `${f.name} · ${dur.toFixed(1)} s · ${e.n} frames · tracking `
+    + `≈ ${fmtDur(e.trackS)} — press “use this range” for the trim below, `
+    + 'or “whole clip”.';
+  await strip;
+}
+
+/** Duration + natural size of a file, from its header alone. No frames. */
+function probeFile(f) {
+  const url = URL.createObjectURL(f);
+  const v = document.createElement('video');
+  v.preload = 'metadata'; v.muted = true; v.playsInline = true; v.src = url;
+  return new Promise((ok, no) => {
+    v.onloadedmetadata = () => ok();
+    v.onerror = () => no(new Error('cannot read that clip'));
+    setTimeout(() => no(new Error('timed out reading the header')), 20000);
+  }).then(async () => {
+    let d = v.duration;
+    if (!isFinite(d) || d <= 0) d = await probeDuration(v);
+    S.srcW = v.videoWidth || 0; S.srcH = v.videoHeight || 0;
+    return d;
+  }).finally(() => { v.src = ''; v.load?.(); URL.revokeObjectURL(url); });
 }
 
 /* ======================================================= trim: filmstrip
@@ -179,9 +289,9 @@ async function buildStrip(file) {
       // played through; seeking past the end is the usual way to find it out
       dur = await probeDuration(v);
     }
-    S.srcDuration = dur;
-    S.trim = { start: 0, end: dur };
-    paintTrim();
+    // takeClip() owns S.trim -- it read the same header first. The strip only
+    // needs the duration to space its twelve thumbnails.
+    if (!S.srcDuration) { S.srcDuration = dur; paintTrim(); paintEstimate(); }
     const tw = Math.floor(cv.width / STRIP_N), th = cv.height;
     for (let i = 0; i < STRIP_N; i++) {
       if (seq !== stripSeq) return;
@@ -232,10 +342,9 @@ function paintTrim() {
   $('#trimdim2').style.right = '0'; $('#trimdim2').style.width = ((1 - b) * 100) + '%';
   $('#hIn').style.left = (a * 100) + '%';
   $('#hOut').style.left = (b * 100) + '%';
-  const cap = Math.min(+$('#sSec').value, end - start);
   $('#vTrim').textContent = `${start.toFixed(1)} – ${end.toFixed(1)} s · `
-    + `${(end - start).toFixed(1)} s`
-    + (cap < end - start ? ` (first ${cap.toFixed(1)} s used)` : '');
+    + `${(end - start).toFixed(1)} s`;
+  paintEstimate();
 }
 
 function dragHandle(el, which) {
@@ -264,13 +373,15 @@ dragHandle($('#hOut'), 'out');
 
 $('#bTrim').addEventListener('click', () => {
   if (!S.srcFile || !S.trim) return;
-  uploadClip(S.srcFile, { start: S.trim.start, end: S.trim.end });
+  uploadClip(S.srcFile, { start: S.trim.start, end: S.trim.end },
+             { recut: S.kind === 'video' && !!S.job });
 });
 $('#bTrimAll').addEventListener('click', () => {
   if (!S.srcFile) return;
+  const recut = S.kind === 'video' && !!S.job;
   S.trim = { start: 0, end: S.srcDuration || 0 };
   paintTrim();
-  uploadClip(S.srcFile);
+  uploadClip(S.srcFile, S.trim, { recut });
 });
 
 /* ============================================================== camera ===
@@ -280,7 +391,9 @@ $('#bTrimAll').addEventListener('click', () => {
  * (server.py already accepts .webm, and ffmpeg reads what Chrome writes).
  */
 const CAM = { stream: null, rec: null, chunks: [], t0: 0, timer: 0 };
-const CAM_MAX_S = 30;
+// A sanity stop, not a length limit: a forgotten recording should not fill the
+// disk with an 8 Mbit/s WebM. Five minutes is ~300 MB and 9,000 frames.
+const CAM_MAX_S = 300;
 
 async function camOpen() {
   if (CAM.stream) return;
@@ -301,7 +414,8 @@ async function camOpen() {
   const t = CAM.stream.getVideoTracks()[0].getSettings();
   $('#camnote').textContent = `${t.width || '?'}×${t.height || '?'}`
     + (t.frameRate ? ` · ${Math.round(t.frameRate)} fps` : '')
-    + ` · up to ${CAM_MAX_S} s · nothing leaves the tab until you export`;
+    + ` · stops itself at ${Math.round(CAM_MAX_S / 60)} min`
+    + ' · nothing leaves the tab until you export';
   $('#camui').hidden = false;
   $('#camwrap').hidden = false;
   $('#pwrap').hidden = true; $('#vwrap').hidden = true; $('#empty').hidden = true;
@@ -453,19 +567,26 @@ function dropStill() {
   DOTS_CACHE = null;
 }
 
-async function uploadClip(f, trim) {
+async function uploadClip(f, trim, opts = {}) {
   const box = $('#upstat'); box.hidden = false; box.classList.remove('err');
   box.textContent = (E().id === 'browser' ? 'decoding ' : 'uploading ') + f.name + '…';
   busy(true);
+  S.awaitingChoice = false;
   const t = trim || S.trim || null;
   const cut = t && (t.start > 0.05 || (S.srcDuration && t.end < S.srcDuration - 0.05));
+  // A second trim of a clip that is already here does not go up again: the
+  // server kept source.mp4 and the tab kept the File handle, so both engines
+  // can re-cut from what they have.
+  const recut = !!opts.recut && E().supports && E().supports.reextract
+    && (E().id === 'browser' || S.srcJob === S.job);
   try {
-    const j = await E().open(f, {
-      maxSeconds: +$('#sSec').value,
+    const args = {
       trimStart: cut ? t.start : 0,
       trimEnd: cut ? t.end : null,
       onProgress: (p) => { if (p.text) box.textContent = p.text; },
-    });
+    };
+    const j = recut ? await E().reopen(args) : await E().open(f, args);
+    S.srcJob = j.job;
     S.trim = t;
     dropStill();
     S.kind = 'video'; S.job = j.job; S.nFrames = j.nFrames; S.W = j.w; S.H = j.h; S.fps = j.fps;
@@ -474,8 +595,11 @@ async function uploadClip(f, trim) {
     S.scope = 'whole';
     dropCache();
     box.textContent = `${j.nFrames} frames · ${j.w}×${j.h} · ${j.fps} fps`
+      + ` · ${(j.nFrames / Math.max(1, j.fps)).toFixed(1)} s`
       + (cut ? ` · trimmed ${t.start.toFixed(1)}–${t.end.toFixed(1)} s` : '')
+      + (recut ? ' · re-cut, nothing re-uploaded' : '')
       + (E().id === 'browser' ? ' · stays in this tab' : '');
+    paintEstimate();
     $('#s1sum').textContent = `${j.nFrames}f`;
     $('#sPF').max = j.nFrames - 1; $('#sPF').value = 0; $('#vPF').textContent = '0';
     $('#sFrame').max = j.nFrames - 1;
@@ -1008,6 +1132,8 @@ function buildTrackSizes() {
 function paintTrackSize() {
   const t = (S.meta.track_sizes || []).find((x) => x.size === S.trackSize);
   $('#vTQ').textContent = t ? t.label : `${S.trackSize} px`;
+  // the estimate quotes THIS quality's fps, so it moves when the chip does
+  paintEstimate();
 }
 
 $('#bTrack').addEventListener('click', () => {
@@ -3823,6 +3949,8 @@ function resetClip() {
   $('#dl').hidden = true; $('#outvid').hidden = true; $('#pvinfo').hidden = true;
   $('#outimg').hidden = true; $('#fmtui').hidden = true; $('#trimui').hidden = true;
   S.srcFile = null; S.trim = null; S.srcDuration = 0;
+  S.srcW = 0; S.srcH = 0; S.srcJob = null;
+  $('#vidopts').hidden = true;
   showStage('empty');
   showSteps('none');
 }
@@ -3969,6 +4097,26 @@ async function checkModels() {
     S.trim = { start, end }; paintTrim();
     return { start, end, duration: S.srcDuration };
   };
+  /* The clip-length story, callable. There is no cap to set, so what a test
+   * needs instead is (a) a way to ask for a shorter range before the drop,
+   * (b) the numbers the estimate line is showing, and (c) the re-cut that
+   * "use this range" does after a clip is already open. */
+  window.DV_limit = (seconds) => { S.pendingLimit = +seconds || 0; return S.pendingLimit; };
+  window.DV_estimate = () => Object.assign(clipEstimate(), {
+    longNote: $('#estlong').hidden ? '' : $('#estlong').textContent,
+    memNote: $('#estwarn').hidden ? '' : $('#estwarn').textContent,
+    line: $('#estline').textContent,
+    head: $('#vEst').textContent,
+    longThresholdS: LONG_S,
+  });
+  /* The trim bar's two buttons, so a test can drive either without a mouse.
+   * `recut` is what makes a second trim free: same file, no upload. */
+  window.DV_useRange = (start, end) => {
+    if (start !== undefined) S.trim = { start, end };
+    paintTrim();
+    return $('#bTrim').click();
+  };
+  window.DV_wholeClip = () => $('#bTrimAll').click();
   window.DV_dots = { doc: dotsDoc, params: dotsParams, lib: playerLib,
                      library: () => S.library, build: buildSeq,
                      preview: seqPreview, player: () => PLAYER };

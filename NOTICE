@@ -39,5 +39,12 @@ under the Mixkit Stock Video Free License
 for the tracking verification suite. It is not part of the software and must not
 be redistributed as a stock asset.
 
+sample.mp4 is five seconds trimmed from "Man jumping from a wall"
+(https://mixkit.co/free-stock-video/man-jumping-from-a-wall-21756/) under the
+same licence, and sample.jpg is its first frame. They are the default inputs to
+verify.mjs and verify-web.mjs, committed so that both suites run from a fresh
+clone with no arguments. Same terms: test fixtures, not part of the software,
+not redistributable as stock assets.
+
 Any other clips or stills used while developing this project are test inputs
 only and are not redistributed here.

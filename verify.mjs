@@ -21,6 +21,7 @@
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -730,48 +731,112 @@ async function runFormats(page) {
   return r;
 }
 
-/* ---------- T: trim, at the API level -------------------------------------
+/* ---------- T: trim and length, at the API level ---------------------------
  * The UI half of this is verify-web.mjs's camera run (record, drag the handles,
- * re-open). This is the server's own arithmetic: -ss/-t, and the 10 s cap
- * applying AFTER the trim rather than instead of it.
+ * re-open). This is the server's own arithmetic, and the thing that replaced
+ * the old 10 s / 300 frame ceiling: -ss/-t cut exactly the window asked for,
+ * a clip well past the old cap arrives whole, the legacy `max_seconds` /
+ * `max_frames` fields are accepted and ignored, and a SECOND trim of a clip
+ * the server already holds costs one ffmpeg run and no upload.
  */
 async function runTrim(page) {
   const r = {};
-  const post = async (fields) => {
+  const post = async (file, fields) => {
     const res = await page.request.post(`${BASE}/api/upload`, {
       multipart: Object.assign({
-        file: { name: path.basename(CLIP), mimeType: 'video/mp4',
-                buffer: fs.readFileSync(CLIP) },
+        file: { name: path.basename(file), mimeType: 'video/mp4',
+                buffer: fs.readFileSync(file) },
       }, fields),
-      timeout: 120000,
+      timeout: 600000,
     });
     if (!res.ok()) throw new Error('upload failed: ' + res.status() + ' ' + await res.text());
     return res.json();
   };
-  r.whole = await post({ max_seconds: '10' });
-  r.middle = await post({ max_seconds: '10', trim_start: '2.0', trim_end: '4.0' });
-  r.capped = await post({ max_seconds: '1', trim_start: '1.0', trim_end: '4.0' });
+  r.whole = await post(CLIP, {});
+  r.middle = await post(CLIP, { trim_start: '2.0', trim_end: '4.0' });
+  // the fields the old capped API took. A page from before this change still
+  // sends them; the answer to both is now "no cap", so they change nothing.
+  r.legacyFieldsIgnored = await post(CLIP, { max_seconds: '1', max_frames: '30' });
   if (r.whole.n_frames !== 150) throw new Error('whole clip: ' + r.whole.n_frames + ' frames');
   if (r.middle.n_frames !== 60) throw new Error('2 s trim: ' + r.middle.n_frames + ' frames');
-  if (r.capped.n_frames !== 30) {
-    throw new Error('a 3 s trim under a 1 s cap gave ' + r.capped.n_frames + ' frames');
+  if (r.legacyFieldsIgnored.n_frames !== 150) {
+    throw new Error('max_seconds=1 still capped the clip to '
+      + r.legacyFieldsIgnored.n_frames + ' frames');
   }
+
   // and the trimmed clip really starts where it was told to
   const ref = path.join(DOCS, 't-trim-ref.jpg');
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-ss', '2.0', '-i', CLIP,
     '-frames:v', '1', '-vf', 'scale=-2:720', '-q:v', '3', ref]);
-  const got = path.join(HERE, 'jobs', r.middle.job, 'frames', '0000.jpg');
   const raw = (f) => execFileSync('ffmpeg', ['-v', 'error', '-i', f, '-f', 'rawvideo',
     '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 });
-  const a = raw(ref), b = raw(got);
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
-  r.firstFrameMeanAbsDiff = +(diff / a.length).toFixed(3);
+  const meanAbs = (fa, fb) => {
+    const a = raw(fa), b = raw(fb);
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+    return +(diff / a.length).toFixed(3);
+  };
+  r.firstFrameMeanAbsDiff = meanAbs(ref, frameFile(r.middle.job, 0));
   if (r.firstFrameMeanAbsDiff > 0.5) {
     throw new Error('the trimmed clip does not start at 2 s (mean abs diff '
       + r.firstFrameMeanAbsDiff + ')');
   }
+
+  /* No cap. The old ceiling was 300 frames / 10 s, so the proof is a clip
+   * comfortably past it: the 5 s sample looped to 30 s, which has to arrive as
+   * all 900 frames. Built here rather than committed — it is the same pixels. */
+  const long = path.join(os.tmpdir(), 'dv-verify-long-30s.mp4');
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '5', '-i', CLIP,
+    '-c', 'copy', long]);
+  const t0 = Date.now();
+  r.uncapped = await post(long, {});
+  r.uncappedExtractS = +((Date.now() - t0) / 1000).toFixed(1);
+  if (r.uncapped.n_frames !== 900) {
+    throw new Error('a 30 s clip came back as ' + r.uncapped.n_frames
+      + ' frames, not 900 — something is still capping');
+  }
+
+  /* Re-trim without re-upload: the source clip stayed in the job directory,
+   * so a different range is one ffmpeg run against bytes that are already
+   * here. It lands in a NEW job — the old one's masks belong to the old
+   * range — and it starts exactly where the new -ss says. */
+  const re = await page.request.post(
+    `${BASE}/api/jobs/${r.whole.job}/reextract`,
+    { data: { trim_start: 1.0, trim_end: 2.5 }, timeout: 300000 });
+  if (!re.ok()) throw new Error('reextract failed: ' + re.status() + ' ' + await re.text());
+  r.reextract = await re.json();
+  if (r.reextract.job === r.whole.job) throw new Error('re-extract reused the old job');
+  if (r.reextract.n_frames !== 45) {
+    throw new Error('a 1.5 s re-cut gave ' + r.reextract.n_frames + ' frames');
+  }
+  const ref1 = path.join(DOCS, 't-recut-ref.jpg');
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-ss', '1.0', '-i', CLIP,
+    '-frames:v', '1', '-vf', 'scale=-2:720', '-q:v', '3', ref1]);
+  r.recutFirstFrameMeanAbsDiff = meanAbs(ref1, frameFile(r.reextract.job, 0));
+  if (r.recutFirstFrameMeanAbsDiff > 0.5) {
+    throw new Error('the re-cut clip does not start at 1 s (mean abs diff '
+      + r.recutFirstFrameMeanAbsDiff + ')');
+  }
+  // no second copy of the source: the re-cut job hard-links it
+  const ino = (j) => fs.statSync(path.join(HERE, 'jobs', j, 'source.mp4')).ino;
+  r.sourceShared = ino(r.whole.job) === ino(r.reextract.job);
+  if (!r.sourceShared) throw new Error('the re-cut copied the source instead of linking it');
+
+  // a range that runs off the end is clamped to what is there, not refused
+  r.pastEnd = await post(CLIP, { trim_start: '4.0', trim_end: '99.0' });
+  if (r.pastEnd.n_frames !== 30) {
+    throw new Error('a trim past the end gave ' + r.pastEnd.n_frames + ' frames');
+  }
   return r;
+}
+
+/* jobs/<id>/frames/<n>.jpg — the filename widens past ~9,000 frames so that
+ * sorted() stays in order, so ask the job how wide its names are. */
+function frameFile(job, n) {
+  const d = path.join(HERE, 'jobs', job, 'frames');
+  const pad = (fs.readdirSync(d).find((f) => f.endsWith('.jpg')) || '0000.jpg')
+    .replace(/\.jpg$/, '').length;
+  return path.join(d, String(n).padStart(pad, '0') + '.jpg');
 }
 
 /* ---------- G: dot data and sequences, server side ------------------------

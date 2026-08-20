@@ -151,10 +151,14 @@ The page has two views, and the header switches between them:
 
 ### 1 · Source
 Images stay in the tab on either engine — they are never uploaded. Clips are
-decoded to 720p / 30 fps, capped by the *max length* slider (10 s, 300 frames):
-in the browser engine by a `<video>` seek loop into JPEG blobs, on the server by
-ffmpeg into `jobs/<id>/frames/`. Both produce the same frame grid, so frame 42
-is the same picture either way.
+decoded to 720p / 30 fps: in the browser engine by a `<video>` seek loop into
+JPEG blobs, on the server by ffmpeg into `jobs/<id>/frames/`. Both produce the
+same frame grid, so frame 42 is the same picture either way.
+
+**There is no length cap.** There used to be one — 10 s, 300 frames, a *max
+length* slider — and it is gone on both engines. What replaced it is
+[informed consent](#length-consent-not-caps): the page does the arithmetic out
+loud before anything is decoded, and then does what you asked.
 
 **Record from camera** opens `getUserMedia` (1280×720 if the camera has it) with
 a live preview on the stage and two buttons:
@@ -162,7 +166,9 @@ a live preview on the stage and two buttons:
 * **photo** grabs the frame on screen at the camera's own resolution and hands it
   to the still flow as a PNG — dither look, palette, PNG export, all client-side,
   exactly as if you had dropped an image.
-* **record** runs `MediaRecorder` with a 30 s ceiling and a running clock. What
+* **record** runs `MediaRecorder` with a five-minute stop and a running clock
+  — a sanity stop so a forgotten recording cannot fill the disk with an
+  8 Mbit/s WebM, not a length limit; the label says so. What
   comes out is a WebM blob that goes down exactly the same path a dropped file
   does — the browser engine decodes it, the server engine uploads it — so a
   camera clip is a clip, with nothing special downstream of the recorder.
@@ -174,16 +180,105 @@ thumbnails, two draggable handles, a duration readout and *use this range*. The
 range is not a crop of an already-decoded clip; it re-opens the source over those
 seconds, so only that part is ever decoded:
 
-* **browser** — the seek loop starts at `trimStart` and asks for
-  `min(trimEnd − trimStart, max length)` seconds.
+* **browser** — the seek loop starts at `trimStart` and runs to `trimEnd`, or to
+  the end of the clip when nothing is trimmed.
 * **server** — `-ss` before `-i` and `-t` after it, i.e. ffmpeg seeks rather than
   decoding and discarding.
 
-The 10 s / 300 frame cap applies **after** the trim: a 2 s window out of a 30 s
-clip is 2 s of frames, and a 25 s window is still the first 10 s of it. Measured
-in `verify.mjs`: whole clip 150 frames, a 2 s trim 60 frames, a 3 s trim under a
-1 s cap 30 frames, and the trimmed clip's frame 0 is byte-for-byte the frame
-ffmpeg gives for `-ss 2.0` (mean abs diff 0.000).
+The trim is the whole story now that nothing is capped: a 2 s window out of a
+30 s clip is 2 s of frames, and a 25 s window out of it is 25 s of frames.
+Measured in `verify.mjs`: whole clip 150 frames, a 2 s trim 60 frames, a trim
+that runs off the end clamped to the 30 frames that are there, the same 5 s clip
+looped to 30 s arriving as all **900** frames, and the trimmed clip's frame 0
+byte-for-byte the frame ffmpeg gives for `-ss 2.0` (mean abs diff 0.000).
+
+**Changing your mind is free.** Trimming again after a clip is already open does
+not re-upload it and does not ask for the file a second time. The server keeps
+`jobs/<id>/source.mp4`, so *use this range* is one `POST /api/jobs/<id>/reextract`
+— a fresh job hard-linked to the same source bytes, no second copy on disk. The
+browser engine keeps the `File` handle and re-decodes from it. Measured: cutting
+30–45 s out of a 90 s clip already on the server took **0.5 s end to end**
+through the UI, produced 450 frames, and its frame 0 is byte-identical to
+`ffmpeg -ss 30` (mean abs diff 0.000). The status line says
+*re-cut, nothing re-uploaded*.
+
+<a id="length-consent-not-caps"></a>
+#### Length: consent, not caps
+
+Nothing is refused for being long. Instead, the moment a clip's header is read —
+before a single frame is decoded — the panel under the drop zone states what it
+is about to cost:
+
+* the range in seconds and in **frames**
+* the decoded resolution and what those frames **weigh** (on the server's disk,
+  or in this tab)
+* how long **tracking one subject** takes at the tracking quality that is
+  currently selected — frames ÷ that quality's measured fps
+
+Over **60 s** a gentle line appears — *long clip: tracking ≈ 2m 9s — consider
+trimming. You can also trim afterwards, and re-cut without uploading again* —
+and the clip waits for a click instead of committing the tab to a long decode.
+It is a sentence, not a wall: *whole clip* is right there next to *use this
+range*, and it takes all of it.
+
+![the estimate panel on a 90 s clip, server engine](docs/w-long-estimate-remote.png)
+
+The same 90 s clip on the browser engine says *≈ 789 MB in this tab* and
+*≈ 3m 38s* instead — `docs/w-long-estimate-browser.png`. Same panel, the
+engine's own arithmetic.
+
+The other two guardrails are the same shape — a number and a suggestion, never a
+ceiling:
+
+* **browser engine, over ~2 GB estimated in-tab** (frames + the 40-frame bitmap
+  cache + one 192×192 float mask per frame per subject) — *it will work, but the
+  local server engine keeps them on disk instead. Switch engines, or trim.*
+* **server, not enough free disk** — the upload is refused **before** ffmpeg
+  starts, with `507` and the two numbers: how many GB those frames need and how
+  many are free. Better to say it than to fill the volume.
+
+Because the extraction of a long clip is one long POST, the page polls
+`GET /api/extract/<ticket>` beside it and shows ffmpeg's own frame counter, so a
+90 s clip is visibly moving rather than apparently hung.
+
+##### What a 90 s clip actually costs
+
+The 5 s `sample.mp4` looped to 90 s — 2,700 frames at 1280×720 — measured on an
+M-series laptop, CoreML backend:
+
+| | server engine | browser engine |
+|---|---|---|
+| open it (upload + decode, through the UI) | **2.8 s** | **344 s = 5.7 min** |
+| all 2,700 frames arrived | yes | yes |
+| frames kept | 137 MB on disk, 51 KB/frame | 290 MB of JPEG blobs in the tab |
+| JS heap after the decode | — | 11 MB (the blobs are not on the heap) |
+| track 1 subject @ 512 px | **149 s = 2.5 min**, 18.1 fps | not run |
+| peak process memory while tracking | **4.3 GB** RSS | — |
+| masks written | 2,700 PNGs, 23.8 MB | — |
+| re-cut 30–45 s afterwards | **0.5 s**, no upload | **64 s**, re-decoded from the `File`, no re-pick |
+| console errors | 0 | 0 |
+
+The gap in the first row is the whole argument for the two engines: ffmpeg reads
+the clip in one pass, while the tab pays for 2,700 individual `<video>` seeks.
+Both got there — `docs/w-long-loaded-browser.png` is the tab afterwards, scrubber
+reading *0 / 2699*, on the free engine with no server involved.
+
+The estimate the panel showed for that clip was *≈ 243 MB on the server ·
+tracking one subject ≈ 2m 9s at balanced · 768 px* (and *≈ 789 MB in this tab ·
+≈ 3m 38s* on the browser engine). The disk figure is deliberately conservative —
+it assumes 90 KB per 720p JPEG and the real clip came in at 51 KB — and the time
+figure comes from `TRACK_SIZES`, which is a median on the reference clip, not a
+promise. See [Estimates are estimates](#estimates-are-estimates).
+
+The two guardrails, fired for real:
+
+* the same clip looped to **5 minutes** (9,000 frames) on the browser engine —
+  *≈ 2.3 GB of frames and masks in this tab — it will work, but the local server
+  engine keeps them on disk instead. Switch engines, or trim.*
+  (`docs/w-long-estimate-5min.png`)
+* a **40-minute** clip (72,000 frames) posted to a server with 3.6 GB free —
+  `507 not enough disk for 72000 frames: 8.2 GB needed, 3.6 GB free. Trim the
+  clip, or free some space.` No frames were written.
 
 A camera recording has one wrinkle worth knowing: `MediaRecorder` WebM carries no
 duration in its header until it has been seeked past its end, so both the
@@ -967,8 +1062,10 @@ What you would actually have to do:
   immediately and the work is in the worker. `GET /status` already reports
   `done_frames`, `elapsed_s` and `image_size`.
 * **The free tier does not get worse.** The browser engine is the product for
-  most people, and it costs the operator nothing. The paid tier buys speed,
-  larger clips and 1024 px tracking — not the feature list.
+  most people, and it costs the operator nothing. Neither tier caps clip length.
+  The paid tier buys speed and 1024 px tracking — a 90-second clip opens in 3
+  seconds there against 5.7 minutes of `<video>` seeking in a tab — not the
+  feature list.
 
 ## Verification
 
@@ -977,9 +1074,19 @@ ffmpeg. No mocks.
 
 ```sh
 ./run.sh &
+node verify.mjs                     # defaults: :8765, sample.mp4, sample.jpg
+node verify-web.mjs                 # + docs/entry-clip.mp4
+env/venv/bin/python server/parity.py && GATE=1 env/venv/bin/python server/parity.py
+```
+
+Both suites run from a fresh clone with no arguments and no files to place:
+`sample.mp4` (5 s, 1280×720, 30 fps, 150 frames) and its first frame
+`sample.jpg` are committed for exactly that reason. Every argument is still
+positional and optional:
+
+```sh
 node verify.mjs     http://127.0.0.1:8765 clip.mp4 still.jpg
 node verify-web.mjs http://127.0.0.1:8765 clip.mp4 docs/entry-clip.mp4 still.jpg
-env/venv/bin/python server/parity.py && GATE=1 env/venv/bin/python server/parity.py
 ```
 
 `verify.mjs` drives the **server engine**: a still through every algorithm, a
@@ -1170,10 +1277,12 @@ What that means in practice:
 | the derived ONNX / CoreML graphs | Apache-2.0 (derived from the checkpoint) | no — regenerated or released separately |
 | [onnxruntime-web](https://github.com/microsoft/onnxruntime) in `web/ort/` | MIT | no — `setup.sh` fetches it from npm |
 | `docs/entry-clip.mp4` | Mixkit Free License | yes, **as a test fixture only** |
+| `sample.mp4` / `sample.jpg` | Mixkit Free License | yes, **as a test fixture only** |
 
-The Mixkit clip is in the repository because the tracking tests need a real
-video where something enters the shot; it is not redistributable as a stock
-asset and it is not part of the software. Everything else used while building
+The two Mixkit clips are in the repository because the tests need real video:
+`sample.mp4` is what both suites open when they are given no arguments, and
+`docs/entry-clip.mp4` is a shot where something enters frame partway through.
+Neither is redistributable as a stock asset and neither is part of the software. Everything else used while building
 this was a test input and is not here. `NOTICE` has the full attributions, and
 anyone bundling `web/ort/` must carry the MIT notice with it.
 
@@ -1380,13 +1489,16 @@ why the setting exists rather than a silently lowered default.
   (VP8 when alpha is asked for, because that is the codec Chrome carries an
   alpha plane in). The menu says which ones need the server and why.
 * **A GIF is built whole in memory.** One byte per pixel per frame: ~0.9 MB a
-  frame at 720p, so ~280 MB of scratch for a 300-frame clip.
+  frame at 720p — ~280 MB of scratch for a 300-frame clip, ~2.4 GB for a
+  90-second one. GIF is the one export where length really does bite.
 * **The export is paced in real time.** A frame that takes longer to dither than
   the clip's frame interval makes the file play slow; the export line says when
   that happened.
 * **Memory.** A 150-frame 720p clip is ~15 MB of JPEG blobs plus ~22 MB of mask
-  logits per subject. A 300-frame clip with six subjects is not a good idea in a
-  tab.
+  logits per subject; a 90-second one measured **290 MB** of blobs (the JS heap
+  stays ~11 MB — blobs do not live on it). The estimate panel adds it up before
+  you commit and suggests the server engine over ~2 GB. Six subjects on a long
+  clip is still not a good idea in a tab; it is just no longer forbidden.
 
 ### The server engine
 * **macOS + Apple Silicon, for the fast path.** Tracking is CoreML + MPS.
@@ -1400,8 +1512,10 @@ why the setting exists rather than a silently lowered default.
   fallback at all.
 * **One track at a time.** A process-wide lock serialises EdgeTAM; a second
   request gets a 409.
-* **Jobs are never garbage collected.** ~13 MB per 150-frame clip; delete by
-  hand. A hosted deployment needs a reaper before it needs a payment form.
+* **Jobs are never garbage collected.** ~13 MB per 150-frame clip, ~160 MB per
+  90-second one (137 MB of frames + 24 MB of masks per subject), and a re-cut
+  adds another job — hard-linked to the same source file, but with its own
+  frames. Delete by hand. A hosted deployment needs a reaper before it needs a payment form.
 * **`DV_API_KEY` is authentication, not authorisation.** One key, all or
   nothing, no accounts, no rate limiting, no metering. Put those in front of it.
 
@@ -1413,11 +1527,31 @@ why the setting exists rather than a silently lowered default.
 * **Error diffusion and Riemersma flicker on video.** That is inherent, not a bug
   — the UI marks them. Use dots / blue noise / Bayer / halftone for stable
   motion.
-* **Short clips.** 720p / 30 fps, 300 frames / 10 s by default. The camera
-  records up to 30 s, and the trim bar is how you get from one to the other.
-* **Trimming re-decodes.** The clip loads whole first so a drop is never blocked
-  on a second click; *use this range* then opens the same file again over the
-  chosen seconds. That is one extra decode, deliberately.
+<a id="estimates-are-estimates"></a>
+* **Estimates are estimates.** The panel quotes `TRACK_SIZES` fps, which is a
+  median measured on the reference clip with the CoreML backend. A 2,700-frame
+  run at 512 px estimated 1m 40s and took **2m 29s** (18.1 fps against a
+  quoted 27.0) — same order, not the same number. Thermals swing tracking up to
+  1.7× run to run, so a promise here would be a lie. The disk figure errs the
+  other way: 90 KB assumed per 720p JPEG, ~51 KB observed.
+* **Long clips cost linearly, and nothing stops you.** 720p / 30 fps, no frame
+  or second ceiling on either engine; the camera stops itself at five minutes.
+  What you get instead of a cap is the arithmetic up front and a warning over
+  60 s. Frames, masks and renders are all O(frames) — a 10-minute clip is
+  18,000 frames, ~900 MB of JPEGs and roughly 17 minutes of tracking per
+  subject at 512 px. That is allowed; it is just not free.
+* **`.dots.gz` tops out at 65,535 frames.** The container carries `n_frames` as
+  a `uint16` — 36 minutes at 30 fps. Both encoders raise rather than silently
+  wrapping. Video export has no such limit.
+* **The browser engine decodes one seek at a time.** `<video>` seeking is the
+  only frame-exact decode a page has, and it costs roughly a frame's worth of
+  wall clock each. The server's ffmpeg is orders of magnitude faster on the same
+  clip, which is what the >2 GB warning is nudging you towards.
+* **Trimming re-decodes — but only the first time costs an upload.** A clip
+  under a minute loads whole immediately so a drop is never blocked on a second
+  click; a longer one states its cost and waits. Either way *use this range*
+  afterwards re-cuts from bytes that are already here: the server's kept
+  `source.mp4`, or the tab's `File` handle.
 * **The camera needs a secure context.** `getUserMedia` exists on `https://` and
   on `localhost`, and nowhere else — a page served over plain http from another
   machine will not see it. No audio is recorded, ever.

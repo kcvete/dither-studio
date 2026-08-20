@@ -112,6 +112,10 @@ function encode(doc) {
   const subIdx = subs.map((s) => idxOf(s.color));
   const bgIndex = doc.bgIndex === undefined ? idxOf(doc.bg || pal[0]) : doc.bgIndex;
 
+  if (doc.frames.length > 65535) {
+    throw new Error('.dots carries n_frames as a uint16: ' + doc.frames.length
+      + ' frames is over the 65,535 limit (36 minutes at 30 fps)');
+  }
   const o = new Sink(1 << 20);
   o.u8(0x44); o.u8(0x4f); o.u8(0x54); o.u8(0x53);       // "DOTS"
   o.u8(1); o.u8(0);

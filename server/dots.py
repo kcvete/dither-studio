@@ -99,6 +99,10 @@ def encode(doc):
     if bg_index is None:
         bg_index = idx_of(doc.get('bg') or pal[0])
 
+    if len(doc['frames']) > 65535:
+        raise ValueError('.dots carries n_frames as a uint16: %d frames is over '
+                         'the 65,535 limit (36 minutes at 30 fps)'
+                         % len(doc['frames']))
     out = bytearray()
     out += MAGIC
     out.append(VERSION)

@@ -221,7 +221,11 @@ def _list_frames(d):
 
 
 def _load_mask(mdir, i, h, w, last):
+    # 4 digits for every clip that fits in 9,999 frames, 6 past that -- see
+    # server.pad_for. Reads accept either, so an old job still renders.
     p = os.path.join(mdir, '%04d.png' % i)
+    if not os.path.exists(p):
+        p = os.path.join(mdir, '%06d.png' % i)
     if os.path.exists(p):
         im = Image.open(p).convert('L')
         if im.size != (w, h):
@@ -410,7 +414,7 @@ def _frame_pixels(rgb, masks, a, blue, palettes, bg, alpha=False):
 
 # --------------------------------------------------------------- render
 def render(frames_dir, subjects, out_path, params=None, progress=None):
-    """frames_dir -- directory of %04d.jpg
+    """frames_dir -- directory of numbered .jpg frames
        subjects   -- [] for whole-frame, else [{'masks': dir, 'dot'|'palette': ...}]
        params     -- overrides for DEFAULTS
        progress   -- callable(done, total)

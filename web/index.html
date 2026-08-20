@@ -62,14 +62,16 @@
             <button class="btn go" id="bRec">record</button>
             <button class="btn" id="bCamOff">close camera</button>
           </div>
-          <div class="note" id="camnote">Up to 30 s, 1280×720 if the camera has it.
+          <div class="note" id="camnote">Up to 5 min, 1280×720 if the camera has it.
             A photo becomes a still to dither; a recording lands in the trim bar
             like any other clip.</div>
         </div>
         <div id="vidopts" hidden>
-          <div class="lbl"><span>Max length</span><span id="vSec">10 s</span></div>
-          <input type="range" id="sSec" min="1" max="10" step="1" value="10">
-          <div class="note">Clips are decoded to 720p / 30 fps, capped at 300 frames.</div>
+          <div class="lbl"><span>This clip</span><span id="vEst"></span></div>
+          <div class="note" id="estline">Clips are decoded to 720p / 30 fps.
+            Nothing is capped.</div>
+          <div class="note warn" id="estwarn" hidden></div>
+          <div class="note" id="estlong" hidden></div>
         </div>
         <div id="trimui" hidden>
           <div class="lbl"><span>Trim</span><span id="vTrim"></span></div>

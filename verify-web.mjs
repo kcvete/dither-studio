@@ -236,16 +236,24 @@ const maskAreas = (page) => page.evaluate(async () => {
 
 async function loadClip(page, file, seconds) {
   await openStep(page, 'st1');
-  if (seconds) {
-    // #sSec lives inside #vidopts, which take() only unhides once it knows the
-    // file is a video — so it is legitimately hidden at this point
-    await page.$eval('#sSec', (el, v) => {
-      el.value = String(v);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    }, seconds);
-  }
+  // There is no length cap to set any more. `seconds` is a request for a
+  // shorter TRIM, which DV_limit() arms before the drop — the page then opens
+  // the first `seconds` of the file instead of all of it.
+  if (seconds) await page.evaluate((v) => window.DV_limit(v), seconds);
   await page.setInputFiles('#file', file);
-  await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 300000 });
+  // Over a minute the page states its arithmetic and waits for a click rather
+  // than committing the tab to a long decode. That is the informed-consent
+  // gate, not a refusal: "whole clip" is the answer to it.
+  await page.waitForFunction(
+    () => window.DV.kind === 'video' || window.DV.awaitingChoice,
+    null, { timeout: 300000 });
+  if (await page.evaluate(() => window.DV.awaitingChoice)) {
+    await page.click('#bTrimAll');
+    // a long clip really does take minutes to decode in the tab — this is the
+    // one wait in the suite that must not use the 30 s default
+    await page.waitForFunction(() => window.DV.kind === 'video',
+                               null, { timeout: 1800000 });
+  }
   await sleep(500);
 }
 

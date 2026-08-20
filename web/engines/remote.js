@@ -35,6 +35,14 @@ export class RemoteEngine {
       // /api/upload_image + a one-frame /preview. Servers older than this
       // route say nothing, and the page keeps stills whole-image.
       stillSubjects: false,
+      // POST /api/jobs/<id>/reextract: a different trim out of the clip the
+      // server already has. Older servers say nothing and get a re-upload.
+      reextract: false,
+      // GET /api/extract/<ticket> while the upload POST is still running.
+      extractProgress: false,
+      // no 10 s / 300 frame ceiling. An old server still has one; the page
+      // says so rather than pretending the estimate applies.
+      uncapped: false,
       // filled in from /api/palettes; this is what a server too old to
       // advertise formats can be assumed to do
       formats: [{ id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', mime: 'video/mp4',
@@ -71,12 +79,20 @@ export class RemoteEngine {
   /* ------------------------------------------------------------ metadata */
   async init() {
     this.probe = await this.api('/api/meta');
+    this.supports.reextract = !!this.probe.reextract;
+    this.supports.extractProgress = !!this.probe.extract_progress;
+    this.supports.uncapped = !!this.probe.uncapped;
     return this;
   }
 
   async meta() {
     const m = await this.api('/api/palettes');
     this.supports.stillSubjects = !!m.segment_image;
+    if (m.reextract !== undefined) this.supports.reextract = !!m.reextract;
+    if (m.uncapped !== undefined) this.supports.uncapped = !!m.uncapped;
+    if (m.extract_progress !== undefined) {
+      this.supports.extractProgress = !!m.extract_progress;
+    }
     if (Array.isArray(m.formats) && m.formats.length) {
       this.supports.formats = m.formats.map((f) => Object.assign({
         available: true,
@@ -97,23 +113,95 @@ export class RemoteEngine {
     return Float32Array.from(j.tile);
   }
 
-  /* --------------------------------------------------------------- clip */
-  async open(file, { maxSeconds = 10, trimStart = 0, trimEnd = null,
-                    onProgress } = {}) {
+  /* --------------------------------------------------------------- clip
+   * Nothing is capped. The whole file goes up, ffmpeg's -ss/-t picks the
+   * range, and a two-minute clip is two minutes of frames. Because that is one
+   * long POST, the page polls /api/extract/<ticket> beside it: the upload
+   * bytes come from XHR's own progress events, the frames from ffmpeg's.
+   */
+  async open(file, { trimStart = 0, trimEnd = null, fps = 30,
+                     onProgress } = {}) {
+    const ticket = 't' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     if (onProgress) onProgress({ phase: 'upload', text: 'uploading ' + file.name + '…' });
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('max_seconds', String(maxSeconds));
-    // the whole file goes up either way; the trim is ffmpeg's -ss/-t, so the
-    // frames the server keeps are the ones the handles picked
+    fd.append('fps', String(fps));
     fd.append('trim_start', String(trimStart || 0));
     if (trimEnd) fd.append('trim_end', String(trimEnd));
-    const j = await this.api('/api/upload', {
-      method: 'POST', body: fd, headers: this.headers(),
-    });
+    fd.append('ticket', ticket);
+    const j = await this.post('/api/upload', fd, ticket, onProgress,
+                              'uploading ' + file.name);
     this.clip = { job: j.job, nFrames: j.n_frames, w: j.w, h: j.h, fps: j.fps,
                   trimStart: j.trim_start || 0, seconds: j.seconds };
     return this.clip;
+  }
+
+  /** A different range out of the clip the server already holds -- no upload.
+   *  Returns a NEW job: the old one's masks belong to the old range. */
+  async reopen({ trimStart = 0, trimEnd = null, fps = null,
+                 onProgress } = {}) {
+    if (!this.clip || !this.clip.job) throw new Error('no clip is open');
+    if (!this.supports.reextract) throw new Error('this server cannot re-extract');
+    const ticket = 'r' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const stop = this.watchExtract(ticket, onProgress, 're-extracting');
+    try {
+      const j = await this.api(`/api/jobs/${this.clip.job}/reextract`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trim_start: trimStart || 0,
+                               trim_end: trimEnd || null,
+                               fps: fps || undefined, ticket }),
+      });
+      this.clip = { job: j.job, nFrames: j.n_frames, w: j.w, h: j.h, fps: j.fps,
+                    trimStart: j.trim_start || 0, seconds: j.seconds };
+      return this.clip;
+    } finally { stop(); }
+  }
+
+  /** Poll the extraction ticket until told to stop. Silent on any failure --
+   *  it is a progress line, not a result. */
+  watchExtract(ticket, onProgress, verb) {
+    let live = !!(onProgress && this.supports.extractProgress);
+    const tick = async () => {
+      while (live) {
+        try {
+          const st = await this.api('/api/extract/' + ticket);
+          if (live && st && st.phase === 'extract' && st.total) {
+            onProgress({ phase: 'extract', done: st.done, total: st.total,
+                         text: `${verb}: ${st.done}/${st.total} frames…` });
+          }
+        } catch (e) { /* the POST is the one that matters */ }
+        await sleep(400);
+      }
+    };
+    tick();
+    return () => { live = false; };
+  }
+
+  /** POST a FormData with real upload progress, then extraction progress. */
+  post(path, fd, ticket, onProgress, verb) {
+    return new Promise((ok, no) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', this.url(path));
+      const h = this.headers();
+      Object.keys(h).forEach((k) => xhr.setRequestHeader(k, h[k]));
+      let stop = () => {};
+      xhr.upload.onprogress = (e) => {
+        if (!onProgress || !e.lengthComputable) return;
+        const pct = Math.round(100 * e.loaded / e.total);
+        onProgress({ phase: 'upload', done: e.loaded, total: e.total,
+                     text: `${verb}: ${pct}%…` });
+      };
+      xhr.upload.onload = () => { stop = this.watchExtract(ticket, onProgress, 'extracting'); };
+      xhr.onload = () => {
+        stop();
+        let j = null;
+        try { j = JSON.parse(xhr.responseText); } catch (e) { /* not json */ }
+        if (xhr.status >= 200 && xhr.status < 300) return ok(j);
+        no(new Error((j && j.detail) || (xhr.status + ' ' + xhr.statusText)));
+      };
+      xhr.onerror = () => { stop(); no(new Error('the server could not be reached')); };
+      xhr.send(fd);
+    });
   }
 
   /* --------------------------------------------------------------- still

@@ -22,6 +22,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from PIL import Image
 from pydantic import BaseModel
 
@@ -44,7 +45,17 @@ CFG = "configs/edgetam.yaml"
 DEVICE = os.environ.get("DV_DEVICE", "mps")
 COREML_DIR = os.path.join(ROOT, "env", "coreml")
 MAX_OBJECTS = 6
-API_VERSION = 1
+API_VERSION = 2
+# Frames on disk, measured: a 1280x720 `-q:v 3` JPEG out of ffmpeg is ~90 KB.
+# The disk check below scales it by the real pixel count.
+JPEG_BYTES_PER_FRAME = 90_000
+# .dots.gz carries n_frames as a uint16 (see dots.py). 65,535 frames is 36
+# minutes at 30 fps; the encoders raise rather than silently wrap.
+DOTS_MAX_FRAMES = 65535
+# Frames are decoded to this height (width follows the source aspect). 720 is
+# the historical value and stays the default; a 9:16 clip wants 1280 so its
+# masks come back at the resolution the phone will see.
+DECODE_HEIGHT = max(64, int(os.environ.get("DV_DECODE_HEIGHT", "720")))
 
 # Optional shared secret. Unset (the normal local case) = wide open on
 # 127.0.0.1. Set it and every /api/* call must carry `Authorization: Bearer
@@ -189,32 +200,134 @@ def ffprobe_json(path):
     return json.loads(out.stdout)
 
 
-def extract_frames(src, frames_dir, max_seconds, fps, max_frames,
-                   trim_start=0.0, trim_end=None):
-    """Decode the clip to frames, optionally only a slice of it.
+# Extraction progress, keyed by a client-invented ticket. The upload POST is
+# one long request, so the only way to show a 2-minute clip going by is a
+# second, cheap request the page can poll while the first one runs. Bounded:
+# tickets fall out after an hour.
+_extract = {}
+_extract_lock = threading.Lock()
+
+
+def _extract_set(ticket, **kw):
+    if not ticket:
+        return
+    with _extract_lock:
+        st = _extract.setdefault(ticket, {"phase": "queued", "done": 0,
+                                          "total": 0, "t": time.time()})
+        st.update(kw)
+        st["t"] = time.time()
+        if len(_extract) > 64:
+            cut = time.time() - 3600
+            for k in [k for k, v in _extract.items() if v["t"] < cut]:
+                _extract.pop(k, None)
+
+
+def plan_extraction(probe, fps, trim_start=0.0, trim_end=None):
+    """(t0, duration or None, expected frames, out w, out h) for a trim window.
+
+    There is no cap. `duration=None` means "to the end of the clip" -- ffmpeg
+    gets no `-t` at all, which is the honest way to say it when the container's
+    own duration is a lie (MediaRecorder WebM) or missing.
+    """
+    st = (probe.get("streams") or [{}])[0]
+    src_dur = float(probe.get("format", {}).get("duration")
+                    or st.get("duration") or 0.0)
+    t0 = max(0.0, float(trim_start or 0.0))
+    dur = None
+    if trim_end:
+        dur = max(0.05, float(trim_end) - t0)
+    if src_dur > 0:
+        avail = max(0.0, src_dur - t0)
+        dur = avail if dur is None else min(dur, avail)
+    span = dur if dur is not None else max(0.0, src_dur - t0)
+    n = int(round(span * fps)) if span > 0 else 0
+    w0, h0 = int(st.get("width") or 0), int(st.get("height") or 0)
+    if w0 and h0:
+        h = DECODE_HEIGHT
+        w = max(2, int(round(w0 * (h / h0) / 2)) * 2)
+    else:
+        w, h = 1280, DECODE_HEIGHT
+    return t0, dur, n, w, h
+
+
+def check_disk(target_dir, n_frames, w, h):
+    """Refuse before ffmpeg fills the volume, and say what it would have cost."""
+    per = JPEG_BYTES_PER_FRAME * max(1, w * h) / (1280 * 720)
+    need = int(max(1, n_frames) * per * 1.25) + (64 << 20)
+    try:
+        free = shutil.disk_usage(target_dir).free
+    except OSError:
+        return                                  # can't tell: don't invent a wall
+    if free < need:
+        raise HTTPException(
+            507, "not enough disk for %d frames: %.1f GB needed, %.1f GB free. "
+                 "Trim the clip, or free some space."
+                 % (n_frames, need / 1e9, free / 1e9))
+
+
+def pad_for(n_frames):
+    """Digits in a frame's filename. 4 keeps every existing job on disk
+    readable; past ~9,000 frames it widens so `sorted()` stays in order."""
+    return 4 if int(n_frames or 0) < 9000 else 6
+
+
+def pad_of(meta):
+    return int(meta.get("pad") or 4)
+
+
+def fname(n, pad=4, ext=".jpg"):
+    return "%0*d%s" % (pad, int(n), ext)
+
+
+def extract_frames(src, frames_dir, fps=30, trim_start=0.0, trim_end=None,
+                   probe=None, ticket=None, pad=None):
+    """Decode the clip to frames -- all of it, or exactly the trim range.
 
     `-ss` goes before `-i` so ffmpeg seeks instead of decoding-and-throwing-away;
-    modern ffmpeg is frame accurate there. The 10 s / 300 frame cap still
-    applies AFTER the trim, so a 4 s window out of a 30 s clip is 4 s of frames,
-    and a 25 s window is still the first 10 s of it.
+    modern ffmpeg is frame accurate there. Nothing is capped: a 4 s window out
+    of a 30 s clip is 4 s of frames, and no window at all is the whole clip.
+    ffmpeg's own `-progress` is piped back so a long extraction is visible.
     """
     os.makedirs(frames_dir, exist_ok=True)
-    t0 = max(0.0, float(trim_start or 0.0))
-    span = max_seconds if not trim_end else max(0.05, float(trim_end) - t0)
-    dur = min(float(max_seconds), span)
-    cmd = ["ffmpeg", "-v", "error", "-y"]
+    probe = probe if probe is not None else ffprobe_json(src)
+    t0, dur, n_expect, w, h = plan_extraction(probe, fps, trim_start, trim_end)
+    check_disk(os.path.dirname(frames_dir) or ".", n_expect, w, h)
+    pad = pad_for(n_expect) if pad is None else int(pad)
+    _extract_set(ticket, phase="extract", done=0, total=n_expect)
+
+    cmd = ["ffmpeg", "-v", "error", "-y", "-progress", "pipe:1", "-nostats"]
     if t0 > 0.01:
         cmd += ["-ss", "%.3f" % t0]
-    cmd += ["-i", src,
-            "-t", "%.3f" % dur,
-            "-vf", "scale=-2:720,fps=%d" % fps,
-            "-frames:v", str(max_frames),
+    cmd += ["-i", src]
+    if dur is not None:
+        cmd += ["-t", "%.3f" % dur]
+    cmd += ["-vf", "scale=-2:%d,fps=%d" % (DECODE_HEIGHT, fps),
             "-q:v", "3", "-start_number", "0",
-            os.path.join(frames_dir, "%04d.jpg")]
-    p = subprocess.run(cmd, capture_output=True, text=True)
+            os.path.join(frames_dir, "%%0%dd.jpg" % pad)]
+
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True)
+    err = []
+    # stderr has to be drained on its own thread or a chatty failure deadlocks
+    # against the -progress pipe we are reading here.
+    t = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
+    t.start()
+    for line in p.stdout:
+        if line.startswith("frame="):
+            try:
+                _extract_set(ticket, phase="extract",
+                             done=int(line.split("=", 1)[1].strip() or 0),
+                             total=n_expect)
+            except ValueError:
+                pass
+    p.wait()
+    t.join(timeout=5)
     if p.returncode != 0:
-        raise HTTPException(400, "ffmpeg failed: " + p.stderr[-600:])
-    return sorted(f for f in os.listdir(frames_dir) if f.endswith(".jpg"))
+        _extract_set(ticket, phase="error")
+        raise HTTPException(400, "ffmpeg failed: " + ("".join(err))[-600:])
+    files = sorted(f for f in os.listdir(frames_dir) if f.endswith(".jpg"))
+    _extract_set(ticket, phase="done", done=len(files), total=len(files))
+    return files
 
 
 # ------------------------------------------------------------------- model
@@ -367,6 +480,10 @@ def api_meta():
             "default_track_size": DEFAULT_TRACK_SIZE,
             "per_object_prompt_frames": True,
             "segment_image": True,
+            "uncapped": True,          # no 10 s / 300 frame ceiling on upload
+            "reextract": True,         # POST /api/jobs/<id>/reextract
+            "extract_progress": True,  # GET /api/extract/<ticket>
+            "dots_max_frames": DOTS_MAX_FRAMES,
             "formats": list(R.FORMATS)}
 
 
@@ -394,6 +511,12 @@ def palettes():
         "precision": _precision(_backend or BACKEND),
         "max_objects": MAX_OBJECTS,
         "segment_image": True,
+        "uncapped": True,
+        "reextract": True,
+        "extract_progress": True,
+        "dots_max_frames": DOTS_MAX_FRAMES,
+        "jpeg_bytes_per_frame": JPEG_BYTES_PER_FRAME,
+        "decode_height": DECODE_HEIGHT,
         "formats": [dict(id=k, **{x: v[x] for x in ("ext", "mime", "alpha", "label")})
                     for k, v in R.FORMATS.items()],
     }
@@ -449,29 +572,20 @@ async def upload_image(file: UploadFile = File(...), max_side: int = Form(1600))
             "natural_w": w0, "natural_h": h0}
 
 
-@app.post("/api/upload")
-async def upload(file: UploadFile = File(...), max_seconds: float = Form(10.0),
-                 fps: int = Form(30), max_frames: int = Form(300),
-                 trim_start: float = Form(0.0), trim_end: float | None = Form(None)):
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in (".mp4", ".mov", ".m4v", ".webm"):
-        raise HTTPException(400, "expected .mp4 / .mov / .webm")
-    jid = uuid.uuid4().hex[:12]
+def _open_clip(src, jid, filename, fps, trim_start, trim_end, ticket):
+    """Probe + extract + meta for one job directory. Blocking; callers hand it
+    to the threadpool so the event loop stays free to answer /api/extract."""
     d = os.path.join(JOBS, jid)
-    os.makedirs(d, exist_ok=True)
-    src = os.path.join(d, "source" + ext)
-    with open(src, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
     probe = ffprobe_json(src)
-    files = extract_frames(src, os.path.join(d, "frames"), max_seconds, fps,
-                           max_frames, trim_start, trim_end)
+    files = extract_frames(src, os.path.join(d, "frames"), fps,
+                           trim_start, trim_end, probe=probe, ticket=ticket)
     if not files:
         raise HTTPException(400, "no frames extracted")
     w, h = Image.open(os.path.join(d, "frames", files[0])).size
     meta = {
-        "job": jid, "source": os.path.basename(src), "filename": file.filename,
+        "job": jid, "source": os.path.basename(src), "filename": filename,
         "n_frames": len(files), "w": w, "h": h, "fps": fps,
+        "pad": len(os.path.splitext(files[0])[0]),
         "source_duration_s": float(probe.get("format", {}).get("duration") or 0),
         "trim_start": float(trim_start or 0.0),
         "trim_end": float(trim_end) if trim_end else None,
@@ -483,7 +597,82 @@ async def upload(file: UploadFile = File(...), max_seconds: float = Form(10.0),
     return {"job": jid, "n_frames": len(files), "w": w, "h": h, "fps": fps,
             "source_duration_s": meta["source_duration_s"],
             "trim_start": meta["trim_start"], "trim_end": meta["trim_end"],
-            "seconds": round(len(files) / max(1, fps), 3)}
+            "seconds": round(len(files) / max(1, fps), 3),
+            "dots_max_frames": DOTS_MAX_FRAMES}
+
+
+@app.get("/api/extract/{ticket}")
+def extract_progress(ticket: str):
+    """Where an in-flight /api/upload has got to. The upload is one long POST;
+    this is the only thing the page can ask while it is still running."""
+    with _extract_lock:
+        st = _extract.get(ticket)
+    return st or {"phase": "queued", "done": 0, "total": 0}
+
+
+@app.post("/api/upload")
+async def upload(file: UploadFile = File(...),
+                 fps: int = Form(30),
+                 trim_start: float = Form(0.0),
+                 trim_end: float | None = Form(None),
+                 ticket: str | None = Form(None),
+                 # accepted and ignored: older pages still send them, and the
+                 # answer to both is now "no cap"
+                 max_seconds: float | None = Form(None),
+                 max_frames: int | None = Form(None)):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".mp4", ".mov", ".m4v", ".webm"):
+        raise HTTPException(400, "expected .mp4 / .mov / .webm")
+    jid = uuid.uuid4().hex[:12]
+    d = os.path.join(JOBS, jid)
+    os.makedirs(d, exist_ok=True)
+    src = os.path.join(d, "source" + ext)
+    _extract_set(ticket, phase="upload", done=0, total=0)
+    await run_in_threadpool(_save_upload, file, src)
+    return await run_in_threadpool(_open_clip, src, jid, file.filename, fps,
+                                   trim_start, trim_end, ticket)
+
+
+def _save_upload(file, dst):
+    with open(dst, "wb") as f:
+        shutil.copyfileobj(file.file, f, 1 << 20)
+
+
+class ReextractReq(BaseModel):
+    trim_start: float = 0.0
+    trim_end: float | None = None
+    fps: int | None = None
+    ticket: str | None = None
+
+
+@app.post("/api/jobs/{jid}/reextract")
+async def reextract(jid: str, req: ReextractReq):
+    """A different range out of a clip that is already here.
+
+    The source file stays in the job directory, so changing your mind about the
+    trim costs one ffmpeg run and no upload. It lands in a NEW job -- the old
+    one's masks and renders belong to the old range and must not be confused
+    with the new one's.
+    """
+    d = job_dir(jid)
+    meta = read_meta(jid)
+    name = meta.get("source") or ""
+    src = os.path.join(d, name)
+    if not name or not os.path.exists(src):
+        raise HTTPException(404, "this job has no source clip to re-extract "
+                                 "from -- upload the file again")
+    njid = uuid.uuid4().hex[:12]
+    nd = os.path.join(JOBS, njid)
+    os.makedirs(nd, exist_ok=True)
+    nsrc = os.path.join(nd, name)
+    try:
+        os.link(src, nsrc)          # same volume: no second copy of the bytes
+    except OSError:
+        shutil.copyfile(src, nsrc)
+    return await run_in_threadpool(
+        _open_clip, nsrc, njid, meta.get("filename") or name,
+        int(req.fps or meta.get("fps") or 30), req.trim_start, req.trim_end,
+        req.ticket)
 
 
 @app.get("/api/jobs/{jid}/meta")
@@ -494,7 +683,8 @@ def get_meta(jid: str):
 
 @app.get("/api/jobs/{jid}/frame/{n}")
 def get_frame(jid: str, n: int):
-    p = os.path.join(job_dir(jid), "frames", "%04d.jpg" % n)
+    p = os.path.join(job_dir(jid), "frames",
+                     fname(n, pad_of(read_meta(jid)), ".jpg"))
     if not os.path.exists(p):
         raise HTTPException(404, "no such frame")
     return FileResponse(p, media_type="image/jpeg",
@@ -514,9 +704,10 @@ def get_mask(jid: str, obj: str, n: int, polish: int = 0):
         if not os.path.isdir(os.path.join(d, "masks", obj)):
             raise HTTPException(404, "no such mask")
         md, _ = PL.polished_dir(d, obj, polish)
-        p = os.path.join(md, "%04d.png" % n)
+        p = os.path.join(md, fname(n, pad_of(read_meta(jid)), ".png"))
     else:
-        p = os.path.join(d, "masks", obj, "%04d.png" % n)
+        p = os.path.join(d, "masks", obj,
+                         fname(n, pad_of(read_meta(jid)), ".png"))
     if not os.path.exists(p):
         raise HTTPException(404, "no such mask")
     return FileResponse(p, media_type="image/png",
@@ -628,6 +819,7 @@ def _track_worker(jid, d, req):
                 _set(jid, state="tracking", n_frames=n_frames)
 
                 meta = read_meta(jid)
+                mpad = pad_of(meta)
                 pairs = req.frames()
                 _apply_prompts(predictor, state, pairs, meta["w"], meta["h"])
                 _sync()
@@ -643,7 +835,8 @@ def _track_worker(jid, d, req):
                             Image.fromarray(
                                 (soft * 255.0).round().clip(0, 255).astype(np.uint8),
                                 mode="L"
-                            ).save(os.path.join(mroot, str(oid), "%04d.png" % int(fidx)))
+                            ).save(os.path.join(mroot, str(oid),
+                                                fname(fidx, mpad, ".png")))
                         seen.add(int(fidx))
                         el = time.perf_counter() - t0
                         _set(jid, done_frames=len(seen), elapsed_s=round(el, 2),
@@ -718,8 +911,9 @@ def preview(jid: str, req: TrackReq):
         raise HTTPException(400, "no subject is prompted on frame %d"
                             % req.frame_idx)
 
-    src = os.path.join(d, "frames", "%04d.jpg" % req.frame_idx)
-    one = os.path.join(d, "preview", "%04d" % req.frame_idx)
+    mpad = pad_of(meta)
+    src = os.path.join(d, "frames", fname(req.frame_idx, mpad, ".jpg"))
+    one = os.path.join(d, "preview", fname(req.frame_idx, mpad, ""))
     os.makedirs(one, exist_ok=True)
     link = os.path.join(one, "0000.jpg")
     if not os.path.exists(link):
