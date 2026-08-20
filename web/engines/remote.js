@@ -32,6 +32,9 @@ export class RemoteEngine {
       exportMime: 'video/mp4',
       exportExt: 'mp4',
       exportPlayable: true,
+      // /api/upload_image + a one-frame /preview. Servers older than this
+      // route say nothing, and the page keeps stills whole-image.
+      stillSubjects: false,
       // filled in from /api/palettes; this is what a server too old to
       // advertise formats can be assumed to do
       formats: [{ id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', mime: 'video/mp4',
@@ -73,6 +76,7 @@ export class RemoteEngine {
 
   async meta() {
     const m = await this.api('/api/palettes');
+    this.supports.stillSubjects = !!m.segment_image;
     if (Array.isArray(m.formats) && m.formats.length) {
       this.supports.formats = m.formats.map((f) => Object.assign({
         available: true,
@@ -110,6 +114,33 @@ export class RemoteEngine {
     this.clip = { job: j.job, nFrames: j.n_frames, w: j.w, h: j.h, fps: j.fps,
                   trimStart: j.trim_start || 0, seconds: j.seconds };
     return this.clip;
+  }
+
+  /* --------------------------------------------------------------- still
+   * The picture goes up once, as a job of one frame, and every click after
+   * that is a /preview on it -- one image encode and the SAM heads, no
+   * propagation and nothing re-uploaded. The page sends it already scaled to
+   * the size it prompts at, so clicks and masks share one coordinate space. */
+  async openStill(blob, { name = 'still.png', maxSide = 1600 } = {}) {
+    if (!this.supports.stillSubjects) {
+      throw new Error('this server has no /api/upload_image — update it, or '
+        + 'switch to the browser engine for subjects in a still');
+    }
+    const fd = new FormData();
+    fd.append('file', blob, name);
+    fd.append('max_side', String(maxSide));
+    const j = await this.api('/api/upload_image', {
+      method: 'POST', body: fd, headers: this.headers(),
+    });
+    this.clip = { job: j.job, nFrames: 1, w: j.w, h: j.h, fps: 1, still: true };
+    return Object.assign({ kind: 'image' }, this.clip);
+  }
+
+  /** Single-image segmentation: the one-frame preview, which is exactly what
+   *  the still flow wants. Masks come back at the job's own resolution. */
+  async segmentImage({ objects, imageSize }, onLog) {
+    if (onLog) onLog('reading the selection…');
+    return this.previewFrame({ frameIdx: 0, imageSize, objects });
   }
 
   jobPath(p) { return `/api/jobs/${this.clip.job}${p}`; }

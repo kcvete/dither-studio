@@ -214,6 +214,7 @@ export class BrowserEngine {
       exportMime: 'video/webm',
       exportExt: 'webm',
       exportPlayable: true,
+      stillSubjects: true,          // single-image segmentation, no propagation
       formats: browserFormats(),
     };
   }
@@ -319,6 +320,48 @@ export class BrowserEngine {
     this.masks.clear(); this.promptFrames.clear();
     return { job: 'local', nFrames: c.nFrames, w: c.w, h: c.h, fps: c.fps,
              trimStart: c.trimStart, seconds: c.seconds };
+  }
+
+  /* --------------------------------------------------------------- still
+   * A photograph is a clip of one frame. Saying it that way costs nothing and
+   * buys everything: trackerInput, promptTensor, maskBitmap and the mask cache
+   * all keep working, and single-image segmentation is the conditioning step
+   * the clip flow already runs on frame 0 -- with nothing after it. */
+  async openStill(blob, { w = 0, h = 0 } = {}) {
+    let W = w, H = h;
+    if (!W || !H) {
+      const b = await createImageBitmap(blob);
+      W = b.width; H = b.height; b.close?.();
+    }
+    this.clip = { frames: [blob], nFrames: 1, w: W, h: H, fps: 1, still: true };
+    this.masks.clear(); this.promptFrames.clear();
+    return { job: 'local', kind: 'image', nFrames: 1, w: W, h: H, fps: 1 };
+  }
+
+  /** One prompt, one answer, no propagation: encoder + heads_prompt (or
+   *  heads_mask), exactly the frame-0 preview path. The soft masks are kept
+   *  under this.masks so `mask(id, 0)` hands back the same full-resolution
+   *  upsample the tracked flow uses -- the still and the clip compose through
+   *  identical pixels. */
+  async segmentImage({ objects }, onLog) {
+    if (!this.clip || !this.clip.still) throw new Error('no still is open');
+    const t = await this.loadTracker(onLog);
+    const S = t.man.image_size;
+    const t0 = performance.now();
+    const rgba = await this.trackerInput(0, S);
+    const keep = new Set(objects.map((o) => String(o.id)));
+    for (const k of [...this.masks.keys()]) if (!keep.has(k)) this.masks.delete(k);
+    const out = [], notes = [];
+    for (const o of objects) {
+      const r = await this.resolvePrompt(o);
+      if (r.degraded) notes.push('#' + o.id + ': shape approximated as a box + a click');
+      t.reset();
+      const step = await this.stepPrompt(t, rgba, r);
+      this.masks.set(String(o.id), [step.low]);
+      out.push({ id: String(o.id), image: await this.mask(o.id, 0), area: step.area });
+    }
+    return { objects: out, elapsedS: (performance.now() - t0) / 1000,
+             imageSize: S, backend: this.ep, frameIdx: 0, note: notes.join(' · ') };
   }
 
   async frame(i) {

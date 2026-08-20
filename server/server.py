@@ -365,6 +365,7 @@ def api_meta():
             "track_sizes": [t["size"] for t in TRACK_SIZES],
             "default_track_size": DEFAULT_TRACK_SIZE,
             "per_object_prompt_frames": True,
+            "segment_image": True,
             "formats": list(R.FORMATS)}
 
 
@@ -391,9 +392,60 @@ def palettes():
         "default_track_size": DEFAULT_TRACK_SIZE,
         "precision": _precision(_backend or BACKEND),
         "max_objects": MAX_OBJECTS,
+        "segment_image": True,
         "formats": [dict(id=k, **{x: v[x] for x in ("ext", "mime", "alpha", "label")})
                     for k, v in R.FORMATS.items()],
     }
+
+
+IMAGE_MAX_SIDE = 4096
+
+
+@app.post("/api/upload_image")
+async def upload_image(file: UploadFile = File(...), max_side: int = Form(1600)):
+    """A still, as a one-frame job.
+
+    Everything downstream of a job -- /preview, /frame, /mask -- already works
+    on a single frame, so a still needs no second code path on this side: it
+    becomes a job whose n_frames is 1 and whose fps means nothing. Selecting a
+    subject in a photograph is then literally the same call the clip flow's
+    "preview this frame" button makes, which is why there is no propagation and
+    no second set of numbers to keep honest.
+
+    The page sends the picture already scaled to the size it prompts at, so the
+    click coordinates and the mask that comes back are in the same pixels.
+    `max_side` is the backstop for anything that arrives bigger.
+    """
+    raw = await file.read()
+    try:
+        im = Image.open(io.BytesIO(raw))
+        im.load()
+        im = im.convert("RGB")
+    except Exception as e:                                   # noqa: BLE001
+        raise HTTPException(400, "could not read that image: %s" % e)
+    w0, h0 = im.size
+    side = max(64, min(IMAGE_MAX_SIDE, int(max_side or 1600)))
+    if max(w0, h0) > side:
+        k = side / float(max(w0, h0))
+        im = im.resize((max(1, round(w0 * k)), max(1, round(h0 * k))),
+                       Image.LANCZOS)
+    w, h = im.size
+    jid = uuid.uuid4().hex[:12]
+    d = os.path.join(JOBS, jid)
+    os.makedirs(os.path.join(d, "frames"), exist_ok=True)
+    im.save(os.path.join(d, "frames", "0000.jpg"), quality=95)
+    meta = {
+        "job": jid, "kind": "image", "filename": file.filename,
+        "n_frames": 1, "w": w, "h": h, "fps": 1,
+        "natural_w": w0, "natural_h": h0,
+        "created": time.time(),
+    }
+    write_meta(jid, meta)
+    with _state_lock:
+        _jobs[jid] = new_status(1)
+    print("[image] %s: %dx%d (from %dx%d)" % (jid, w, h, w0, h0), flush=True)
+    return {"job": jid, "kind": "image", "n_frames": 1, "w": w, "h": h,
+            "natural_w": w0, "natural_h": h0}
 
 
 @app.post("/api/upload")
