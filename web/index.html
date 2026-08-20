@@ -226,6 +226,33 @@
             <button class="chip" data-compose="overlay" aria-pressed="false">keep scene</button>
           </div>
         </div>
+
+        <!-- The canvas: what shape the export comes out. 'source' is the
+             default and means every line of this is inert. -->
+        <div id="canvasui" hidden>
+          <div class="lbl"><span>Canvas</span><span id="vCanvas">source</span></div>
+          <div class="chips seg" id="canvaspresets"></div>
+          <div id="canvascustom" hidden>
+            <div class="mini"><span>width</span>
+              <input type="number" id="cvW" min="16" max="8192" step="2" value="1080"></div>
+            <div class="mini"><span>height</span>
+              <input type="number" id="cvH" min="16" max="8192" step="2" value="1920"></div>
+          </div>
+          <div id="canvasopts" hidden>
+            <div class="lbl"><span>Framing</span><span id="vFraming"></span></div>
+            <div class="chips seg" id="framing">
+              <button class="chip" data-framing="auto" aria-pressed="true">auto</button>
+              <button class="chip" data-framing="follow">follow</button>
+              <button class="chip" data-framing="static">hold still</button>
+            </div>
+            <div class="lbl"><span>Scale</span><span id="vZoom">1.00×</span></div>
+            <input type="range" id="sZoom" min="0.5" max="3" step="0.05" value="1">
+            <div class="chips" style="margin-top:7px">
+              <button class="chip" id="bCanvasCentre">recentre</button>
+            </div>
+          </div>
+          <div class="note" id="canvasnote"></div>
+        </div>
       </div>
     </section>
 
@@ -330,6 +357,9 @@
       <section class="step" id="sq3" data-open="0">
         <div class="sh"><i>3</i><span>Canvas</span><em id="sq3sum"></em></div>
         <div class="sb">
+          <div class="lbl"><span>Frame</span><span id="vSeqSize"></span></div>
+          <div class="chips seg" id="seqpresets"></div>
+          <div class="note" id="seqcanvasnote"></div>
           <div class="lbl"><span>Dot size</span><span id="vSeqDot">3 px</span></div>
           <input type="range" id="sSeqDot" min="1" max="8" step="1" value="3">
           <div class="lbl"><span>Background</span></div>
@@ -415,10 +445,11 @@
     </div>
 
     <div id="vwrap" hidden>
-      <div id="vstage">
+      <div id="vstage" data-canvas="0">
         <canvas id="vcv"></canvas>
         <div id="wipe" hidden><i></i><b></b><em>before</em><s>after</s></div>
       </div>
+      <div class="hint" id="cvhint" hidden>drag the picture to move the frame</div>
       <div id="transport">
         <button class="chip" id="bPlay" aria-pressed="false" hidden>play</button>
         <input type="range" id="sFrame" min="0" max="0" step="1" value="0" hidden>

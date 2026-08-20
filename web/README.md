@@ -15,6 +15,11 @@ app.js            Studio: source -> subjects -> look -> palette -> export
                   copy of the look — and its dots are re-derived on demand and
                   cached per (item, look).
 dither.js         the dithering engine (server/dither.py mirrors it exactly)
+canvas.js         the CANVAS: aspect-ratio presets, the one affine map from
+                  source pixels to output pixels, the gaussian that turns a
+                  per-frame mask centroid into a camera move, and the mask
+                  warp. No DOM, no engine — the export ships the map it
+                  produces to server/render.py, which only applies it
 polish.js         mask polish — motion-aware temporal smoothing of the tracker's
                   masks (server/polish.py mirrors it exactly)
 style.css

@@ -17,6 +17,7 @@ mode, everything else is flat background.
 web/dither.js + web/app.js reproduce all of this in the browser; parity.py
 is the gate that keeps the two honest.
 """
+import math
 import os
 import subprocess
 import threading
@@ -49,6 +50,25 @@ DEFAULTS = dict(
     frame_in=0, frame_out=None,
     # container: see FORMATS. 'format' picks the encoder, gif_fps only bites for GIF.
     format="mp4", gif_fps=None,
+    # THE CANVAS. None -- the default -- means the output is the frames' own
+    # size, which is what every caller before this one got. Otherwise a dict:
+    #
+    #   {"w": 1080, "h": 1920, "k": 2.667, "place": [[x0, y0], ...]}
+    #
+    # which is one affine map per frame of the window (or a single entry, used
+    # for all of them, when the frame holds still):
+    #
+    #   X = x * k + x0        x, y  in the source frame's pixels
+    #   Y = y * k + y0        X, Y  in the canvas's
+    #
+    # The CLIENT works those numbers out -- web/canvas.js -- because it is the
+    # one that can see the tracked subject and the user's dragging, and it
+    # hands over only where the crop ENDED UP. Nothing about following,
+    # smoothing or clamping is implemented here, so there is no second opinion
+    # to drift from the preview's. The matched original cut and the .dots
+    # export take the same block, which is what keeps the three files framed
+    # identically.
+    canvas=None,
 )
 
 
@@ -113,6 +133,68 @@ def ffmpeg_cmd(fmt, W, H, fps, out_path, gif_fps=None, input_args=None):
     else:
         raise RuntimeError("unknown format %r" % fmt)
     return cmd + [out_path]
+
+# ---------------------------------------------------------------- canvas
+def canvas_plan(a, n_frames=1):
+    """Validate a request's canvas block, or None.
+
+    Everything that can be wrong with it is wrong here rather than three
+    hundred frames into an encode: a size that is not a positive even pair (no
+    H.264 encoder takes an odd dimension), a scale that is not finite, an empty
+    or wrongly-sized place list.
+    """
+    c = a.get("canvas")
+    if not c:
+        return None
+    try:
+        tw, th = int(c["w"]), int(c["h"])
+        k = float(c["k"])
+        place = [(float(p[0]), float(p[1])) for p in (c.get("place") or [])]
+    except (KeyError, TypeError, ValueError, IndexError) as e:
+        raise RuntimeError("bad canvas block: %s" % e)
+    if tw < 2 or th < 2 or tw % 2 or th % 2:
+        raise RuntimeError("canvas must be a positive even size, got %dx%d" % (tw, th))
+    if not (k > 0) or not math.isfinite(k):
+        raise RuntimeError("canvas scale must be positive and finite, got %r" % k)
+    if not place:
+        raise RuntimeError("canvas has no placement")
+    if len(place) != 1 and len(place) != n_frames:
+        raise RuntimeError("canvas has %d placements for %d frames"
+                           % (len(place), n_frames))
+    return {"tw": tw, "th": th, "k": k, "place": place}
+
+
+def _at(plan, i):
+    p = plan["place"]
+    return p[0] if len(p) == 1 else p[min(i, len(p) - 1)]
+
+
+def _affine(plan, i):
+    """PIL's AFFINE coefficients for the INVERSE map (canvas -> source), which
+    is the direction a resampler reads in."""
+    k = plan["k"]
+    x0, y0 = _at(plan, i)
+    return (1.0 / k, 0.0, -x0 / k, 0.0, 1.0 / k, -y0 / k)
+
+
+def warp_rgb(rgb, plan, i):
+    """One frame, mapped onto the canvas. Bilinear, black outside the source --
+    which only shows where a crop was deliberately taken wider than the frame;
+    a `cutout` paints its flat background over it anyway."""
+    im = Image.fromarray(np.ascontiguousarray(rgb, np.uint8), "RGB")
+    out = im.transform((plan["tw"], plan["th"]), Image.AFFINE, _affine(plan, i),
+                       resample=Image.BILINEAR, fillcolor=(0, 0, 0))
+    return np.asarray(out, np.uint8)
+
+
+def warp_mask(m, plan, i):
+    """The same map over a float coverage mask. 'F' mode, so the soft edge
+    survives the resample instead of being rounded to 8 bits twice."""
+    im = Image.fromarray(np.ascontiguousarray(m, np.float32), "F")
+    out = im.transform((plan["tw"], plan["th"]), Image.AFFINE, _affine(plan, i),
+                       resample=Image.BILINEAR, fillcolor=0.0)
+    return np.asarray(out, np.float32)
+
 
 PALETTES = DI.PALETTES
 MODES = DI.MODES
@@ -470,7 +552,13 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
         palettes.append(_subject_palette(s, i, bg))
     dots_cols = [palettes[i + 1][-1] for i in range(len(subjects))]
 
-    F = dots_fields(H, W, a, blue) if a['mode'] == 'dots' else None
+    # the canvas: the OUTPUT size, which is the frames' own unless one is asked
+    # for. The dot grid is built on the output, not the source, which is what
+    # makes a 1080x1920 cutout real dots at 1080x1920 rather than an upscale.
+    plan = canvas_plan(a, len(files))
+    OW, OH = (plan['tw'], plan['th']) if plan else (W, H)
+
+    F = dots_fields(OH, OW, a, blue) if a['mode'] == 'dots' else None
 
     fmt = str(a.get('format') or 'mp4')
     if fmt not in FORMATS:
@@ -478,7 +566,7 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
                            % (fmt, ', '.join(FORMATS)))
     alpha = FORMATS[fmt]['alpha']
     p = subprocess.Popen(
-        ffmpeg_cmd(fmt, W, H, a['fps'], out_path, a.get('gif_fps')),
+        ffmpeg_cmd(fmt, OW, OH, a['fps'], out_path, a.get('gif_fps')),
         stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
     last = [None] * len(subjects)
@@ -490,6 +578,9 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
             for k, s in enumerate(subjects):
                 last[k] = _load_mask(s['masks'], base + i, H, W, last[k])
                 masks.append(last[k])
+            if plan:
+                rgb = warp_rgb(rgb, plan, i)
+                masks = [warp_mask(m, plan, i) for m in masks]
             if a['mode'] == 'dots':
                 canvas = _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha)
             else:
@@ -505,7 +596,8 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
     err = p.stderr.read().decode('utf-8', 'replace')
     if p.wait() != 0:
         raise RuntimeError('ffmpeg failed: ' + err[-800:])
-    return {'out': out_path, 'frames': total, 'w': W, 'h': H, 'format': fmt,
+    return {'out': out_path, 'frames': total, 'w': OW, 'h': OH, 'format': fmt,
+            'src_w': W, 'src_h': H, 'canvas': bool(plan),
             'first_frame': base, 'last_frame': base + total - 1,
             'bytes': os.path.getsize(out_path)}
 
@@ -623,6 +715,36 @@ def render_original(frames_dir, out_path, params=None, progress=None):
                       .convert('RGB')).shape[:2]
     total = len(files)
 
+    # A canvas is a MOVING crop, so the image2 fast path -- which hands ffmpeg
+    # the JPEGs untouched -- cannot express it. The pair has to be framed
+    # identically or it is not a pair, so a canvas takes the frame-by-frame
+    # path and the same warp the render used.
+    plan = canvas_plan(a, total)
+    if plan:
+        OW, OH = plan['tw'], plan['th']
+        p = subprocess.Popen(ffmpeg_cmd(fmt, OW, OH, fps, out_path),
+                             stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            for i, fn in enumerate(files):
+                rgb = np.asarray(Image.open(os.path.join(frames_dir, fn))
+                                 .convert('RGB'))
+                p.stdin.write(np.ascontiguousarray(warp_rgb(rgb, plan, i),
+                                                   np.uint8).tobytes())
+                if progress:
+                    progress(i + 1, total)
+        finally:
+            try:
+                p.stdin.close()
+            except Exception:
+                pass
+        err = p.stderr.read().decode('utf-8', 'replace')
+        if p.wait() != 0:
+            raise RuntimeError('ffmpeg failed: ' + err[-800:])
+        return {'out': out_path, 'frames': total, 'w': OW, 'h': OH,
+                'format': fmt, 'src_w': W, 'src_h': H, 'canvas': True,
+                'first_frame': base, 'last_frame': base + total - 1,
+                'bytes': os.path.getsize(out_path)}
+
     run = _numbered_run(frames_dir, files)
     if run:
         cmd = ffmpeg_cmd(fmt, W, H, fps, out_path,
@@ -678,7 +800,9 @@ def render_dots(frames_dir, subjects, params=None, progress=None):
     H, W = np.asarray(Image.open(os.path.join(frames_dir, files[0])).convert('RGB')).shape[:2]
     bg = a['bg']
     blue = blue_noise(64, int(a['seed'])).astype(np.float32)
-    F = dots_fields(H, W, a, blue)
+    plan = canvas_plan(a, len(files))
+    OW, OH = (plan['tw'], plan['th']) if plan else (W, H)
+    F = dots_fields(OH, OW, a, blue)
     cols = [_subject_palette(s, i, bg)[-1] for i, s in enumerate(subjects)]
 
     last = [None] * len(subjects)
@@ -690,10 +814,13 @@ def render_dots(frames_dir, subjects, params=None, progress=None):
         for k, s in enumerate(subjects):
             last[k] = _load_mask(s['masks'], base + i, H, W, last[k])
             masks.append(last[k])
+        if plan:
+            rgb = warp_rgb(rgb, plan, i)
+            masks = [warp_mask(m, plan, i) for m in masks]
         frames.append([dot_positions(on, F) for on in dots_on(rgb, masks, a, F)])
         if progress:
             progress(i + 1, total)
-    return dict(w=W, h=H, fps=int(a['fps']), dotpx=int(a['dotpx']),
+    return dict(w=OW, h=OH, fps=int(a['fps']), dotpx=int(a['dotpx']),
                 palette=[bg] + cols, bg=bg, bg_index=0, first_frame=base,
                 subjects=[{'color': c} for c in cols], frames=frames)
 

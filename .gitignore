@@ -32,6 +32,10 @@ docs/o-original-cut.mp4
 docs/w-original-cut.webm
 docs/w-original-dithered.webm
 docs/w-original-ref-*.png
+# the canvas run's 9:16 pair in the tab — regenerable, and the numbers are in
+# the report; the contact sheets beside them are the evidence and stay
+docs/w-canvas-916-dithered.webm
+docs/w-canvas-916-original.webm
 # the range run's pair and its reference frames, same reasoning
 docs/w-range-dithered.webm
 docs/w-range-original.webm

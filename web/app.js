@@ -22,6 +22,7 @@
 
 import { chooseEngine, probeRemote, loadPref, savePref,
          BrowserEngine, RemoteEngine } from './engines/index.js';
+import * as CV from './canvas.js';
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -97,7 +98,17 @@ const S = {
   // colour and the transition that leads into it.
   view: 'studio', library: [], strip: [], sel: null, seqDoc: null,
   returnToSeq: false, pendingImage: null,
-  seq: { dotpx: 3, bg: '#c9d4c5', fps: 30, format: '' },
+  seq: { dotpx: 3, bg: '#c9d4c5', fps: 30, format: '', preset: 'source', w: 0, h: 0 },
+  /* THE CANVAS. `preset` is one of web/canvas.js's, and 'source' -- the
+   * default -- means everything below is inert and the tool behaves exactly as
+   * it did before there was a canvas at all. `follow` is the framing: 'auto'
+   * decides between holding still and tracking the subject by asking whether
+   * the subject ever leaves a fixed frame. `dx`/`dy` are the manual bias, as a
+   * FRACTION of the source frame, that dragging the preview adds to the
+   * smoothed path — a fraction and not pixels, because the preview, a still's
+   * native-resolution export and the server are three different grids. */
+  canvas: { preset: 'source', w: 1080, h: 1920, follow: 'auto', zoom: 1,
+            dx: 0, dy: 0 },
 };
 const E = () => S.engine;
 
@@ -707,6 +718,7 @@ function showSteps(kind) {
     if (!st.hidden) $('.sh i', st).textContent = ++n;
   });
   paintToSeq();
+  paintCanvasUI();
   if (S.view === 'sequence') renderAdd();
 }
 
@@ -875,6 +887,9 @@ const flatBg = () => composeMatters() && S.P.compose === 'cutout';
 function paintCompose() {
   $('#composeui').hidden = !composeMatters();
   $('#bgui').hidden = !flatBg();
+  // a cutout and an overlay want different crops (one clamps, one does not),
+  // so the canvas note and the follow-or-hold answer move with this
+  paintCanvasUI();
 }
 
 /* Step 2 is "track subjects through a clip" or "select subjects in a photo".
@@ -2018,6 +2033,402 @@ function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
   return { out, lit };
 }
 
+/* ================================================== the canvas (aspect) ===
+ * Everything above renders at the size of what came in. This is the part that
+ * says "no, 1080x1920" — and it is deliberately one affine map (web/canvas.js)
+ * applied in one place, because the same three numbers have to reach the
+ * preview, the export, the matched original cut and the .dots.gz or the four
+ * of them stop being the same picture.
+ *
+ * Two behaviours, chosen by what is on screen rather than by a mode switch:
+ *
+ *   cutout      the background is flat, so nothing can fall off the edge. The
+ *               crop is NOT clamped to the source and the subject sits where
+ *               the path puts it; the dots are re-measured on the canvas, so a
+ *               9:16 export is 1080x1920 of real dots and not an upscale.
+ *   overlay /   the footage is visible, so the crop window is clamped inside
+ *   whole-frame the source and there is no zoom by default: the crop is the
+ *               largest rectangle of the target aspect that fits, scaled up to
+ *               the target's pixels. That upscale is real and the UI says so.
+ */
+const CPATH = { key: null, centers: null, union: null, n: 0 };
+
+/** The source's own pixel size for the flow that is open. */
+function srcSize() {
+  if (S.kind === 'image') return [S.natW || 1, S.natH || 1];
+  return [S.W || 1, S.H || 1];
+}
+
+/** The output size, or null when the canvas is the source's own.
+ *
+ *  `CANVAS_OFF` is how the SEQUENCE captures: an item is the material, at the
+ *  frame it was tracked in, and the strip has a frame size of its own — so a
+ *  studio set to 9:16 must not bake 9:16 into the dot cloud it hands over. */
+let CANVAS_OFF = 0;
+async function withoutCanvas(fn) {
+  CANVAS_OFF++;
+  try { return await fn(); } finally { CANVAS_OFF--; }
+}
+function canvasTarget() {
+  if (CANVAS_OFF) return null;
+  const [sw, sh] = srcSize();
+  return CV.targetSize(S.canvas, sw, sh);
+}
+const canvasOn = () => !!canvasTarget();
+
+/** Whether the crop has to stay inside the source: true wherever real footage
+ *  is visible, false for a cutout, which has nothing behind it to run out of. */
+const canvasClamps = () => !(usingSubjects() && S.P.compose !== 'overlay');
+
+/** The framing actually in force. 'auto' answers itself, and answers it
+ *  against the CROP THAT IS SET rather than once and for all: a subject that
+ *  never leaves a 16:9 frame may well leave a 1:1 one. Cheap enough to ask on
+ *  every paint — it is one rectangle against another. */
+function framing() {
+  const f = S.canvas.follow;
+  if (f === 'follow' || f === 'static') return f;
+  if (!CPATH.union || !CPATH.centers || CPATH.centers.length < 2) return 'static';
+  const [sw, sh] = srcSize();
+  const t = canvasTarget() || { w: sw, h: sh };
+  const crop = CV.cropRect(sw, sh, t.w, t.h, S.canvas.zoom);
+  const u = CPATH.union;
+  return CV.fitsStatic({ x0: u.x0 * sw, y0: u.y0 * sh, x1: u.x1 * sw, y1: u.y1 * sh },
+                       crop) ? 'static' : 'follow';
+}
+
+/* Which path we are holding. The centres are NORMALISED (0..1 of the source),
+ * so one path serves the preview, a still's native-resolution export and the
+ * server, none of which are looking at the same pixel grid. */
+function pathKey() {
+  return JSON.stringify([S.kind, E() && E().id, S.job, S.nFrames,
+                         // a still has no job id to change, so it is identified
+                         // by the file itself — two photographs dropped one
+                         // after the other must not share a crop centre
+                         S.kind === 'image' ? [S.fileName, S.natW, S.natH] : 0,
+                         usingSubjects() ? S.subjects.map((s) => s.id) : [],
+                         S.kind === 'image' ? S.stillMasks.size : 0]);
+}
+
+/** One frame's subject centroid, as a fraction of the frame, from the masks
+ *  themselves. Small on purpose: a centroid does not need 720p. */
+const PATH_W = 160;
+function centroidFromBitmaps(bmps, sw, sh) {
+  const w = PATH_W, h = Math.max(1, Math.round(w * sh / sw));
+  let n = 0, sx = 0, sy = 0, x0 = w, y0 = h, x1 = -1, y1 = -1;
+  bmps.forEach((bmp, k) => {
+    const c = ctx2d(w, h, 'cp' + (k & 3));
+    c.clearRect(0, 0, w, h);
+    c.drawImage(bmp, 0, 0, w, h);
+    const d = c.getImageData(0, 0, w, h).data;
+    for (let y = 0, q = 0; y < h; y++) {
+      for (let x = 0; x < w; x++, q++) {
+        if (d[q * 4] < 128) continue;
+        n++; sx += x; sy += y;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  });
+  if (!n) return { ok: false, x: 0.5, y: 0.5, box: null };
+  return { ok: true, x: (sx / n + 0.5) / w, y: (sy / n + 0.5) / h,
+           box: { x0: x0 / w, y0: y0 / h, x1: (x1 + 1) / w, y1: (y1 + 1) / h } };
+}
+
+/** Build (or reuse) the per-frame crop centres for whatever is open.
+ *
+ *  A tracked clip walks its masks once — through the server's own arithmetic
+ *  where there is a server, because 900 mask PNGs over HTTP to work out 900
+ *  centres is silly — smooths the result over +/-15 frames, and remembers the
+ *  union box so "auto" can answer the hold-still question. Everything else
+ *  (a whole-frame clip, a still with no subject) is one fixed centre. */
+async function ensureCanvasPath(onProgress) {
+  const key = pathKey();
+  if (CPATH.key === key) return CPATH;
+  const centre = { ok: true, x: 0.5, y: 0.5, box: null };
+  if (S.kind === 'image') {
+    const ms = usingSubjects()
+      ? S.subjects.map((s) => S.stillMasks.get(s.id)).filter(Boolean) : [];
+    const c = ms.length ? centroidFromBitmaps(ms, S.W || 1, S.H || 1) : centre;
+    Object.assign(CPATH, { key, centers: [[c.x, c.y]], union: c.box, n: 1 });
+    return CPATH;
+  }
+  if (S.kind !== 'video' || !usingSubjects() || !S.tracked) {
+    Object.assign(CPATH, { key, centers: [[0.5, 0.5]], union: null,
+                           n: S.nFrames || 1 });
+    return CPATH;
+  }
+  const n = S.nFrames;
+  const ids = S.subjects.map((s) => s.id);
+  let raw = null;
+  if (E().centroids) {
+    try { raw = await E().centroids(ids); } catch (err) { raw = null; }
+  }
+  if (!raw) {
+    raw = [];
+    for (let i = 0; i < n; i++) {
+      const bmps = await Promise.all(ids.map((id) => E().mask(id, i)));
+      raw.push(centroidFromBitmaps(bmps, S.W, S.H));
+      bmps.forEach((b) => b.close && b.close());
+      if (onProgress && (i & 7) === 0) {
+        onProgress({ done: i + 1, total: n, text: `framing ${i + 1}/${n}` });
+      }
+      if ((i & 7) === 7) await sleep(0);
+    }
+  }
+  const sm = CV.smoothPath(raw, 15);
+  let union = null;
+  raw.forEach((p) => {
+    if (!p.ok || !p.box) return;
+    union = union ? { x0: Math.min(union.x0, p.box.x0), y0: Math.min(union.y0, p.box.y0),
+                      x1: Math.max(union.x1, p.box.x1), y1: Math.max(union.y1, p.box.y1) }
+                  : Object.assign({}, p.box);
+  });
+  Object.assign(CPATH, { key, n, centers: sm.map((p) => [p.x, p.y]), union });
+  return CPATH;
+}
+
+/** The centre the crop sits on for frame `i`, in source pixels. Falls back to
+ *  the frame's own centre until the path has been built. */
+function centreAt(i, sw, sh) {
+  const p = CPATH.centers;
+  if (!p || !p.length) return { x: sw / 2, y: sh / 2 };
+  if (framing() === 'static' || p.length === 1) {
+    if (CPATH.union && framing() === 'static' && p.length > 1) {
+      return { x: (CPATH.union.x0 + CPATH.union.x1) / 2 * sw,
+               y: (CPATH.union.y0 + CPATH.union.y1) / 2 * sh };
+    }
+    const c = p[0];
+    return { x: c[0] * sw, y: c[1] * sh };
+  }
+  const c = p[clamp(i | 0, 0, p.length - 1)];
+  return { x: c[0] * sw, y: c[1] * sh };
+}
+
+/** The affine map for one frame, or null when there is no canvas. */
+function canvasPlanAt(i, sw, sh) {
+  const t = canvasTarget();
+  if (!t) return null;
+  const c = centreAt(i, sw, sh);
+  const plan = CV.place({ sw, sh, tw: t.w, th: t.h,
+                          cx: c.x + S.canvas.dx * sw,
+                          cy: c.y + S.canvas.dy * sh,
+                          zoom: S.canvas.zoom, clamp: canvasClamps() });
+  return Object.assign(plan, { tw: t.w, th: t.h, overlay: canvasClamps() });
+}
+
+/* Scratch coverage buffers for the warped masks — one per subject slot. */
+const WBUF = {};
+function wbuf(n, slot) {
+  let a = WBUF[slot];
+  if (!a || a.length !== n) a = WBUF[slot] = new Float32Array(n);
+  return a;
+}
+
+/** Source pixels and masks, both mapped onto the canvas. `drawSrc` paints the
+ *  source at its own coordinates; the transform does the rest. */
+function onCanvas(drawSrc, sw, sh, masks, plan, slot) {
+  const { tw, th } = plan;
+  const c = ctx2d(tw, th, slot);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.clearRect(0, 0, tw, th);
+  if (plan.overlay) { c.fillStyle = '#000'; c.fillRect(0, 0, tw, th); }
+  c.imageSmoothingQuality = 'high';
+  c.setTransform(plan.k, 0, 0, plan.k, plan.x0, plan.y0);
+  drawSrc(c);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  const src = c.getImageData(0, 0, tw, th).data;
+  const out = masks.map((m, k) => CV.warpMask(m, sw, sh, wbuf(tw * th, slot + k),
+                                              tw, th, plan, CV.maskBox(m, sw, sh)));
+  return { src, masks: out, W: tw, H: th };
+}
+
+/** What the export ships to the server: the map itself, already worked out,
+ *  one entry per frame of the window. Nothing about HOW the crop was chosen
+ *  crosses the wire — only where it ended up — so server/render.py has no
+ *  second opinion about following, clamping or smoothing to drift from. */
+function canvasPayload(rng) {
+  const t = canvasTarget();
+  if (!t) return null;
+  const [sw, sh] = srcSize();
+  const r = rng || activeRange();
+  const place = [];
+  if (S.kind === 'image' || framing() === 'static') {
+    const p = canvasPlanAt(0, sw, sh);
+    place.push([+p.x0.toFixed(3), +p.y0.toFixed(3)]);
+    return { w: t.w, h: t.h, k: +p.k.toFixed(6), place };
+  }
+  let k = 1;
+  for (let i = r.in; i <= r.out; i++) {
+    const p = canvasPlanAt(i, sw, sh);
+    k = p.k;
+    place.push([+p.x0.toFixed(3), +p.y0.toFixed(3)]);
+  }
+  return { w: t.w, h: t.h, k: +k.toFixed(6), place };
+}
+
+/* ------------------------------------------------------------ the controls */
+/** '1080×1920 · 9:16' — what the export is about to be. */
+function canvasLabel() {
+  const t = canvasTarget();
+  if (!t) return 'source';
+  const p = CV.presetOf(S.canvas.preset);
+  return `${t.w}×${t.h}` + (p.id === 'custom' ? '' : ` · ${p.label}`);
+}
+/** The bit that goes in a filename: 9:16 is not a legal one. */
+function canvasSlug() {
+  const t = canvasTarget();
+  if (!t) return '';
+  return S.canvas.preset === 'custom' ? `${t.w}x${t.h}`
+    : S.canvas.preset.replace(':', 'x');
+}
+
+const canvasOffered = () => S.kind === 'image' || S.kind === 'video';
+
+function buildCanvasPresets() {
+  const wrap = $('#canvaspresets');
+  if (!wrap || wrap.childElementCount) return;
+  CV.PRESETS.forEach((p) => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.dataset.preset = p.id; b.textContent = p.label;
+    b.title = p.note;
+    b.addEventListener('click', () => setCanvasPreset(p.id));
+    wrap.append(b);
+  });
+}
+
+function paintCanvasUI() {
+  const box = $('#canvasui');
+  if (!box) return;
+  box.hidden = !canvasOffered();
+  if (box.hidden) return;
+  buildCanvasPresets();
+  $$('#canvaspresets .chip').forEach((b) => b.setAttribute(
+    'aria-pressed', String(b.dataset.preset === S.canvas.preset)));
+  $('#canvascustom').hidden = S.canvas.preset !== 'custom';
+  const t = canvasTarget();
+  $('#vCanvas').textContent = canvasLabel();
+  $('#canvasopts').hidden = !t;
+  $('#cvhint').hidden = !t || S.kind === 'none';
+  $('#vstage').dataset.canvas = t ? '1' : '0';
+  $$('#framing .chip').forEach((b) => b.setAttribute(
+    'aria-pressed', String(b.dataset.framing === S.canvas.follow)));
+  $('#vFraming').textContent = S.canvas.follow === 'auto'
+    ? 'auto · ' + framing() : framing();
+  $('#sZoom').value = String(S.canvas.zoom);
+  $('#vZoom').textContent = S.canvas.zoom.toFixed(2) + '×';
+  const note = $('#canvasnote');
+  if (!t) {
+    note.textContent = 'The export is whatever came in. Pick a shape and both '
+      + 'the render and the matched original cut come out at exactly that size.';
+    note.classList.remove('warn');
+    return;
+  }
+  const [sw, sh] = srcSize();
+  const plan = canvasPlanAt(S.cur | 0, sw, sh);
+  const up = plan ? plan.k : 1;
+  const cropping = canvasClamps();       // real footage: a crop, and an upscale
+  const lines = [`${t.w}×${t.h}.`];
+  if (cropping) {
+    lines.push(`A ${(t.w / up).toFixed(0)}×${(t.h / up).toFixed(0)} crop of the `
+      + `${sw}×${sh} source, scaled ${up.toFixed(2)}× to fill it`
+      + (up > 1.05 ? ' — real footage, really upscaled.' : '.'));
+    if (S.kind === 'video' && usingSubjects()) {
+      lines.push(framing() === 'follow'
+        ? 'The crop follows the tracked subject, smoothed over ±15 frames.'
+        : 'The crop holds still on the subject’s whole-clip box; the subject '
+          + 'moves inside it.');
+    } else {
+      lines.push('Nothing is tracked here, so the crop is centred. Drag the '
+        + 'picture to move it.');
+    }
+  } else {
+    lines.push('A cutout has no background to run out of, so the dots are '
+      + 'measured on the canvas itself: they come out at '
+      + `${t.w}×${t.h}, crisp, not scaled up. Dot size stays ${S.P.dotpx} px `
+      + 'of the OUTPUT.');
+    if (S.kind === 'video' && usingSubjects()) {
+      lines.push(framing() === 'follow'
+        ? 'The frame follows the subject, smoothed over ±15 frames.'
+        : 'The frame holds still; the subject moves inside it.');
+    }
+  }
+  if (S.canvas.dx || S.canvas.dy) lines.push('Nudged by hand — “recentre” undoes it.');
+  note.textContent = lines.join(' ');
+  note.classList.toggle('warn', cropping && up > 1.6);
+}
+
+/** Change the shape. The path is rebuilt (it decides follow-or-hold against
+ *  the new crop) and the picture redrawn — asynchronously, because a tracked
+ *  clip's path is a walk over its masks. */
+async function applyCanvas() {
+  paintCanvasUI();
+  if (canvasOn()) {
+    try { await ensureCanvasPath(); } catch (err) { /* the fallback centre */ }
+  }
+  paintCanvasUI();                        // the framing answer may have moved
+  await draw();
+  return canvasTarget();
+}
+
+function setCanvasPreset(id) {
+  S.canvas.preset = id;
+  S.canvas.dx = 0; S.canvas.dy = 0;
+  return applyCanvas();
+}
+
+$('#sZoom') && $('#sZoom').addEventListener('input', (e) => {
+  S.canvas.zoom = +e.target.value;
+  applyCanvas();
+});
+$$('#framing .chip').forEach((b) => b.addEventListener('click', () => {
+  S.canvas.follow = b.dataset.framing;
+  applyCanvas();
+}));
+$('#bCanvasCentre') && $('#bCanvasCentre').addEventListener('click', () => {
+  S.canvas.dx = 0; S.canvas.dy = 0;
+  applyCanvas();
+});
+['#cvW', '#cvH'].forEach((sel) => {
+  const el = $(sel);
+  if (!el) return;
+  el.addEventListener('change', () => {
+    S.canvas.w = Math.max(16, +$('#cvW').value || 1080);
+    S.canvas.h = Math.max(16, +$('#cvH').value || 1920);
+    applyCanvas();
+  });
+});
+
+/* Drag the picture to move the frame. The bias is stored as a fraction of the
+ * source, so it survives a switch between the preview's pixels and the
+ * export's, and it is ADDED to the smoothed path rather than replacing it —
+ * a followed subject stays followed, just off to one side. */
+let CVDRAG = null;
+$('#vcv').addEventListener('pointerdown', (e) => {
+  if (!canvasOn() || S.compare) return;
+  const [sw, sh] = srcSize();
+  const plan = canvasPlanAt(S.cur | 0, sw, sh);
+  if (!plan) return;
+  const r = $('#vcv').getBoundingClientRect();
+  CVDRAG = { x: e.clientX, y: e.clientY, dx: S.canvas.dx, dy: S.canvas.dy,
+             // client px -> canvas px -> source px -> fraction of the source
+             sx: (plan.tw / r.width) / plan.k / sw,
+             sy: (plan.th / r.height) / plan.k / sh };
+  $('#vcv').setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+$('#vcv').addEventListener('pointermove', (e) => {
+  if (!CVDRAG) return;
+  S.canvas.dx = CVDRAG.dx - (e.clientX - CVDRAG.x) * CVDRAG.sx;
+  S.canvas.dy = CVDRAG.dy - (e.clientY - CVDRAG.y) * CVDRAG.sy;
+  paintCanvasUI();
+  if (!S.playing) draw();
+});
+const cvDragEnd = () => { CVDRAG = null; };
+$('#vcv').addEventListener('pointerup', cvDragEnd);
+$('#vcv').addEventListener('pointercancel', cvDragEnd);
+
 /* ========================================================== the main draw */
 let BLUE = null;
 let drawSeq = 0;
@@ -2052,12 +2463,23 @@ function paint(cv, srcData, W, H, masks, opts) {
   }
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
   const g = cv.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
   g.putImageData(new ImageData(out, W, H), 0, 0);
   if (S.compare && opts && opts.original) {
     const x = Math.round(clamp(S.split, 0, 1) * W);
     if (x > 0) {
       g.save(); g.beginPath(); g.rect(0, 0, x, H); g.clip();
-      g.drawImage(opts.original, 0, 0, W, H); g.restore();
+      // the "before" half is the same frame on the same canvas: a wipe that
+      // compared a cropped render against an uncropped source would be
+      // comparing two different pictures
+      const pl = opts.plan;
+      if (pl) {
+        g.setTransform(pl.k, 0, 0, pl.k, pl.x0, pl.y0);
+        g.drawImage(opts.original, 0, 0, opts.srcW, opts.srcH);
+      } else {
+        g.drawImage(opts.original, 0, 0, W, H);
+      }
+      g.restore();
     }
   }
   return { lit, ms: performance.now() - t0 };
@@ -2070,12 +2492,21 @@ async function draw(i) {
     const c = ctx2d(w, h, 'src');
     c.clearRect(0, 0, w, h);
     c.drawImage(S.bitmap, 0, 0, w, h);
-    const src = c.getImageData(0, 0, w, h).data;
+    let src = c.getImageData(0, 0, w, h).data;
     if (seq !== drawSeq) return;
-    const masks = usingSubjects() ? stillMasksAt(w, h) : [];
-    const r = paint($('#vcv'), src, w, h, masks, { original: S.bitmap });
-    $('#fps').textContent = `${w}×${h} · ${r.ms.toFixed(0)} ms`
+    let masks = usingSubjects() ? stillMasksAt(w, h) : [];
+    let W = w, H = h;
+    const plan = canvasPlanAt(0, w, h);
+    if (plan) {
+      const on = onCanvas((g) => g.drawImage(S.bitmap, 0, 0, w, h), w, h,
+                          masks, plan, 'cvs');
+      src = on.src; masks = on.masks; W = on.W; H = on.H;
+    }
+    const r = paint($('#vcv'), src, W, H, masks,
+                    { original: S.bitmap, plan, srcW: w, srcH: h });
+    $('#fps').textContent = `${W}×${H} · ${r.ms.toFixed(0)} ms`
       + (S.P.mode === 'dots' ? ` · ${r.lit} dots` : '');
+    paintCanvasUI();
     return;
   }
   if (S.kind !== 'video') return;
@@ -2084,10 +2515,18 @@ async function draw(i) {
   if (seq !== drawSeq) return;
   const c = ctx2d(S.W, S.H, 'src');
   c.drawImage(bmp.frame, 0, 0);
-  const src = c.getImageData(0, 0, S.W, S.H).data;
-  const masks = await masksFor(idx, bmp, 'm');
+  let src = c.getImageData(0, 0, S.W, S.H).data;
+  let masks = await masksFor(idx, bmp, 'm');
   if (seq !== drawSeq) return;
-  const r = paint($('#vcv'), src, S.W, S.H, masks, { original: bmp.frame });
+  let W = S.W, H = S.H;
+  const plan = canvasPlanAt(idx, S.W, S.H);
+  if (plan) {
+    const on = onCanvas((g) => g.drawImage(bmp.frame, 0, 0), S.W, S.H,
+                        masks, plan, 'cvs');
+    src = on.src; masks = on.masks; W = on.W; H = on.H;
+  }
+  const r = paint($('#vcv'), src, W, H, masks,
+                  { original: bmp.frame, plan, srcW: S.W, srcH: S.H });
   S.cur = idx;
   $('#fcount').textContent = `${idx} / ${S.nFrames - 1}`;
   $('#sFrame').value = idx;
@@ -2478,15 +2917,22 @@ async function composeAt(i, opts) {
   const c = ctx2d(S.W, S.H, 'exp');
   c.clearRect(0, 0, S.W, S.H);
   c.drawImage(rec.frame, 0, 0);
-  const src = c.getImageData(0, 0, S.W, S.H).data;
-  const masks = await masksFor(i, rec, 'x');
+  let src = c.getImageData(0, 0, S.W, S.H).data;
+  let masks = await masksFor(i, rec, 'x');
+  let W = S.W, H = S.H;
+  const plan = canvasPlanAt(i, S.W, S.H);
+  if (plan) {
+    const on = onCanvas((g) => g.drawImage(rec.frame, 0, 0), S.W, S.H,
+                        masks, plan, 'cvx');
+    src = on.src; masks = on.masks; W = on.W; H = on.H;
+  }
   const pal = palettesForRender();
   // `alpha` is the transparent exports: same pixels, background keyed out
   const P = (opts && opts.alpha) ? Object.assign({}, S.P, { alpha: true }) : S.P;
   const out = (S.P.mode === 'dots' && masks.length)
-    ? renderDots(src, S.W, S.H, masks, P, pal, S.bg, BLUE).out
-    : Dither.composeFrame(src, S.W, S.H, masks, P, pal, S.bg);
-  return new ImageData(out, S.W, S.H);
+    ? renderDots(src, W, H, masks, P, pal, S.bg, BLUE).out
+    : Dither.composeFrame(src, W, H, masks, P, pal, S.bg);
+  return new ImageData(out, W, H);
 }
 
 /** The clip's own frame `i`, at the render's size and nothing else done to it.
@@ -2495,6 +2941,20 @@ async function composeAt(i, opts) {
  *  picture frame i of the dithered render was made from. */
 async function originalAt(i) {
   const rec = await frameAt(i);
+  const plan = canvasPlanAt(i, S.W, S.H);
+  if (plan) {
+    // the matched cut follows the identical crop path — that is the whole of
+    // "the two lay on top of each other in an edit" once there is a crop
+    const c = ctx2d(plan.tw, plan.th, 'exo');
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, plan.tw, plan.th);
+    c.fillStyle = '#000'; c.fillRect(0, 0, plan.tw, plan.th);
+    c.imageSmoothingQuality = 'high';
+    c.setTransform(plan.k, 0, 0, plan.k, plan.x0, plan.y0);
+    c.drawImage(rec.frame, 0, 0);
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    return c.getImageData(0, 0, plan.tw, plan.th);
+  }
   const c = ctx2d(S.W, S.H, 'exp');
   c.clearRect(0, 0, S.W, S.H);
   c.drawImage(rec.frame, 0, 0);
@@ -2525,16 +2985,24 @@ function composeStill(w, h, opts) {
   const c = ctx2d(w, h, 'exp');
   c.clearRect(0, 0, w, h);
   c.drawImage(S.bitmap, 0, 0, w, h);
-  const src = c.getImageData(0, 0, w, h).data;
-  const masks = usingSubjects() ? stillMasksAt(w, h, 'xm') : [];
+  let src = c.getImageData(0, 0, w, h).data;
+  let masks = usingSubjects() ? stillMasksAt(w, h, 'xm') : [];
+  let W = w, H = h;
+  const plan = canvasPlanAt(0, w, h);
+  if (plan) {
+    const on = onCanvas((g) => g.drawImage(S.bitmap, 0, 0, w, h), w, h,
+                        masks, plan, 'cvi');
+    src = on.src; masks = on.masks; W = on.W; H = on.H;
+  }
   const P = (opts && opts.alpha) ? Object.assign({}, S.P, { alpha: true }) : S.P;
   const pal = palettesForRender();
   if (S.P.mode === 'dots') {
-    const r = renderDots(src, w, h, masks.length ? masks : [fullMask(w, h)],
+    const r = renderDots(src, W, H, masks.length ? masks : [fullMask(W, H)],
                          P, pal, S.bg, BLUE);
-    return { out: r.out, lit: r.lit, masks };
+    return { out: r.out, lit: r.lit, masks, w: W, h: H };
   }
-  return { out: Dither.composeFrame(src, w, h, masks, P, pal, S.bg), lit: 0, masks };
+  return { out: Dither.composeFrame(src, W, H, masks, P, pal, S.bg),
+           lit: 0, masks, w: W, h: H };
 }
 
 async function exportPNG() {
@@ -2545,20 +3013,21 @@ async function exportPNG() {
   try {
     // re-render at the source's native resolution, not the preview's
     const alpha = alphaMatters() && S.pngAlpha;
-    const { out, lit } = composeStill(S.natW, S.natH, { alpha });
+    const { out, lit, w: ow, h: oh } = composeStill(S.natW, S.natH, { alpha });
     const cv = document.createElement('canvas');
-    cv.width = S.natW; cv.height = S.natH;
-    cv.getContext('2d').putImageData(new ImageData(out, S.natW, S.natH), 0, 0);
+    cv.width = ow; cv.height = oh;
+    cv.getContext('2d').putImageData(new ImageData(out, ow, oh), 0, 0);
     const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
     const dl = $('#dl');
     if (dl.dataset.url) URL.revokeObjectURL(dl.dataset.url);
     const url = URL.createObjectURL(blob);
     dl.dataset.url = url; dl.href = url;
     dl.download = `${S.fileName || 'dither'}-${S.P.mode}`
-      + (alpha ? '-alpha' : '') + '.png';
+      + (canvasOn() ? '-' + canvasSlug() : '') + (alpha ? '-alpha' : '') + '.png';
     dl.hidden = false;
     const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
-    box.textContent = `${S.natW}×${S.natH} PNG · ${(blob.size / 1024).toFixed(0)} KB`
+    box.textContent = `${ow}×${oh} PNG · ${(blob.size / 1024).toFixed(0)} KB`
+      + (canvasOn() ? ` · ${canvasLabel()}` : '')
       + (S.P.mode === 'dots' ? ` · ${lit} dots` : '')
       + (usingSubjects() ? ` · ${S.stillMasks.size} subject`
         + `${S.stillMasks.size > 1 ? 's' : ''}, ${S.P.compose}` : '')
@@ -2682,9 +3151,23 @@ async function exportClip() {
   try {
     const fmt = currentFormat();
     const rng = activeRange();
+    if (canvasOn()) {
+      lab.textContent = 'framing…';
+      await ensureCanvasPath((pr) => { lab.textContent = pr.text; });
+    }
+    const canvas = canvasPayload(rng);
     const params = Object.assign({}, S.P, {
       bg: S.bg, palette: S.palette, fps: S.fps,
       format: fmt.id, gif_fps: S.gifFps,
+      /* THE CANVAS, already worked out. `place` is one [x0, y0] per frame of
+       * the window (or one for the whole of it, when the frame holds still),
+       * and `k` the scale: server/render.py applies exactly these numbers, and
+       * so does the browser engine below, so the render, the matched cut and
+       * the dot data cannot disagree about where the crop was. */
+      canvas,
+      // the browser engine records onto a canvas of `source`'s size
+      ...(canvas ? { source: { w: canvas.w, h: canvas.h,
+                               nFrames: S.nFrames, fps: S.fps } } : {}),
       // the window, on both engines: server/render.frame_range slices the
       // frames directory, the browser engine walks the same indices
       frame_in: rng.in, frame_out: rng.out,
@@ -2701,7 +3184,8 @@ async function exportClip() {
     if (r.url.startsWith('blob:')) S.exportURL = r.url;
     const dl = $('#dl');
     dl.href = r.url;
-    dl.download = `${S.fileName || 'dither'}-${S.P.mode}.${r.ext}`;
+    dl.download = `${S.fileName || 'dither'}-${S.P.mode}`
+      + (canvas ? '-' + canvasSlug() : '') + `.${r.ext}`;
     dl.hidden = false;
     if (r.image) { const im = $('#outimg'); im.src = r.url; im.hidden = false; }
     else if (r.playable) { const v = $('#outvid'); v.src = r.url; v.hidden = false; }
@@ -2709,6 +3193,7 @@ async function exportClip() {
     box.textContent = `rendered ${r.frames} frames in ${r.elapsedS.toFixed(1)} s `
       + `(${r.fps.toFixed(1)} fps)`
       + (rng.whole ? '' : ` · frames ${rng.in}–${rng.out} of ${S.nFrames}`)
+      + (canvas ? ` · ${canvas.w}×${canvas.h}` : '')
       + (r.bytes ? ` · ${(r.bytes / 1e6).toFixed(1)} MB` : '')
       + (r.note ? ` · ${r.note}` : '');
     $('#s5sum').textContent = 'ready';
@@ -2763,7 +3248,8 @@ async function exportOriginalCut(params, r, prog, bar, lab) {
     S.exportOrigURL = o.url.startsWith('blob:') ? o.url : null;
     const a = $('#dlorig');
     a.href = o.url;
-    a.download = `${S.fileName || 'dither'}-${S.P.mode}.original.${o.ext}`;
+    a.download = `${S.fileName || 'dither'}-${S.P.mode}`
+      + (canvasOn() ? '-' + canvasSlug() : '') + `.original.${o.ext}`;
     a.hidden = false;
     $('#dl').textContent = 'download the dithered';
     return `original cut: ${o.frames} frames, ${o.ext.toUpperCase()}`
@@ -2810,6 +3296,9 @@ function dotsParams(rng) {
     stray: S.P.stray, band: S.P.band, gamma: S.P.gamma, invert: S.P.invert,
     seed: S.P.seed, bg: S.bg, fps: S.fps,
     frame_in: r.in, frame_out: r.out,
+    // the dot data carries the canvas too: a .dots.gz written for a 9:16
+    // export has 9:16 in its header and positions inside it
+    canvas: canvasPayload(r),
     subjects: S.subjects.map((x) => ({ id: x.id, palette: x.palette,
                                       polish: x.polish | 0 })),
   };
@@ -2834,11 +3323,19 @@ async function dotsDocStill(whole) {
   c.drawImage(S.bitmap, 0, 0, w, h);
   const src = c.getImageData(0, 0, w, h).data;
   const use = !whole && usingSubjects();
-  const masks = use ? stillMasksAt(w, h, 'xm') : [fullMask(w, h)];
-  const r = dotsOn(src, w, h, masks, S.P, BLUE);
+  let masks = use ? stillMasksAt(w, h, 'xm') : [fullMask(w, h)];
+  let sd = src, W = w, H = h;
+  const plan = canvasPlanAt(0, w, h);
+  if (plan) {
+    const on = onCanvas((g) => g.drawImage(S.bitmap, 0, 0, w, h), w, h,
+                        masks, plan, 'cvd');
+    sd = on.src; W = on.W; H = on.H;
+    masks = use ? on.masks : [fullMask(W, H)];
+  }
+  const r = dotsOn(sd, W, H, masks, S.P, BLUE);
   const cols = use ? S.subjects.map((x) => x.palette[x.palette.length - 1])
     : [S.palette[S.palette.length - 1]];
-  const doc = { w, h, fps: 1, dotpx: S.P.dotpx,
+  const doc = { w: W, h: H, fps: 1, dotpx: S.P.dotpx,
                 palette: [S.bg].concat(cols), bgIndex: 0, bg: S.bg,
                 subjects: cols.map((col) => ({ color: col })),
                 frames: [r.on.map((o) => dotXY(r.F, o))] };
@@ -2854,6 +3351,7 @@ async function dotsDoc(onProgress, rng) {
   // the active range by default; the sequence asks for the whole clip, because
   // a strip entry carries its own in/out and can be widened later
   const R0 = rng || activeRange();
+  if (canvasOn()) await ensureCanvasPath(onProgress);
   const params = dotsParams(R0);
   const key = JSON.stringify([E().id, S.job, S.nFrames, params]);
   if (DOTS_CACHE && DOTS_CACHE.key === key) return DOTS_CACHE;
@@ -2864,21 +3362,30 @@ async function dotsDoc(onProgress, rng) {
     doc = await P.unpack(bytes);
   } else {
     const frames = [];
+    let DW = S.W, DH = S.H;
     for (let i = R0.in; i <= R0.out; i++) {
       const rec = await frameAt(i);
       const c = ctx2d(S.W, S.H, 'exp');
       c.clearRect(0, 0, S.W, S.H);
       c.drawImage(rec.frame, 0, 0);
-      const src = c.getImageData(0, 0, S.W, S.H).data;
-      const masks = await masksFor(i, rec, 'x');
-      const r = dotsOn(src, S.W, S.H, masks, S.P, BLUE);
+      let src = c.getImageData(0, 0, S.W, S.H).data;
+      let masks = await masksFor(i, rec, 'x');
+      let W = S.W, H = S.H;
+      const plan = canvasPlanAt(i, S.W, S.H);
+      if (plan) {
+        const on = onCanvas((g) => g.drawImage(rec.frame, 0, 0), S.W, S.H,
+                            masks, plan, 'cvd');
+        src = on.src; masks = on.masks; W = on.W; H = on.H;
+      }
+      DW = W; DH = H;
+      const r = dotsOn(src, W, H, masks, S.P, BLUE);
       frames.push(r.on.map((o) => dotXY(r.F, o)));
       if (onProgress) onProgress({ done: frames.length, total: R0.n,
                                    text: `${frames.length}/${R0.n}` });
       if (i % 8 === 0) await sleep(0);
     }
     const cols = S.subjects.map((x) => x.palette[x.palette.length - 1]);
-    doc = { w: S.W, h: S.H, fps: S.fps, dotpx: S.P.dotpx,
+    doc = { w: DW, h: DH, fps: S.fps, dotpx: S.P.dotpx,
             palette: [S.bg].concat(cols), bgIndex: 0, bg: S.bg,
             subjects: cols.map((c) => ({ color: c })), frames };
     bytes = await P.pack(doc);
@@ -3139,8 +3646,8 @@ async function captureClip() {
   // material, and stripAdd() seeds the ENTRY's in/out from the active range
   const whole = { in: 0, out: Math.max(0, S.nFrames - 1),
                   n: Math.max(1, S.nFrames), whole: true };
-  const { doc } = await dotsDoc((pr) => seqInfo('reading dot positions ' + pr.text),
-                                whole);
+  const { doc } = await withoutCanvas(() => dotsDoc(
+    (pr) => seqInfo('reading dot positions ' + pr.text), whole));
   const source = E().snapshot ? E().snapshot() : null;
   if (!source) throw new Error('this engine has no handle on that clip');
   const subs = doc.subjects.map((sub, k) => ({
@@ -3192,7 +3699,7 @@ async function captureStill(opts) {
   const had = S.library.find((x) => x.kind === 'still' && x.capKey === key
                                  && x.src.bitmap === S.bitmap);
   if (had) return had;
-  const { doc } = await dotsDocStill(whole);
+  const { doc } = await withoutCanvas(() => dotsDocStill(whole));
   const use = !whole && usingSubjects();
   const subs = doc.subjects.map((sub, k) => ({
     id: use ? ((S.subjects[k] || {}).id || (k + 1)) : 1,
@@ -3269,8 +3776,67 @@ function paintShape(c, src, W, H) {
   else drawRing(c, W, H);
 }
 
-const seqW = () => (S.library[0] ? S.library[0].w : (S.W || 1280));
-const seqH = () => (S.library[0] ? S.library[0].h : (S.H || 720));
+/* ------------------------------------------------------- the seq's frame ===
+ * A .dots.gz has exactly one frame size, so the strip has one too. The default
+ * is the first item's — which is what it always was — and the presets are the
+ * studio's, out of the same table. Items that are not that shape are FITTED
+ * into it (contain, centred) rather than left sitting off centre: a dot cloud
+ * is positions, so re-placing one is arithmetic and loses nothing.
+ */
+const seqSource = () => ({ w: S.library[0] ? S.library[0].w : (S.W || 1280),
+                           h: S.library[0] ? S.library[0].h : (S.H || 720) });
+function seqTarget() {
+  const src = seqSource();
+  return CV.targetSize({ preset: S.seq.preset, w: S.seq.w, h: S.seq.h },
+                       src.w, src.h) || src;
+}
+const seqW = () => seqTarget().w;
+const seqH = () => seqTarget().h;
+
+/** One item's tracks, placed on the sequence's frame. A no-op when the item
+ *  already is that shape, which is the common case and the old behaviour.
+ *
+ *  Two rules, both of them about what dot positions can and cannot survive:
+ *
+ *    NEVER MAGNIFY.  Scaling positions up spreads the cloud without growing
+ *      the dots, so a 2.6x "fit" is the same subject with gaps between its
+ *      dots. The scale is therefore min(1, contain) — shrink to fit if the
+ *      item is too big for the frame, otherwise leave the spacing exactly as
+ *      it was captured. (The studio's canvas has no such limit because it
+ *      re-measures the dots on the new frame; a strip item is positions, and
+ *      re-deriving every item on every preset click is not what this control
+ *      is for.)
+ *    CENTRE THE CLOUD, not the frame the cloud came out of. A subject that sat
+ *      in the left third of a 16:9 clip belongs in the middle of a 9:16
+ *      sequence, and the empty pixels around it were never in the file.
+ */
+function fitTracks(tracks, iw, ih, W, H) {
+  if (!iw || !ih || (iw === W && ih === H)) return tracks;
+  const k = Math.min(1, W / iw, H / ih);
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  tracks.forEach((t) => t.frames.forEach((f) => {
+    for (let i = 0; i < f.length; i += 2) {
+      if (f[i] < x0) x0 = f[i];
+      if (f[i] > x1) x1 = f[i];
+      if (f[i + 1] < y0) y0 = f[i + 1];
+      if (f[i + 1] > y1) y1 = f[i + 1];
+    }
+  }));
+  const cx = x1 < x0 ? iw / 2 : (x0 + x1) / 2;
+  const cy = y1 < y0 ? ih / 2 : (y0 + y1) / 2;
+  const ox = W / 2 - cx * k, oy = H / 2 - cy * k;
+  return tracks.map((t) => ({
+    color: t.color,
+    frames: t.frames.map((f) => {
+      const out = new Uint16Array(f.length);
+      for (let i = 0; i < f.length; i += 2) {
+        out[i] = clamp(Math.round(f[i] * k + ox), 0, W - 1);
+        out[i + 1] = clamp(Math.round(f[i + 1] * k + oy), 0, H - 1);
+      }
+      return out;
+    }),
+  }));
+}
 const seqColor = () => (S.library[0] ? S.library[0].tracks[0].color
   : (S.subjects[0] ? S.subjects[0].palette.slice(-1)[0] : '#b0413e'));
 
@@ -3387,9 +3953,11 @@ async function ensureStrip(onProgress) {
 }
 
 function seqItems() {
+  const W = seqW(), H = seqH();
   return S.strip.map((inst, i) => {
     const it = libOf(inst.lib) || { name: '?' };
-    return { name: `${i + 1}. ${it.name}`, tracks: stripTracks(inst),
+    return { name: `${i + 1}. ${it.name}`,
+             tracks: fitTracks(stripTracks(inst), it.w, it.h, W, H),
              cell: inst.look ? inst.look.cell : 0,
              transition: i > 0 ? inst.trans : null };
   });
@@ -4005,11 +4573,24 @@ function renderStrip() {
     ? `${S.strip.length} item${S.strip.length > 1 ? 's' : ''}` : '';
   $('#sq4sum').textContent = S.strip.length
     ? `${frames}f + ${joins} join${joins === 1 ? '' : 's'}` : '';
-  const mixed = S.strip.some((x) => {
+  /* The old warning was "these items are different sizes, so the rest will sit
+   * off centre" — which they no longer do: fitTracks centres every one of them
+   * on the strip's frame. What is left worth saying is the ACCIDENTAL case:
+   * the frame is whatever the first item happened to be and the others are
+   * being placed against it without anyone having chosen that. Choose a preset
+   * and the Canvas step's own note explains what it does instead. */
+  const mixed = (S.seq.preset || 'source') === 'source' && S.strip.some((x) => {
     const it = libOf(x.lib);
     return it && (it.w !== seqW() || it.h !== seqH());
   });
   $('#seqwarn').hidden = !mixed;
+  if (mixed) {
+    $('#seqwarn').textContent = `Some items are not ${seqW()}×${seqH()}, which `
+      + "is the first item's frame — their dots are centred on it, and shrunk "
+      + 'to fit only if they would not otherwise. Pick a frame below to say '
+      + 'which shape you meant.';
+  }
+  paintSeqCanvas();
   ['#bSeqPrev', '#bSeqDots', '#bSeqVideo'].forEach((id) => {
     $(id).disabled = !S.strip.length;
   });
@@ -4142,6 +4723,42 @@ function buildSeqFormats() {
   sel.value = seqFormat().id;
   S.seq.format = sel.value;
   $('#vSeqFmt').textContent = (seqFormat().ext || '').toUpperCase();
+}
+
+/* The strip's frame, as chips. No custom entry here: a sequence's size has to
+ * be one number for the whole document and the presets are what anyone
+ * actually wants; a bespoke one is a studio export's job. */
+function buildSeqPresets() {
+  const wrap = $('#seqpresets');
+  if (!wrap || wrap.childElementCount) return;
+  CV.PRESETS.filter((p) => p.id !== 'custom').forEach((p) => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.dataset.preset = p.id; b.textContent = p.label;
+    b.title = p.note;
+    b.addEventListener('click', () => {
+      S.seq.preset = p.id;
+      paintSeqCanvas();
+      seqTouch(true);
+    });
+    wrap.append(b);
+  });
+}
+
+function paintSeqCanvas() {
+  const wrap = $('#seqpresets');
+  if (!wrap) return;
+  buildSeqPresets();
+  $$('#seqpresets .chip').forEach((b) => b.setAttribute(
+    'aria-pressed', String(b.dataset.preset === (S.seq.preset || 'source'))));
+  const src = seqSource();
+  $('#vSeqSize').textContent = `${seqW()}×${seqH()}`;
+  $('#sq3sum').textContent = `${seqW()}×${seqH()}`;
+  $('#seqcanvasnote').textContent = S.seq.preset && S.seq.preset !== 'source'
+    ? `Every frame of the sequence — the preview, the .dots.gz and the video — `
+      + `is ${seqW()}×${seqH()}. Each item's cloud is centred on it, and shrunk `
+      + 'only if it would not fit; nothing is magnified, because spreading dots '
+      + 'apart does not make them bigger.'
+    : `The first item's own frame: ${src.w}×${src.h}.`;
 }
 
 function renderSeqPalettes() {
@@ -4378,6 +4995,11 @@ function resetClip() {
   S.srcFile = null; S.trim = null; S.srcDuration = 0;
   S.srcW = 0; S.srcH = 0; S.srcJob = null;
   S.range = null; S.extend = null; S.jobStart = 0;
+  // the SHAPE is kept — someone making a set of 9:16 clips should not have to
+  // say so again for each one — but the hand-nudged bias and the crop path
+  // belong to the source that has just gone
+  S.canvas.dx = 0; S.canvas.dy = 0;
+  CPATH.key = null; CPATH.centers = null; CPATH.union = null;
   paintRange(); paintTrimOffer();
   $('#vidopts').hidden = true;
   showStage('empty');
@@ -4633,6 +5255,13 @@ async function checkModels() {
                           S.strip.splice(to, 0, m); renderSeq();
                           return S.strip.map((x) => x.lib); },
     select: (type, i) => { S.sel = { type, i }; renderSeq(); return S.sel; },
+    /* the strip's own frame size — the same preset table as the studio's */
+    canvas: (preset) => {
+      if (preset) S.seq.preset = preset;
+      paintSeqCanvas();
+      return { preset: S.seq.preset || 'source', w: seqW(), h: seqH(),
+               source: seqSource() };
+    },
     look: (o) => {
       Object.assign(S.seq, o || {});
       $('#sSeqDot').value = String(S.seq.dotpx);
@@ -4652,6 +5281,42 @@ async function checkModels() {
     doc: () => S.seqDoc,
     player: () => PLAYER,
     transitions: () => (DP ? DP.TRANSITIONS : null),
+  };
+  /* The canvas, callable: the aspect-ratio control, its framing decision and
+   * the map it produces, so a verifier can assert on the geometry rather than
+   * on a screenshot. */
+  window.DV_canvas = {
+    presets: () => CV.PRESETS.map((p) => ({ id: p.id, label: p.label,
+                                            w: p.w || 0, h: p.h || 0 })),
+    get: () => Object.assign({}, S.canvas, {
+      target: canvasTarget(), framing: framing(), clamps: canvasClamps(),
+      label: canvasLabel(), slug: canvasSlug() }),
+    set: async (preset, opts) => {
+      if (opts) Object.assign(S.canvas, opts);
+      if (preset) { S.canvas.preset = preset; S.canvas.dx = 0; S.canvas.dy = 0; }
+      await applyCanvas();
+      return window.DV_canvas.get();
+    },
+    framing: async (mode) => { S.canvas.follow = mode; await applyCanvas();
+                               return framing(); },
+    nudge: async (dx, dy) => { S.canvas.dx = dx; S.canvas.dy = dy;
+                               await applyCanvas();
+                               return { dx: S.canvas.dx, dy: S.canvas.dy }; },
+    /* the crop centre, in source pixels, for one frame — what a test compares
+     * against the subject's own mask centroid */
+    at: (i) => {
+      const [sw, sh] = srcSize();
+      const p = canvasPlanAt(i | 0, sw, sh);
+      return p ? { k: p.k, x0: p.x0, y0: p.y0, cx: p.cx, cy: p.cy,
+                   tw: p.tw, th: p.th, sw, sh } : null;
+    },
+    path: async () => {
+      await ensureCanvasPath();
+      return { n: CPATH.n, mode: framing(), union: CPATH.union,
+               centers: CPATH.centers };
+    },
+    payload: (rng) => canvasPayload(rng),
+    note: () => $('#canvasnote').textContent,
   };
   window.DV_setFormat = (id) => {
     S.format = id; $('#sFmt').value = id; paintFormat();

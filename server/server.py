@@ -508,6 +508,10 @@ def api_meta():
             # window over the frames already on disk -- a trim after the track
             # costs nothing and re-tracks nothing.
             "frame_range": True,
+            # render / original / dots take a `canvas` block: an output size and
+            # one affine placement per frame. GET /api/jobs/<id>/centroids is
+            # what the client builds the crop path out of.
+            "canvas": True,
             "dots_max_frames": DOTS_MAX_FRAMES,
             "formats": list(R.FORMATS)}
 
@@ -542,6 +546,9 @@ def palettes():
         "gc": True,
         "original": True,
         "frame_range": True,
+        # the preset TABLE is not here on purpose: web/canvas.js owns it, the
+        # browser engine has no server to ask, and two copies would drift
+        "canvas": True,
         "dots_max_frames": DOTS_MAX_FRAMES,
         "jpeg_bytes_per_frame": JPEG_BYTES_PER_FRAME,
         "decode_height": DECODE_HEIGHT,
@@ -760,6 +767,73 @@ def get_mask(jid: str, obj: str, n: int, polish: int = 0):
         raise HTTPException(404, "no such mask")
     return FileResponse(p, media_type="image/png",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/jobs/{jid}/centroids")
+def get_centroids(jid: str, objs: str = ""):
+    """Where the tracked subjects ARE, frame by frame, in one request.
+
+    The auto-reframe needs a centre per frame to smooth into a camera move.
+    The tab could work them out by pulling one mask PNG per subject per frame,
+    which for a thirty-second clip is a thousand HTTP round trips for a few
+    hundred floats -- while the server is sitting on the same files and can do
+    it in numpy. So it does, and hands back the answer NORMALISED (0..1 of the
+    frame), because nothing downstream agrees about pixel sizes: the preview,
+    a still's native-resolution export and this all measure different grids.
+
+    Several subjects are ONE cloud: the centre is the union's, weighted by
+    area, and the box is the union's box, because the crop has to hold all of
+    them. `ok` is false for a frame where nothing was found -- the client fills
+    those in from their neighbours rather than letting the crop jump home.
+    """
+    d = job_dir(jid)
+    meta = read_meta(jid)
+    n = int(meta.get("n_frames") or 0)
+    mroot = os.path.join(d, "masks")
+    if not os.path.isdir(mroot):
+        raise HTTPException(404, "nothing has been tracked in this job")
+    ids = [x.strip() for x in objs.split(",") if x.strip()]
+    if not ids:
+        ids = sorted(x for x in os.listdir(mroot)
+                     if os.path.isdir(os.path.join(mroot, x)))
+    for o in ids:
+        if not o.isalnum():
+            raise HTTPException(400, "bad object id %r" % o)
+        if not os.path.isdir(os.path.join(mroot, o)):
+            raise HTTPException(404, "no masks for subject %s" % o)
+    pad = pad_of(meta)
+    t0 = time.perf_counter()
+    out = []
+    for i in range(n):
+        area = 0.0
+        sx = sy = 0.0
+        x0 = y0 = 1.0
+        x1 = y1 = 0.0
+        for o in ids:
+            p = os.path.join(mroot, o, fname(i, pad, ".png"))
+            if not os.path.exists(p):
+                continue
+            m = np.asarray(Image.open(p).convert("L"), np.uint8)
+            h, w = m.shape
+            ys, xs = np.nonzero(m >= 128)
+            if not xs.size:
+                continue
+            area += xs.size
+            sx += float(xs.sum() + 0.5 * xs.size) / w
+            sy += float(ys.sum() + 0.5 * ys.size) / h
+            x0 = min(x0, float(xs.min()) / w)
+            x1 = max(x1, float(xs.max() + 1) / w)
+            y0 = min(y0, float(ys.min()) / h)
+            y1 = max(y1, float(ys.max() + 1) / h)
+        if area:
+            out.append({"ok": True, "area": int(area),
+                        "x": round(sx / area, 5), "y": round(sy / area, 5),
+                        "x0": round(x0, 5), "y0": round(y0, 5),
+                        "x1": round(x1, 5), "y1": round(y1, 5)})
+        else:
+            out.append({"ok": False, "area": 0, "x": 0.5, "y": 0.5})
+    return {"job": jid, "subjects": ids, "n_frames": n, "frames": out,
+            "elapsed_s": round(time.perf_counter() - t0, 3)}
 
 
 @app.get("/api/jobs/{jid}/status")
@@ -1075,6 +1149,25 @@ class RenderReq(BaseModel):
     # the whole clip, which is what every client did before this existed.
     frame_in: int = 0
     frame_out: int | None = None
+    # THE CANVAS: {"w", "h", "k", "place":[[x0,y0], ...]} or null for the
+    # frames' own size. The client works the crop out and sends where it ended
+    # up; render.canvas_plan validates it and render.warp_* applies it. See the
+    # long note on render.DEFAULTS['canvas'].
+    canvas: dict | None = None
+
+
+def _canvas_or_400(canvas, n_win):
+    """Reject a bad canvas block before anything is encoded, not after.
+
+    render.canvas_plan is the one implementation of what a valid one is; this
+    only turns its complaint into a 400 with the sentence in it.
+    """
+    if not canvas:
+        return None
+    try:
+        return R.canvas_plan({"canvas": canvas}, n_win)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
 
 
 def _window(meta, frame_in, frame_out, what="render"):
@@ -1109,6 +1202,7 @@ def start_render(jid: str, req: RenderReq):
     if req.format not in R.FORMATS:
         raise HTTPException(400, "format must be one of %s" % list(R.FORMATS))
     f_in, f_out, n_win = _window(meta, req.frame_in, req.frame_out)
+    _canvas_or_400(req.canvas, n_win)
 
     with _state_lock:
         st = _jobs.get(jid) or new_status(meta["n_frames"])
@@ -1193,9 +1287,15 @@ class OriginalReq(BaseModel):
     fps: int | None = None
     expect_frames: int | None = None
     # the same window the render used; the pair is only a pair if both files
-    # were cut from the same frames
+    # were cut from the same frames -- and, once there is a canvas, the same
+    # crop path as well
     frame_in: int = 0
     frame_out: int | None = None
+    # THE CANVAS: {"w", "h", "k", "place":[[x0,y0], ...]} or null for the
+    # frames' own size. The client works the crop out and sends where it ended
+    # up; render.canvas_plan validates it and render.warp_* applies it. See the
+    # long note on render.DEFAULTS['canvas'].
+    canvas: dict | None = None
 
 
 @app.post("/api/jobs/{jid}/original")
@@ -1218,13 +1318,15 @@ def export_original(jid: str, req: OriginalReq):
         raise HTTPException(409, "the render used %d frames and frames %d–%d are "
                                  "%d — the original cut would not line up"
                                  % (int(req.expect_frames), f_in, f_out, have))
+    _canvas_or_400(req.canvas, have)
     fps = int(req.fps or meta.get("fps", 30))
     fmt = R.original_format(req.format)
     out = os.path.join(d, R.original_file(req.format))
     t0 = time.perf_counter()
     info = R.render_original(frames_dir, out, {"format": req.format, "fps": fps,
                                                "frame_in": f_in,
-                                               "frame_out": f_out})
+                                               "frame_out": f_out,
+                                               "canvas": req.canvas})
     el = time.perf_counter() - t0
     print("[original] %s: %d frames (%d–%d) -> %s in %.1fs (%.1f MB)"
           % (jid, info["frames"], f_in, f_out, fmt, el,
@@ -1271,6 +1373,11 @@ class DotsReq(BaseModel):
     fps: int | None = None
     frame_in: int = 0
     frame_out: int | None = None
+    # THE CANVAS: {"w", "h", "k", "place":[[x0,y0], ...]} or null for the
+    # frames' own size. The client works the crop out and sends where it ended
+    # up; render.canvas_plan validates it and render.warp_* applies it. See the
+    # long note on render.DEFAULTS['canvas'].
+    canvas: dict | None = None
     json: bool = False          # also write the readable .dots.json variant
 
 
@@ -1286,7 +1393,8 @@ def export_dots(jid: str, req: DotsReq):
     subs = _resolve_subjects(jid, d, req.subjects)
     if not subs:
         raise HTTPException(400, "dot data needs at least one tracked subject")
-    f_in, f_out, _ = _window(meta, req.frame_in, req.frame_out, "dot export")
+    f_in, f_out, n_win = _window(meta, req.frame_in, req.frame_out, "dot export")
+    _canvas_or_400(req.canvas, n_win)
     params = req.model_dump()
     params.pop("subjects", None)
     params.pop("json", None)

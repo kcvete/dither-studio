@@ -19,6 +19,11 @@
  *                 cuts its original and writes its .dots.gz out of the frames
  *                 and masks already on disk, with no second track; a wider one
  *                 is offered rather than silently re-cut
+ *   X  clip    -> the CANVAS: 9:16 out of a 16:9 source, as a cutout (dots
+ *                 re-measured at 1080x1920) and as an auto-reframed overlay
+ *                 whose crop follows the tracked subject, with the matched
+ *                 original cut on the identical path; the .dots.gz and the
+ *                 sequence at the same shape; a still at 1:1
  *   P  clip    -> a tracked subject with MASK POLISH on: the motion gate, the
  *                 tab's polished mask against the server's byte for byte, the
  *                 wipe, and preview-vs-export
@@ -1547,6 +1552,302 @@ async function runGC(page) {
   }
 }
 
+
+/* ---------- X: the canvas — one clip, four shapes ---------------------------
+ * The aspect-ratio control end to end on the server engine: a 9:16 CUTOUT
+ * (the dots re-measured on the canvas, so 1080x1920 of real dots), a 9:16
+ * OVERLAY (a crop window of that aspect following the tracked subject, with
+ * the matched original cut following the identical path), the .dots.gz that
+ * comes out carrying the new frame, and the sequence at 9:16.
+ *
+ * The claim being tested is not "the file is 1080x1920" -- that is one line of
+ * ffprobe -- but that the SUBJECT IS STILL IN IT: every assertion below is
+ * about where the dots or the crop centre landed relative to the mask the
+ * tracker produced.
+ */
+function bgCensus(file, n, bg) {
+  const data = execFileSync('ffmpeg', ['-v', 'error', '-i', file,
+    '-vf', `select=eq(n\\,${n})`, '-vframes', '1', '-pix_fmt', 'rgb24',
+    '-f', 'rawvideo', '-'], { maxBuffer: 1 << 28 });
+  const probe = ffprobe(file);
+  const w = +probe.width, h = +probe.height;
+  const [br, bgc, bb] = [1, 3, 5].map((i) => parseInt(bg.slice(i, i + 2), 16));
+  let n0 = 0, x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0, p = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, p += 3) {
+      const d = Math.abs(data[p] - br) + Math.abs(data[p + 1] - bgc)
+        + Math.abs(data[p + 2] - bb);
+      if (d < 60) continue;
+      n0++;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  return { w, h, lit: n0, pct: +(100 * n0 / (w * h)).toFixed(2),
+           box: x1 < 0 ? null : { x0, y0, x1, y1 },
+           cx: x1 < 0 ? 0 : (x0 + x1) / 2, cy: y1 < 0 ? 0 : (y0 + y1) / 2 };
+}
+
+function contactSheet(src, frames, out, cols) {
+  const sel = frames.map((n) => `eq(n\\,${n})`).join('+');
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', src,
+    '-vf', `select='${sel}',scale=270:-1,tile=${cols || frames.length}x1`,
+    '-frames:v', '1', out]);
+  return out;
+}
+
+async function runCanvas(page) {
+  const r = { steps: [] };
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  await page.evaluate(() => window.DV_limit(2));
+  await page.setInputFiles('#file', CLIP);
+  await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+  r.job = await page.evaluate(() => window.DV.job);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(700);
+  await prompt(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.trackInfo = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+  if (/failed/.test(r.trackInfo)) throw new Error(r.trackInfo);
+
+  // the control itself: six shapes, source by default, nothing enabled
+  r.presets = await page.evaluate(() => window.DV_canvas.presets());
+  r.before = await page.evaluate(() => window.DV_canvas.get());
+  if (r.before.target) throw new Error('a fresh clip did not default to its own shape');
+  if (!r.presets.some((p) => p.id === '9:16' && p.w === 1080 && p.h === 1920)) {
+    throw new Error('no 9:16 preset at 1080×1920');
+  }
+
+  /* ---- 9:16, cutout: the dots are measured on the canvas ---------------- */
+  await setMode(page, 'dots');
+  r.cutout = await page.evaluate(() => window.DV_canvas.set('9:16'));
+  if (r.cutout.target.w !== 1080 || r.cutout.target.h !== 1920) {
+    throw new Error('9:16 did not give 1080×1920');
+  }
+  if (r.cutout.clamps) throw new Error('a cutout crop should not be clamped to the source');
+  r.path = await page.evaluate(async () => {
+    const p = await window.DV_canvas.path();
+    return { n: p.n, mode: p.mode, union: p.union };
+  });
+  r.previewSize = await page.evaluate(() => {
+    const c = document.querySelector('#vcv'); return [c.width, c.height];
+  });
+  if (r.previewSize[0] !== 1080 || r.previewSize[1] !== 1920) {
+    throw new Error('the preview is ' + r.previewSize.join('×') + ', not the canvas');
+  }
+  await page.screenshot({ path: path.join(DOCS, 'x-canvas-916-preview.png') });
+
+  await openStep(page, 'st5');
+  await page.evaluate((x) => window.DV_setFormat(x), 'mp4');
+  await page.click('#bExport');
+  r.cutoutRender = await waitText(page, '#rinfo', /rendered|failed/, 300000);
+  if (/failed/.test(r.cutoutRender)) throw new Error(r.cutoutRender);
+  const cutFile = path.join(HERE, 'jobs', r.job, 'out.mp4');
+  r.cutoutProbe = ffprobe(cutFile);
+  if (+r.cutoutProbe.width !== 1080 || +r.cutoutProbe.height !== 1920) {
+    throw new Error(`the 9:16 export is ${r.cutoutProbe.width}×${r.cutoutProbe.height}`);
+  }
+  if (+r.cutoutProbe.nb_read_frames !== r.nFrames) {
+    throw new Error(`the 9:16 export has ${r.cutoutProbe.nb_read_frames} frames`);
+  }
+  // the subject is IN the frame on every sampled frame, and not against an edge
+  const bg = await page.evaluate(() => window.DV.bg);
+  r.cutoutFrames = {};
+  for (const n of [0, r.nFrames >> 1, r.nFrames - 1]) {
+    const c = bgCensus(cutFile, n, bg);
+    r.cutoutFrames[n] = { lit: c.lit, pct: c.pct, box: c.box,
+                          cx: +c.cx.toFixed(0), cy: +c.cy.toFixed(0) };
+    if (c.pct < 1) throw new Error(`frame ${n} of the 9:16 cutout is ${c.pct}% dots`);
+    if (c.box.x0 <= 0 || c.box.x1 >= c.w - 1) {
+      throw new Error(`frame ${n} of the 9:16 cutout runs off the side`);
+    }
+    if (Math.abs(c.cx - c.w / 2) > c.w * 0.25) {
+      throw new Error(`frame ${n} of the 9:16 cutout is off centre by `
+        + `${Math.abs(c.cx - c.w / 2).toFixed(0)} px`);
+    }
+  }
+  r.cutoutSheet = contactSheet(cutFile, [0, r.nFrames >> 1, r.nFrames - 1],
+                               path.join(DOCS, 'x-canvas-916-cutout.png'));
+
+  /* ---- the dot data carries the canvas --------------------------------- */
+  r.dots = await page.evaluate(async () => {
+    const { doc } = await window.DV_dots.doc();
+    // beyond the frame, not on its last pixel: a cell centre on the last
+    // column rounds to exactly w, which both renderers clamp when they draw
+    let out = 0, max = 0;
+    doc.frames.forEach((f) => f.forEach((xy) => {
+      for (let i = 0; i < xy.length; i += 2) {
+        if (xy[i] > doc.w || xy[i + 1] > doc.h) out++;
+        max = Math.max(max, xy[i + 1]);
+      }
+    }));
+    return { w: doc.w, h: doc.h, frames: doc.frames.length, outside: out, maxY: max };
+  });
+  if (r.dots.w !== 1080 || r.dots.h !== 1920) {
+    throw new Error(`the .dots doc is ${r.dots.w}×${r.dots.h}`);
+  }
+  if (r.dots.outside) throw new Error(r.dots.outside + ' dots outside the canvas');
+
+  /* ---- 9:16 overlay: the crop follows the subject, and so does the cut -- */
+  await openStep(page, 'st3');
+  await page.click('#composeui .chip[data-compose="overlay"]');
+  await sleep(400);
+  await setMode(page, 'ordered');
+  r.overlay = await page.evaluate(() => window.DV_canvas.get());
+  if (!r.overlay.clamps) throw new Error('an overlay crop must stay inside the source');
+  r.overlayNote = await page.evaluate(() => window.DV_canvas.note());
+  if (!/crop/.test(r.overlayNote)) throw new Error('the note does not mention the crop');
+
+  /* AUTO decides against the crop that is set: this clip is two seconds long
+   * and the athlete never leaves a 9:16 window, so it holds still. Forcing
+   * `follow` is what exercises the moving crop — and the assertion below is
+   * that it really does move, and moves TO THE SUBJECT. */
+  r.autoFraming = r.overlay.framing;
+  r.followMode = await page.evaluate(() => window.DV_canvas.framing('follow'));
+  if (r.followMode !== 'follow') throw new Error('the framing switch did not take');
+
+  // ground truth: the tracker's own mask centroids, from the server
+  const cen = await (await page.request.get(
+    `${BASE}/api/jobs/${r.job}/centroids`)).json();
+  r.centroidFrames = cen.frames.length;
+  if (cen.frames.length !== r.nFrames) {
+    throw new Error(`/centroids gave ${cen.frames.length} frames for ${r.nFrames}`);
+  }
+  r.follow = [];
+  for (let n = 0; n < r.nFrames; n += 5) {
+    const at = await page.evaluate((i) => window.DV_canvas.at(i), n);
+    const c = cen.frames[n];
+    if (!c.ok) continue;
+    const cx = c.x * at.sw, cy = c.y * at.sh;
+    const cropW = at.tw / at.k, cropH = at.th / at.k;
+    const inside = Math.abs(cx - at.cx) <= cropW / 2 && Math.abs(cy - at.cy) <= cropH / 2;
+    r.follow.push({ n, dx: +(cx - at.cx).toFixed(1), dy: +(cy - at.cy).toFixed(1),
+                    cx: +at.cx.toFixed(1), subjX: +cx.toFixed(1),
+                    cropW: +cropW.toFixed(0), inside });
+    if (!inside) {
+      throw new Error(`frame ${n}: the crop lost the subject `
+        + `(centroid ${cx.toFixed(0)},${cy.toFixed(0)} vs crop centre `
+        + `${at.cx.toFixed(0)},${at.cy.toFixed(0)}, window ${cropW.toFixed(0)}×${cropH.toFixed(0)})`);
+    }
+  }
+  r.followMaxDx = Math.max(...r.follow.map((f) => Math.abs(f.dx)));
+  r.followMaxDy = Math.max(...r.follow.map((f) => Math.abs(f.dy)));
+  const cxs = r.follow.map((f) => f.cx);
+  r.cropTravelPx = +(Math.max(...cxs) - Math.min(...cxs)).toFixed(1);
+  const subjTravel = Math.max(...r.follow.map((f) => f.subjX))
+    - Math.min(...r.follow.map((f) => f.subjX));
+  r.subjectTravelPx = +subjTravel.toFixed(1);
+  if (r.cropTravelPx < 20) {
+    throw new Error('the following crop never moved (' + r.cropTravelPx + ' px)');
+  }
+  // smoothed, so it lags — but it is the same journey, not a different one
+  const cropW = r.follow[0].cropW;
+  if (r.followMaxDx > cropW * 0.4) {
+    throw new Error(`the crop is ${r.followMaxDx} px off the subject `
+      + `(more than 40% of a ${cropW} px window)`);
+  }
+
+  await openStep(page, 'st5');
+  await page.check('#cOrig');
+  await page.click('#bExport');
+  r.overlayRender = await waitText(page, '#rinfo', /original cut|failed/, 300000);
+  if (/failed/.test(r.overlayRender)) throw new Error(r.overlayRender);
+  const dith = path.join(HERE, 'jobs', r.job, 'out.mp4');
+  const orig = path.join(HERE, 'jobs', r.job, 'out.original.mp4');
+  r.overlayProbe = ffprobeFull(dith);
+  r.originalProbe = ffprobeFull(orig);
+  for (const k of ['nb_read_frames', 'width', 'height', 'r_frame_rate']) {
+    if (String(r.overlayProbe[k]) !== String(r.originalProbe[k])) {
+      throw new Error(`the 9:16 pair disagrees on ${k}: `
+        + `${r.overlayProbe[k]} vs ${r.originalProbe[k]}`);
+    }
+  }
+  if (+r.originalProbe.width !== 1080 || +r.originalProbe.height !== 1920) {
+    throw new Error(`the matched cut is ${r.originalProbe.width}×${r.originalProbe.height}`);
+  }
+  r.originalSheet = contactSheet(orig, [0, r.nFrames >> 1, r.nFrames - 1],
+                                 path.join(DOCS, 'x-canvas-916-original.png'));
+  r.overlaySheet = contactSheet(dith, [0, r.nFrames >> 1, r.nFrames - 1],
+                                path.join(DOCS, 'x-canvas-916-overlay.png'));
+  await page.uncheck('#cOrig');
+  await page.evaluate(() => window.DV_canvas.framing('auto'));
+
+  /* ---- the sequence has a frame size of its own ------------------------- */
+  await page.evaluate(() => window.DV_seq.view('studio'));
+  r.seqAdded = await page.evaluate(async () => {
+    const cands = window.DV_seq.candidates();
+    await window.DV_seq.add(cands[0].id, cands[0].arg);
+    return window.DV_seq.strip().length;
+  });
+  r.seqSource = await page.evaluate(() => window.DV_seq.canvas());
+  r.seqCanvas = await page.evaluate(() => window.DV_seq.canvas('9:16'));
+  if (r.seqCanvas.w !== 1080 || r.seqCanvas.h !== 1920) {
+    throw new Error('the sequence did not take 9:16');
+  }
+  r.seqDoc = await page.evaluate(async () => {
+    const doc = await window.DV_seq.build();
+    let out = 0, lit = 0;
+    doc.frames.forEach((f) => f.forEach((xy) => {
+      lit += xy.length >> 1;
+      for (let i = 0; i < xy.length; i += 2) {
+        if (xy[i] > doc.w || xy[i + 1] > doc.h) out++;
+      }
+    }));
+    return { w: doc.w, h: doc.h, frames: doc.frames.length, outside: out, dots: lit };
+  });
+  if (r.seqDoc.w !== 1080 || r.seqDoc.h !== 1920) {
+    throw new Error(`the sequence document is ${r.seqDoc.w}×${r.seqDoc.h}`);
+  }
+  if (r.seqDoc.outside) throw new Error(r.seqDoc.outside + ' sequence dots outside the frame');
+  if (!r.seqDoc.dots) throw new Error('the 9:16 sequence has no dots in it');
+  await page.evaluate(() => window.DV_seq.view('sequence'));
+  await sleep(1500);
+  await page.screenshot({ path: path.join(DOCS, 'x-canvas-seq-916.png') });
+  await page.evaluate(() => window.DV_seq.view('studio'));
+
+  /* ---- a still, square ------------------------------------------------- */
+  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 30000 });
+  await setMode(page, 'dots');
+  r.still = await page.evaluate(() => window.DV_canvas.set('1:1'));
+  await sleep(600);
+  await openStep(page, 'st5');
+  await page.click('#bExport');
+  r.stillInfo = await waitText(page, '#rinfo', /PNG|failed/, 120000);
+  if (/failed/.test(r.stillInfo)) throw new Error(r.stillInfo);
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }),
+    page.click('#dl'),
+  ]);
+  r.stillName = dl.suggestedFilename();
+  const png = path.join(DOCS, 'x-canvas-still-1x1.png');
+  await dl.saveAs(png);
+  r.stillProbe = ffprobe(png);
+  if (+r.stillProbe.width !== 1080 || +r.stillProbe.height !== 1080) {
+    throw new Error(`the 1:1 still is ${r.stillProbe.width}×${r.stillProbe.height}`);
+  }
+  if (!/1x1/.test(r.stillName)) throw new Error('the file is called ' + r.stillName);
+  await page.screenshot({ path: path.join(DOCS, 'x-canvas-still.png') });
+
+  // and the server refuses a canvas that could not be encoded
+  const bad = await page.request.post(`${BASE}/api/jobs/${r.job}/render`, {
+    data: { subjects: [], mode: 'ordered',
+            canvas: { w: 1081, h: 1920, k: 2, place: [[0, 0]] } },
+    timeout: 60000 });
+  r.oddStatus = bad.status();
+  r.oddDetail = (await bad.json()).detail || '';
+  if (bad.status() !== 400 || !/even/.test(r.oddDetail)) {
+    throw new Error('an odd canvas size got ' + bad.status() + ' ' + r.oddDetail);
+  }
+  return r;
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -1582,6 +1883,7 @@ try {
   // read the job the PAGE still has open, so a run that navigates -- this one,
   // and the three below it -- has to come after them.
   await run('original', runOriginal);
+  await run('canvas', runCanvas);
   await run('range', runRange);
   await run('lasso', runLasso);
   await run('polish', runPolish);

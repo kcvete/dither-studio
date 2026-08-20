@@ -107,8 +107,8 @@ a CUDA box, with `DV_API_KEY` set. See *Hosting a paid backend* below.
 ```
 
 ```
-web/            the deployable page. engines/, dither.js, polish.js, track.js,
-                player/, models/
+web/            the deployable page. engines/, dither.js, canvas.js, polish.js,
+                track.js, player/, models/
 server/         the optional accelerator. FastAPI + numpy + the C dither loop
 coreml/         EdgeTAM -> CoreML: traceable wrappers, exporter, live-swap accel
 onnxexport/     EdgeTAM -> ONNX: the five graphs the browser engine runs
@@ -568,6 +568,119 @@ polished draw of a frame costs 50–100 ms; after that the cache makes drawing
 *faster* than not polishing (12.3 ms against 23 ms a frame), because a cached
 polished mask skips the per-draw bitmap decode as well.
 
+### Canvas — the shape it comes out
+Everything above renders at the size of what came in. **Canvas**, at the bottom
+of the Look step, is the other half of that sentence: pick a shape and the
+export, the matched original cut and the `.dots.gz` all come out at exactly
+those pixels.
+
+| | pixels | |
+|---|---|---|
+| **source** | whatever came in | the default — every line below is inert |
+| **16:9** | 1920×1080 | landscape |
+| **9:16** | 1080×1920 | TikTok · Reels · Shorts |
+| **1:1** | 1080×1080 | square |
+| **4:5** | 1080×1350 | feed portrait |
+| **custom** | any W×H | rounded to even, because no H.264 encoder takes an odd dimension |
+
+It is one affine map — `web/canvas.js`: arithmetic, no DOM, no engine —
+applied in one place:
+
+```
+X = (x - cx) · k + w/2          k  = cover scale × your zoom
+Y = (y - cy) · k + h/2          cx = where the crop is centred
+```
+
+What that map *means* depends on what is on screen, and the tool picks without
+asking:
+
+* **cutout** (dots or a per-pixel look on a flat background) — there is nothing
+  behind the subject to run out of, so the crop is not clamped to the source and
+  the dots are **re-measured on the canvas itself**. A 9:16 cutout is 1080×1920
+  of real dots at the dot size you chose, in *output* pixels; nothing is scaled
+  up. The subject can sit dead centre wherever it happens to be in frame.
+* **keep scene / whole frame** — real footage is visible, so this is an
+  **auto-reframe**: a crop window of the target aspect, the largest that fits
+  inside the source, clamped to its edges and following the tracked subject. No
+  zoom by default.
+
+**Framing** is `auto` · `follow` · `hold still`. Auto answers itself, and
+answers it against the crop that is set rather than once and for all: if the
+subject's whole-clip box fits inside a fixed window of that shape, the frame
+holds still and the subject moves inside it; if it does not, the frame follows.
+A 720p clip cropped to 9:16 follows where the same clip cropped to 1:1 holds
+still: the 9:16 window is 405 px of the source's 1280, and the 1:1 one is 720.
+
+The path itself is a mask centroid per frame, **smoothed with a gaussian over
+±15 frames** — half a second either side at 30 fps — which is what turns a
+jittery per-frame centroid into a camera move. Frames where the subject is not
+in shot are filled from their neighbours rather than dragging the crop home and
+back. On the server the centroids come from one request
+(`GET /api/jobs/<id>/centroids`, every frame in one numpy pass); in the tab the
+same walk happens over the mask logits already in memory.
+
+**Drag the picture** on a paused frame to bias it. The nudge is stored as a
+fraction of the source and *added* to the smoothed path, so a followed subject
+stays followed, just off to one side; **recentre** undoes it. **Scale** zooms in
+(or, below 1, out — which letterboxes honestly rather than inventing footage).
+
+The preview is the canvas, at its real pixels: `#vcv` becomes 1080×1920 and the
+stage letterboxes around it. What plays is what the file contains.
+
+![a 16:9 clip previewed at 9:16, the subject centred](docs/x-canvas-916-preview.png)
+
+Three frames of each 9:16 export the verification run writes — the cutout, with
+its dots measured on the 1080×1920 canvas, and the auto-reframed overlay beside
+the matched original cut it is frame-for-frame with:
+
+![three frames of the 9:16 cutout](docs/x-canvas-916-cutout.png)
+![three frames of the 9:16 overlay](docs/x-canvas-916-overlay.png)
+![the same three frames of the matched original cut](docs/x-canvas-916-original.png)
+
+**What crosses the wire is the map, not the policy.** The client works out where
+the crop ended up — it is the one that can see the masks and your dragging — and
+sends `{w, h, k, place:[[x0,y0], …]}`, one placement per frame of the window.
+`server/render.py` applies exactly those numbers and implements no notion of
+following, smoothing or clamping at all, so there is no second opinion to drift
+from the preview's. The matched original cut and the `.dots.gz` take the same
+block, which is what keeps the three files framed identically — and is why a
+canvas makes the original cut take the frame-by-frame encode path instead of
+handing ffmpeg the JPEGs untouched.
+
+`GET /api/meta` advertises `"canvas": true`; a server that does not is used
+exactly as before, and the page keeps the source's own shape. A block that
+could not be encoded — an odd dimension, a scale that is not finite, a
+placement list that is not one entry or one per frame — is a 400 with the
+sentence in it, from `render.canvas_plan()`, before anything is encoded.
+
+The source clip's frames are normalised to 720p on the way in, so an overlay
+crop to 9:16 is a 405×720 rectangle **scaled 2.67× to fill 1080×1920** — real
+footage, really upscaled, and the note under the control says so in those words
+whenever it is over 1.05×. A cutout has no such problem: its dots are computed
+at 1080×1920 in the first place.
+
+Measured on the reference clip (2 s window, one tracked subject, 60 frames,
+`docs/verify-report.json`, flow `canvas`):
+
+| | |
+|---|---|
+| 9:16 cutout export | 1080×1920, 60 frames, dots 2.7–4.5 % of the frame, subject centred to within 25 % of the width on every sampled frame |
+| `.dots.gz` for it | `w`/`h` = 1080/1920, **0** dots outside the canvas |
+| 9:16 overlay + matched cut | both 1080×1920, both 60 frames, both `30/1` |
+| following crop vs mask centroid | crop travelled **49.1 px**, the subject **53.7 px**; worst horizontal miss **3.2 px** of a 405 px window |
+| 1:1 still | 1080×1080 PNG, `sample-dots-1x1.png` |
+| 9:16 sequence | document 1080×1920, 52,134 dots, **0** outside the frame |
+| an odd canvas size | `400 canvas must be a positive even size, got 1081x1920` |
+
+And in the tab (`docs/verify-web-report.json`, flow `canvasBrowser`), on the
+whole 5 s clip: the crop path built from 150 frames of mask logits in **2.0 s**,
+the preview canvas 1080×1920, the 9:16 WebM and its matched cut both 1080×1920
+at 150 frames, the `.dots.gz` 1,081,317 dots with none outside the frame, and a
+0.1-of-the-source nudge moving the crop by exactly **128 px** of 1280. Auto
+chose **follow** there — over five seconds the athlete's box spans 592 px, and
+the 9:16 window is 405 — where the two-second window above chose to hold still.
+That is the same rule answering two different questions.
+
 ### 4 · Palette
 18 presets — Black & White, Sage, Forest, Ember, Mist, Game Boy DMG, four
 monochromes, CMYK, RGBY, Black White Red, Purple & Green, Blue & Yellow,
@@ -591,6 +704,10 @@ Two things come with the still flow:
 * **.dots.gz** — the same dot-position file a clip writes, with `n_frames` = 1.
   The player shows it as a static frame. It is offered whenever the dots look is
   on a still, subject or no subject.
+
+Both flows honour the **canvas** — a still exports at exactly the preset's
+pixels (`1080×1080` for 1:1), and the filename carries the shape:
+`sample-dots-1x1.png`.
 
 Clips get a **format** select, and what is in it depends on the engine.
 
@@ -768,6 +885,26 @@ and frame size are one set for the whole strip, in **Canvas**, because a
 `.dots.gz` holds exactly one of each — the format's whole point is that colour
 and dot size are *not* baked into the positions, so a per-item dot size could
 not survive an export.
+
+![the sequence view at 9:16](docs/x-canvas-seq-916.png)
+
+**The strip's frame** takes the same presets the studio's canvas does — source
+(the first item's own frame, which is the default and what it always was),
+16:9, 9:16, 1:1, 4:5. Items that are not that shape are **placed** on it, and
+the two rules are both about what dot positions can survive:
+
+* **the cloud is centred, not the frame it came out of** — a subject that sat
+  in the left third of a 16:9 clip belongs in the middle of a 9:16 sequence,
+  and the empty pixels around it were never in the file;
+* **nothing is magnified** — scaling positions up spreads a cloud without
+  growing its dots, so a 2.6× "fit" would be the same subject with gaps in it.
+  The scale is `min(1, contain)`: shrink to fit if the item is too big for the
+  frame, otherwise leave the spacing exactly as captured.
+
+The studio's canvas has no such limit because it *re-measures* the dots on the
+new frame. A strip item is positions, and re-deriving every item on every
+preset click is not what this control is for. It also retires the old "these
+items are different sizes and will sit off centre" warning — they no longer do.
 
 #### The modes, on the dot grid
 A sequence is dot positions and nothing else, so the only question a look has to
@@ -1271,7 +1408,14 @@ frames, 1280×720, `30/1`, identical), three of the original's frames compared
 against the very JPEGs in `jobs/<id>/frames/` the render read, the second
 download saved and named, a deliberately wrong frame count refused with a 409,
 a GIF export pairing with an MP4, and the checkbox remembered across a reload
-and withheld from a still — and **mask polish**: the motion gate as numbers,
+and withheld from a still — the **canvas**: a 9:16 cutout whose dots are
+re-measured at 1080×1920 and checked frame by frame for a subject that is
+actually in shot, a 9:16 auto-reframed overlay whose crop centre is compared
+against the tracker's own mask centroids from `/centroids` (49.1 px of crop
+travel against 53.7 px of subject, worst horizontal miss 3.2 px), the matched
+original cut on the identical path (both 1080×1920, both 60 frames), the
+`.dots.gz` and the sequence at the same shape, a still at 1:1, and an odd
+canvas size refused with a 400 — and **mask polish**: the motion gate as numbers,
 the tab's polished mask against the server's own byte for byte, the before/after
 wipe, and preview against the exported MP4 — and the **jobs/
 janitor**: fabricated job directories with backdated mtimes (a stale one, a
@@ -1295,6 +1439,12 @@ a dithered WebM and the matched cut beside it, both 150 frames at 1280×720 at
 the same rate to within about a percent, three frames of the second one
 checked against the exact `ImageData` the recorder was handed, and the checkbox
 confirmed absent from the sequence view.
+
+It runs the **canvas** on the engine with no server at all: the crop path built
+in the tab by walking 150 frames of mask logits, the preview canvas at
+1080×1920, a 9:16 WebM and its matched cut agreeing on every field ffprobe
+reports, the file named `sample-dots-9x16.original.webm`, a hand-nudge moving
+the crop by the fraction it was given, and a sequence re-fitted to 4:5.
 
 Its flagship run is the **sequence
 view**: four items added through the UI the way a person would — a subject
@@ -1339,12 +1489,16 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | engine parity, kernels | **110/110 byte-identical**, and 110/110 again through a mask |
 | engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
 | engine parity, polish | **27/27 float-identical** (3 strengths × 9 frames); crop shortcut vs whole frame, max difference **0** |
-| `verify.mjs` | 14 flows, **0 console errors** |
+| `verify.mjs` | 15 flows, **0 console errors** |
 | `jobsgc_check.py` | **29/29**, six cases, no server and no real jobs/ |
 | jobs/ janitor, live | a stale job deleted, a fresh one kept, a `camera-` job trimmed to `source.webm` + `meta.json`; **12 sweeps** fired through a real track → render and it finished untouched |
-| `verify-web.mjs` | 20 flows, **263/263 assertions**, **0 console errors** |
+| `verify-web.mjs` | 21 flows, **283/283 assertions**, **0 console errors** |
 | sequence: an item's look | item 2 through all 7 modes, a palette, cell 6, gamma 1.4 and polish 70 — items 1 and 3 **hash identically** before and after (`c7b68293`, `a9e6316d`), item 2 goes `c7b68293` → `2853216c` and back again |
 | sequence: pixel modes | a cell-1 Bayer photograph is **484,508 dots a frame**; its morph flies **3,773** mid-air and lands on 711, the subject's own count |
+| canvas: 9:16 cutout | 1080×1920, 60 frames, dots 2.7–4.5 % of the frame, the subject centred to within 25 % of the width on every sampled frame; its `.dots.gz` is 1080×1920 with **0** dots outside |
+| canvas: 9:16 overlay + cut | both 1080×1920, both 60 frames, both `30/1`; forced to follow, the crop travelled **49.1 px** against the subject's **53.7** and never missed it by more than **3.2 px** of a 405 px window |
+| canvas: in the tab | the crop path built from **150 frames** of mask logits in **2.0 s**, preview canvas 1080×1920, the pair written at 1080×1920 / 150 frames each |
+| canvas: auto framing | the 5 s clip answers **follow** at 9:16 (the subject's box spans 592 px of a 405 px window) and the 2 s window answers **hold still** |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
 | still: subject, server | one frame, **0.09 s** at 768 px, a 12,750 px mask, no propagation |
 | still: subject, browser | one frame, **0.08 s** at 768 px, a 12,654 px mask, WebGPU fp16 |
@@ -1825,9 +1979,25 @@ why the setting exists rather than a silently lowered default.
   and the missing dots are shed and respawned in place at the two ends rather
   than popping — but the middle of a morph out of a pixel dither is a swarm, not
   a dissolve of the image itself.
-* **Sequence items should share a frame size.** They all do when they come from
-  720p clips; if they do not, the sequence uses the first item's frame and says
-  so.
+* **Sequence items are placed, not re-derived.** An item that is not the
+  strip's frame is centred and, if it is too big, shrunk — as positions, not
+  as a picture. It is never magnified, because that would spread its dots
+  without growing them, so a small subject in a big frame stays small. The
+  studio's canvas re-measures instead, which is why it can fill a 1080×1920
+  frame with a subject that was 250 px tall in the source.
+* **A 1080×1920 canvas is 2.2× the pixels of 720p.** In the tab that shows: the
+  reference clip exports at ~12 fps into a 9:16 WebM, which is slower than real
+  time, so the recorder paces the file to the wall clock and says so. The
+  server does not care.
+* **An overlay canvas upscales.** Clips are normalised to 720p on the way in,
+  so a 9:16 crop of one is 405×720 stretched to 1080×1920 — 2.67×. The dots
+  looks do not care (they are computed on the canvas), but `keep scene` and
+  whole-frame dithers are genuinely enlarged footage and the control says so.
+* **The canvas crop is one path, not keyframes.** Follow, hold still, a scale
+  and a hand-drag that biases the whole clip. There is no per-frame keyframing
+  and no rotation.
+* **The crop path is built from the tracked masks.** A whole-frame clip with no
+  subject gets a centred crop you can drag, and nothing to follow.
 * **Dot data is dots.** A `.dots.gz` of a 6,000-dot subject is bigger than the
   MP4 of it. The point is that it is re-colourable, re-sizable and seekable, not
   that it is always smaller.

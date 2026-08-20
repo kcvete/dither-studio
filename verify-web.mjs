@@ -26,6 +26,10 @@
  *       with the mask polish on for the export and off again afterwards
  *   W4  browser · a polygon mask prompt (the heads_mask graph) -> tracked
  *   W5  browser · two subjects prompted on DIFFERENT frames, mask-area census
+ *   WX  browser · the CANVAS: a tracked clip at 9:16 out of a 16:9 source —
+ *       the crop path built in the tab from the mask logits, the dots
+ *       re-measured at 1080x1920, the matched original cut on the same path,
+ *       the .dots.gz carrying the new frame, and a sequence at 4:5
  *   W8  the SEQUENCE view: four items added through the UI (two clips, a still
  *       cutout, a shape), per-item trims and colours, three transition kinds,
  *       drag-reorder, preview, .dots.gz and an MP4 off the server
@@ -2105,6 +2109,139 @@ async function runSeqPixel() {
   return r;
 }
 
+
+/* ======= WX: the canvas, in the tab ======================================
+ * The aspect-ratio control on the engine that has no server: the crop path is
+ * built by walking the tracker's own mask logits in the tab (there is no
+ * /centroids to ask), the dots are re-measured on a 1080x1920 grid, and the
+ * matched original cut is recorded through the identical map — so the pair is
+ * still a pair once there is a crop between the clip and the file.
+ */
+async function runCanvasBrowser() {
+  const r = {};
+  const { ctx, page } = await newPage(browserPref());
+  await loadClip(page, CLIP, BR.seconds);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(700);
+  await promptBoxPoint(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.trackInfo = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('the clip tracks in the tab', !/failed/.test(r.trackInfo), r.trackInfo);
+
+  r.presets = await page.evaluate(() => window.DV_canvas.presets());
+  check('the tab offers 9:16 at 1080×1920',
+        r.presets.some((p) => p.id === '9:16' && p.w === 1080 && p.h === 1920));
+
+  /* ---- 9:16 cutout ----------------------------------------------------- */
+  await setMode(page, 'dots');
+  const t0 = Date.now();
+  r.canvas = await page.evaluate(() => window.DV_canvas.set('9:16'));
+  r.pathSeconds = +((Date.now() - t0) / 1000).toFixed(1);
+  check('9:16 is 1080×1920 in the tab too',
+        r.canvas.target.w === 1080 && r.canvas.target.h === 1920);
+  check('a cutout crop is not clamped to the source', !r.canvas.clamps);
+  r.path = await page.evaluate(async () => {
+    const p = await window.DV_canvas.path();
+    return { n: p.n, mode: p.mode, union: p.union, first: p.centers[0] };
+  });
+  check('the tab built a centre for every frame', r.path.n === r.nFrames,
+        `${r.path.n} vs ${r.nFrames}`);
+  r.previewSize = await page.evaluate(() => {
+    const c = document.querySelector('#vcv'); return [c.width, c.height];
+  });
+  check('the preview is the canvas, not the clip',
+        r.previewSize[0] === 1080 && r.previewSize[1] === 1920,
+        r.previewSize.join('×'));
+  await page.screenshot({ path: path.join(DOCS, 'w-canvas-916.png') });
+
+  await openStep(page, 'st5');
+  await page.check('#cOrig');
+  await page.click('#bExport');
+  r.info = await waitText(page, '#rinfo', /original cut|failed/, 1800000);
+  check('the 9:16 pair exports in the tab', !/failed/.test(r.info), r.info);
+  const dith = path.join(DOCS, 'w-canvas-916-dithered.webm');
+  const orig = path.join(DOCS, 'w-canvas-916-original.webm');
+  r.ditheredBytes = await saveDownload(page, dith);
+  const [d2] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }),
+    page.click('#dlorig'),
+  ]);
+  r.originalName = d2.suggestedFilename();
+  await d2.saveAs(orig);
+  check('the file is named for its shape', /9x16/.test(r.originalName), r.originalName);
+  r.dithered = probe(dith);
+  r.original = probe(orig);
+  for (const k of ['nb_read_frames', 'width', 'height']) {
+    check(`the 9:16 pair agrees on ${k}`,
+          String(r.dithered[k]) === String(r.original[k]),
+          `${r.dithered[k]} vs ${r.original[k]}`);
+  }
+  check('the tab wrote 1080×1920',
+        +r.dithered.width === 1080 && +r.dithered.height === 1920,
+        `${r.dithered.width}×${r.dithered.height}`);
+  check('the 9:16 render has every frame of the range',
+        +r.dithered.nb_read_frames === r.nFrames,
+        `${r.dithered.nb_read_frames} vs ${r.nFrames}`);
+  await page.uncheck('#cOrig');
+
+  /* ---- the dot data, and the frame it claims --------------------------- */
+  r.dots = await page.evaluate(async () => {
+    const { doc } = await window.DV_dots.doc();
+    // a cell centre on the last column rounds to exactly w — both renderers
+    // clamp it to the last pixel, and they did before there was a canvas, so
+    // the assertion is that nothing is BEYOND the frame
+    let out = 0, edge = 0, lit = 0;
+    doc.frames.forEach((f) => f.forEach((xy) => {
+      lit += xy.length >> 1;
+      for (let i = 0; i < xy.length; i += 2) {
+        if (xy[i] > doc.w || xy[i + 1] > doc.h) out++;
+        else if (xy[i] === doc.w || xy[i + 1] === doc.h) edge++;
+      }
+    }));
+    return { w: doc.w, h: doc.h, frames: doc.frames.length, outside: out,
+             onEdge: edge, dots: lit };
+  });
+  check('the .dots.gz carries the canvas', r.dots.w === 1080 && r.dots.h === 1920,
+        `${r.dots.w}×${r.dots.h}`);
+  check('no dot is outside the canvas', r.dots.outside === 0,
+        `${r.dots.outside} beyond, ${r.dots.onEdge} on the last cell centre`);
+  check('there are dots in it', r.dots.dots > 0, String(r.dots.dots));
+
+  /* ---- the manual override: drag, and it moves ------------------------- */
+  const before = await page.evaluate(() => window.DV_canvas.at(0));
+  r.nudged = await page.evaluate(() => window.DV_canvas.nudge(0.1, 0));
+  const after = await page.evaluate(() => window.DV_canvas.at(0));
+  r.nudgeShiftPx = +(after.cx - before.cx).toFixed(1);
+  check('a nudge moves the crop', Math.abs(r.nudgeShiftPx - 0.1 * before.sw) < 2,
+        String(r.nudgeShiftPx));
+  await page.evaluate(() => window.DV_canvas.nudge(0, 0));
+
+  /* ---- the sequence takes the same presets ----------------------------- */
+  r.seq = await page.evaluate(async () => {
+    const cands = window.DV_seq.candidates();
+    await window.DV_seq.add(cands[0].id, cands[0].arg);
+    const before = window.DV_seq.canvas();
+    const after = window.DV_seq.canvas('4:5');
+    const doc = await window.DV_seq.build();
+    let out = 0, lit = 0;
+    doc.frames.forEach((f) => f.forEach((xy) => {
+      lit += xy.length >> 1;
+      for (let i = 0; i < xy.length; i += 2) {
+        if (xy[i] > doc.w || xy[i + 1] > doc.h) out++;
+      }
+    }));
+    return { before, after, w: doc.w, h: doc.h, outside: out, dots: lit };
+  });
+  check('the sequence takes 4:5', r.seq.w === 1080 && r.seq.h === 1350,
+        `${r.seq.w}×${r.seq.h}`);
+  check('every sequence dot is inside the new frame', r.seq.outside === 0);
+  check('the fitted sequence still has its dots', r.seq.dots > 0);
+
+  await ctx.close();
+  return r;
+}
+
 /* ================================== K: the optional bearer-token gate ======== */
 async function runApiKey() {
   const r = {};
@@ -2196,6 +2333,7 @@ try {
   await run('cameraBrowser', runCamera, 'browser', false);
   await run('dotsRemote', runDots, 'remote');
   await run('dotsBrowser', runDots, 'browser');
+  await run('canvasBrowser', runCanvasBrowser);
   await run('sequence', runSequence);
   await run('seqItemLook', runSeqItemLook);
   await run('seqPixel', runSeqPixel);

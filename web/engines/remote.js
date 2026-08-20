@@ -47,6 +47,12 @@ export class RemoteEngine {
       // without the dither. Older servers say nothing and the page hides the
       // checkbox rather than offering a button that 404s.
       original: false,
+      // POST bodies may carry a `canvas` block: a target size, a scale and one
+      // [x0, y0] per frame. The client works the crop out (it is the one that
+      // can see the masks and the user's dragging) and the server only applies
+      // it, so there is no second opinion about framing anywhere. An older
+      // server says nothing and the page keeps the source's own shape.
+      canvas: false,
       // render / original / dots take an inclusive frame_in..frame_out window
       // over the frames already extracted, so narrowing the trim after a track
       // costs nothing. An older server ignores the fields and renders the whole
@@ -93,6 +99,7 @@ export class RemoteEngine {
     this.supports.uncapped = !!this.probe.uncapped;
     this.supports.original = !!this.probe.original;
     this.supports.frameRange = !!this.probe.frame_range;
+    this.supports.canvas = !!this.probe.canvas;
     return this;
   }
 
@@ -103,6 +110,7 @@ export class RemoteEngine {
     if (m.uncapped !== undefined) this.supports.uncapped = !!m.uncapped;
     if (m.original !== undefined) this.supports.original = !!m.original;
     if (m.frame_range !== undefined) this.supports.frameRange = !!m.frame_range;
+    if (m.canvas !== undefined) this.supports.canvas = !!m.canvas;
     if (m.extract_progress !== undefined) {
       this.supports.extractProgress = !!m.extract_progress;
     }
@@ -263,6 +271,22 @@ export class RemoteEngine {
     return createImageBitmap(await this.blob(this.jobPath(`/mask/${objId}/${i}`)));
   }
 
+  /** Every frame's subject centroid and box, in one request.
+   *
+   *  The auto-reframe needs a centre per frame. Working those out in the tab
+   *  means pulling one mask PNG per subject per frame over HTTP — a thousand
+   *  requests for a thirty-second clip — when the server is sitting on the
+   *  same files and can do the arithmetic in numpy. Normalised 0..1, so the
+   *  answer does not care what size anything is. */
+  async centroids(objs) {
+    if (!this.supports.canvas) throw new Error('this server has no /centroids');
+    const q = objs && objs.length ? '?objs=' + objs.join(',') : '';
+    const r = await this.api(this.jobPath('/centroids' + q));
+    return r.frames.map((f) => ({ ok: !!f.ok, x: f.x, y: f.y,
+                                  box: f.ok ? { x0: f.x0, y0: f.y0,
+                                                x1: f.x1, y1: f.y1 } : null }));
+  }
+
   /* ------------------------------------------------------------ prompts */
   static payload(objects) {
     return objects.map((o) => {
@@ -366,7 +390,11 @@ export class RemoteEngine {
                              expect_frames: params.expect_frames || null,
                              frame_in: params.frame_in | 0,
                              frame_out: params.frame_out === undefined
-                               ? null : params.frame_out }),
+                               ? null : params.frame_out,
+                             // the identical crop path: the pair is only a pair
+                             // if both files were cut the same way as well as
+                             // from the same frames
+                             canvas: params.canvas || null }),
     });
     const path = this.jobPath('/original/' + r.format);
     let url = this.url(path) + '?t=' + Date.now();
