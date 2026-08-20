@@ -125,6 +125,51 @@ function seek(v, t) {
   });
 }
 
+/* ====================================================== export formats ===
+ * What the tab can actually write, decided at load: MediaRecorder's codec
+ * support is a runtime fact, and mp4/ProRes are a flat no. `available: false`
+ * entries stay in the list on purpose — the UI shows them greyed with the
+ * reason, which is more honest than pretending the format does not exist.
+ */
+function canRecord(t) {
+  return typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t);
+}
+
+export function browserFormats() {
+  const webm = canRecord('video/webm;codecs=vp9') || canRecord('video/webm');
+  const alpha = canRecord('video/webm;codecs=vp8') || canRecord('video/webm');
+  return [
+    { id: 'webm', label: 'WebM · VP9', ext: 'webm', mime: 'video/webm',
+      alpha: false, available: webm,
+      note: webm ? '' : 'this browser has no MediaRecorder WebM encoder' },
+    { id: 'gif', label: 'GIF · looping', ext: 'gif', mime: 'image/gif',
+      alpha: false, available: true,
+      note: 'encoded in the tab; a 300-frame 720p GIF needs ~280 MB of scratch memory' },
+    { id: 'webm-alpha', label: 'WebM · VP8 + alpha', ext: 'webm', mime: 'video/webm',
+      alpha: true, available: alpha,
+      note: alpha ? 'alpha only survives in players that read WebM alpha (Chrome, Firefox)'
+        : 'this browser has no MediaRecorder WebM encoder' },
+    { id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', mime: 'video/mp4',
+      alpha: false, available: false,
+      note: 'needs the local server — writing H.264 in the tab means vendoring a ~32 MB encoder' },
+    { id: 'prores', label: 'ProRes 4444 · alpha', ext: 'mov', mime: 'video/quicktime',
+      alpha: true, available: false, note: 'needs the local server' },
+  ];
+}
+
+/** The colour table a GIF export needs: background first, then every subject
+ *  colour, de-duplicated. Mirrors what the renderer actually puts on screen. */
+function gifPalette(params) {
+  const out = [];
+  const push = (c) => { if (c && out.indexOf(c) < 0 && out.length < 256) out.push(c); };
+  if (params.compose === 'overlay') (params.palette || []).forEach(push);
+  else push(params.bg);
+  for (const s of (params.subjects || [])) (s.palette || []).forEach(push);
+  (params.palette || []).forEach(push);
+  if (out.length < 2) push('#000000');
+  return out;
+}
+
 /* ============================================================= the engine === */
 export class BrowserEngine {
   constructor(opts = {}) {
@@ -148,6 +193,7 @@ export class BrowserEngine {
       exportMime: 'video/webm',
       exportExt: 'webm',
       exportPlayable: true,
+      formats: browserFormats(),
     };
   }
 
@@ -517,7 +563,70 @@ export class BrowserEngine {
   }
 
   /* ------------------------------------------------------------- export
-   * MediaRecorder over `captureStream(0)` + `requestFrame()`: the recorder
+   * Four containers in the tab, one missing:
+   *
+   *   webm         MediaRecorder, VP9 (VP8 on older builds)
+   *   webm-alpha   the same recorder over an alpha canvas — VP8, because that
+   *                is the codec Chrome carries an alpha plane in
+   *   gif          web/vendor/gifenc.js, our own LZW encoder; the look is 2-4
+   *                flat colours, which is what a 256-entry palette is for
+   *   mp4          NOT here. Writing H.264 in the tab means shipping an
+   *                encoder; ffmpeg.wasm is ~32 MB and would have to be vendored
+   *                to keep the no-CDN rule, which is a bigger download than the
+   *                tracker. The server engine writes it.
+   *   prores       NOT here, same reason and then some.
+   */
+  async exportClip(params, onProgress, renderFrame) {
+    const fmt = params.format || 'webm';
+    const f = (this.supports.formats || []).find((x) => x.id === fmt);
+    if (!f || !f.available) {
+      throw new Error(`the browser engine cannot write ${fmt}`
+        + (f && f.note ? ` — ${f.note}` : ' — use the local server'));
+    }
+    if (fmt === 'gif') return this.exportGIF(params, onProgress, renderFrame);
+    return this.exportWebM(params, onProgress, renderFrame, fmt === 'webm-alpha');
+  }
+
+  /** Frames -> palette indices -> one GIF. The whole animation has to be in
+   *  memory at once (one byte per pixel per frame: ~0.9 MB a frame at 720p),
+   *  which is the reason for the size note in the UI. */
+  async exportGIF(params, onProgress, renderFrame) {
+    await import('../vendor/gifenc.js');
+    const G = globalThis.GifEnc;
+    const { w, h, nFrames, fps } = this.clip;
+    const gfps = Math.max(1, Math.min(50, params.gif_fps || 15));
+    // keep every k-th frame so the GIF runs at the asked-for rate in real time
+    const step = Math.max(1, Math.round(fps / gfps));
+    const palette = gifPalette(params);
+    const cache = new Map();
+    const frames = [];
+    const t0 = performance.now();
+    for (let i = 0; i < nFrames; i += step) {
+      const img = await renderFrame(i, w, h);
+      frames.push(G.indexFrame(img.data, w, h, palette, cache));
+      if (onProgress) {
+        onProgress({ done: i + 1, total: nFrames,
+                     text: `${frames.length} frames · dithering` });
+      }
+      await sleep(0);
+    }
+    if (onProgress) onProgress({ done: nFrames, total: nFrames, text: 'encoding GIF…' });
+    await sleep(0);
+    const bytes = G.encode({ width: w, height: h, fps: fps / step, frames,
+                             palette, loop: 0 });
+    const blob = new Blob([bytes], { type: 'image/gif' });
+    const el = (performance.now() - t0) / 1000;
+    return {
+      url: URL.createObjectURL(blob), mime: 'image/gif', ext: 'gif',
+      playable: false, image: true, frames: frames.length,
+      elapsedS: +el.toFixed(2), fps: +(frames.length / Math.max(el, 1e-6)).toFixed(2),
+      bytes: blob.size,
+      note: `${frames.length} frames at ${(fps / step).toFixed(0)} fps · `
+        + `${palette.length} colours · loops forever`,
+    };
+  }
+
+  /* MediaRecorder over `captureStream(0)` + `requestFrame()`: the recorder
    * timestamps each frame when we hand it over, so pacing the loop to the
    * clip's own frame interval gives a file that plays at the right speed. If a
    * frame takes longer than that interval to dither, the export runs behind and
@@ -529,12 +638,16 @@ export class BrowserEngine {
    * be vendored to keep the no-CDN rule, which is a bigger download than the
    * tracker itself. The server engine writes MP4.
    */
-  async exportClip(params, onProgress, renderFrame) {
+  async exportWebM(params, onProgress, renderFrame, alpha) {
     const { w, h, nFrames, fps } = this.clip;
     const cv = document.createElement('canvas');
     cv.width = w; cv.height = h;
-    const g = cv.getContext('2d');
-    const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+    const g = cv.getContext('2d', { alpha: !!alpha });
+    // VP8 first for alpha: Chrome's WebM writer carries an alpha plane for VP8
+    // (alpha_mode=1) and not for VP9. Opaque exports prefer VP9 for the bitrate.
+    const types = alpha
+      ? ['video/webm;codecs=vp8', 'video/webm']
+      : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
     const mime = types.find((t) => window.MediaRecorder
       && MediaRecorder.isTypeSupported(t));
     if (!mime) throw new Error('this browser has no MediaRecorder WebM encoder');
@@ -553,6 +666,7 @@ export class BrowserEngine {
     for (let i = 0; i < nFrames; i++) {
       const fs = performance.now();
       const img = await renderFrame(i, w, h);     // ImageData from app.js
+      if (alpha) g.clearRect(0, 0, w, h);
       g.putImageData(img, 0, 0);
       vtrack.requestFrame();
       if (onProgress) onProgress({ done: i + 1, total: nFrames,
@@ -568,16 +682,20 @@ export class BrowserEngine {
     const blob = new Blob(chunks, { type: mime });
     const el = (performance.now() - t0) / 1000;
     const real = nFrames / fps;
+    const slow = el > real * 1.25
+      ? `rendered slower than real time (${el.toFixed(1)} s of work for a `
+        + `${real.toFixed(1)} s clip) — the WebM is paced to wall clock, so it `
+        + 'plays slow; pick a lighter look or use the local server'
+      : '';
     return {
       url: URL.createObjectURL(blob), mime, ext: 'webm', playable: true,
+      alpha: !!alpha,
       frames: nFrames, elapsedS: +el.toFixed(2),
       fps: +(nFrames / Math.max(el, 1e-6)).toFixed(2),
       bytes: blob.size,
-      note: el > real * 1.25
-        ? `rendered slower than real time (${el.toFixed(1)} s of work for a `
-          + `${real.toFixed(1)} s clip) — the WebM is paced to wall clock, so it `
-          + 'plays slow; pick a lighter look or use the local server'
-        : 'WebM (VP9) — the server engine writes H.264 MP4',
+      note: slow || (alpha
+        ? `${mime} with an alpha channel — the server writes ProRes 4444 too`
+        : `${mime} — the server engine writes H.264 MP4`),
     };
   }
 

@@ -238,9 +238,26 @@ async function saveDownload(page, to) {
 function probe(file) {
   const out = execFileSync('ffprobe', ['-v', 'error', '-count_frames',
     '-select_streams', 'v:0', '-show_entries',
-    'stream=nb_read_frames,width,height,r_frame_rate,codec_name',
+    'stream=nb_read_frames,width,height,r_frame_rate,codec_name,pix_fmt:stream_tags=alpha_mode',
     '-of', 'json', file]);
   return JSON.parse(out).streams[0];
+}
+
+/* alpha census of one decoded frame — the only honest way to ask whether a
+ * container really kept the transparency it claims */
+function alphaCensus(file, n, extraIn) {
+  const args = ['-v', 'error'].concat(extraIn || [],
+    ['-i', file, '-vf', `select=eq(n\\,${n})`, '-vframes', '1',
+     '-pix_fmt', 'rgba', '-f', 'rawvideo', '-']);
+  const data = execFileSync('ffmpeg', args, { maxBuffer: 1 << 28 });
+  // lossy codecs round the alpha plane, so this is a threshold, not equality
+  let zero = 0, full = 0;
+  for (let p = 3; p < data.length; p += 4) {
+    if (data[p] < 16) zero++; else if (data[p] > 200) full++;
+  }
+  const px = data.length / 4;
+  return { pixels: px, transparentPct: +(100 * zero / px).toFixed(1),
+           opaquePct: +(100 * full / px).toFixed(1) };
 }
 
 /* ============================================ W0: the engine chip and switch */
@@ -407,6 +424,46 @@ async function runTracked() {
   r.bytes = await saveDownload(page, out);
   r.probe = probe(out);
   await page.screenshot({ path: path.join(DOCS, 'w-export.png') });
+
+  // --- the other containers the tab can write, and the two it cannot
+  r.offered = await page.evaluate(() => window.DV_formats());
+  r.unavailable = r.offered.filter((f) => !f.available).map((f) => f.id);
+  check('the browser engine says plainly that MP4 and ProRes need the server',
+        r.unavailable.includes('mp4') && r.unavailable.includes('prores'),
+        JSON.stringify(r.unavailable));
+  check('every unavailable format carries a reason',
+        r.offered.filter((f) => !f.available).every((f) => f.note && f.note.length > 10),
+        JSON.stringify(r.offered));
+  r.formats = {};
+  for (const [id, ext] of [['gif', 'gif'], ['webm-alpha', 'webm']]) {
+    const t = Date.now();
+    await page.evaluate((x) => window.DV_setFormat(x), id);
+    await page.click('#bExport');
+    const txt = await waitText(page, '#rinfo', /rendered|failed/, 900000);
+    check(`browser · ${id} exports`, !/failed/.test(txt), txt);
+    const file = path.join(DOCS, `w-${id}-export.${ext}`);
+    const bytes = await saveDownload(page, file);
+    r.formats[id] = { seconds: +((Date.now() - t) / 1000).toFixed(1), bytes,
+                      probe: probe(file), info: txt.trim() };
+  }
+  check('browser · the GIF is a GIF and loops',
+        r.formats.gif.probe.codec_name === 'gif',
+        JSON.stringify(r.formats.gif.probe));
+  const gifLoop = fs.readFileSync(path.join(DOCS, 'w-gif-export.gif'))
+    .includes(Buffer.from('NETSCAPE2.0'));
+  check('browser · the GIF carries the loop-forever extension', gifLoop);
+  const wa = r.formats['webm-alpha'].probe;
+  r.formats['webm-alpha'].alphaTag = (wa.tags || {}).alpha_mode || wa['tags:alpha_mode'] || null;
+  check('browser · the alpha WebM declares an alpha channel',
+        r.formats['webm-alpha'].alphaTag === '1', JSON.stringify(wa));
+  // the alpha plane only decodes through the matching libvpx decoder — VP8 and
+  // VP9 are different decoders and each rejects the other's bitstream
+  r.formats['webm-alpha'].census = alphaCensus(
+    path.join(DOCS, 'w-webm-alpha-export.webm'), 10,
+    ['-c:v', wa.codec_name === 'vp9' ? 'libvpx-vp9' : 'libvpx']);
+  check('browser · the alpha WebM really is mostly transparent',
+        r.formats['webm-alpha'].census.transparentPct > 50,
+        JSON.stringify(r.formats['webm-alpha'].census));
   await ctx.close();
   return r;
 }

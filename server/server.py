@@ -349,7 +349,8 @@ def api_meta():
             "max_objects": MAX_OBJECTS,
             "track_sizes": [t["size"] for t in TRACK_SIZES],
             "default_track_size": DEFAULT_TRACK_SIZE,
-            "per_object_prompt_frames": True}
+            "per_object_prompt_frames": True,
+            "formats": list(R.FORMATS)}
 
 
 @app.get("/api/bluenoise")
@@ -375,6 +376,8 @@ def palettes():
         "default_track_size": DEFAULT_TRACK_SIZE,
         "precision": _precision(_backend or BACKEND),
         "max_objects": MAX_OBJECTS,
+        "formats": [dict(id=k, **{x: v[x] for x in ("ext", "mime", "alpha", "label")})
+                    for k, v in R.FORMATS.items()],
     }
 
 
@@ -699,6 +702,10 @@ class RenderReq(BaseModel):
     band: int = 9
     seed: int = 7
     fps: int | None = None
+    # container. mp4|webm|gif|webm-alpha|prores — see render.FORMATS. The two
+    # alpha formats key the flat background out and leave only the dots.
+    format: str = "mp4"
+    gif_fps: int | None = None
 
 
 @app.post("/api/jobs/{jid}/render")
@@ -717,6 +724,8 @@ def start_render(jid: str, req: RenderReq):
                          "dot": s.get("dot") or R.SUBJECT_COLORS[i % 6]})
     if req.mode == "dots" and not resolved:
         raise HTTPException(400, "the dots look needs at least one tracked subject")
+    if req.format not in R.FORMATS:
+        raise HTTPException(400, "format must be one of %s" % list(R.FORMATS))
 
     with _state_lock:
         st = _jobs.get(jid) or new_status(meta["n_frames"])
@@ -724,7 +733,8 @@ def start_render(jid: str, req: RenderReq):
             raise HTTPException(409, "already rendering")
         st["render"] = {"state": "rendering", "done_frames": 0,
                         "n_frames": meta["n_frames"], "elapsed_s": 0.0,
-                        "fps": 0.0, "error": None}
+                        "fps": 0.0, "error": None, "format": req.format,
+                        "bytes": 0}
         _jobs[jid] = st
 
     params = req.model_dump()
@@ -733,12 +743,14 @@ def start_render(jid: str, req: RenderReq):
         params["fps"] = meta.get("fps", 30)
     threading.Thread(target=_render_worker, args=(jid, d, resolved, params),
                      daemon=True).start()
-    return {"job": jid, "state": "rendering", "subjects": len(resolved)}
+    return {"job": jid, "state": "rendering", "subjects": len(resolved),
+            "format": req.format, "url": "/api/jobs/%s/output/%s" % (jid, req.format)}
 
 
 def _render_worker(jid, d, subs, params):
     t0 = time.perf_counter()
-    out = os.path.join(d, "out.mp4")
+    fmt = params.get("format") or "mp4"
+    out = os.path.join(d, R.FORMATS[fmt]["file"])
     try:
         def prog(done, total):
             el = time.perf_counter() - t0
@@ -751,8 +763,10 @@ def _render_worker(jid, d, subs, params):
         el = time.perf_counter() - t0
         with _state_lock:
             _jobs[jid]["render"].update(state="done", elapsed_s=round(el, 2),
-                                        fps=round(info["frames"] / max(el, 1e-6), 2))
-        print("[render] %s: %d frames in %.1fs" % (jid, info["frames"], el), flush=True)
+                                        fps=round(info["frames"] / max(el, 1e-6), 2),
+                                        format=fmt, bytes=info.get("bytes", 0))
+        print("[render] %s: %d frames -> %s in %.1fs (%.1f MB)"
+              % (jid, info["frames"], fmt, el, info.get("bytes", 0) / 1e6), flush=True)
     except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
@@ -761,16 +775,27 @@ def _render_worker(jid, d, subs, params):
                                         error="%s: %s" % (type(e).__name__, e))
 
 
-@app.get("/api/jobs/{jid}/out.mp4")
-def get_out(jid: str):
-    p = os.path.join(job_dir(jid), "out.mp4")
+@app.get("/api/jobs/{jid}/output/{fmt}")
+def get_output(jid: str, fmt: str):
+    """The rendered file for one format. One file per format per job, so
+    exporting an MP4 does not throw away the GIF you rendered a minute ago."""
+    if fmt not in R.FORMATS:
+        raise HTTPException(400, "unknown format %r" % fmt)
+    f = R.FORMATS[fmt]
+    p = os.path.join(job_dir(jid), f["file"])
     if not os.path.exists(p):
         raise HTTPException(404, "not rendered yet")
-    # inline (not attachment) so the in-page <video> can play it; the UI's
+    # inline (not attachment) so the in-page <video>/<img> can play it; the UI's
     # download link carries a `download` attribute of its own
-    return FileResponse(p, media_type="video/mp4", headers={
-        "Content-Disposition": 'inline; filename="dither-%s.mp4"' % jid,
+    return FileResponse(p, media_type=f["mime"], headers={
+        "Content-Disposition": 'inline; filename="dither-%s.%s"' % (jid, f["ext"]),
         "Accept-Ranges": "bytes"})
+
+
+@app.get("/api/jobs/{jid}/out.mp4")
+def get_out(jid: str):
+    """The pre-formats route, kept so an older client still works."""
+    return get_output(jid, "mp4")
 
 
 # The page is served from web/ as-is -- the same bytes GitHub Pages would

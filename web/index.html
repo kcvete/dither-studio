@@ -191,11 +191,24 @@
     <section class="step" id="st5" data-open="0" hidden>
       <div class="sh"><i>5</i><span>Export</span><em id="s5sum"></em></div>
       <div class="sb">
+        <div id="fmtui" hidden>
+          <div class="lbl"><span>Format</span><span id="vFmt"></span></div>
+          <select id="sFmt"></select>
+          <div id="giffps" hidden>
+            <div class="lbl"><span>GIF frame rate</span></div>
+            <div class="chips seg" id="gfps">
+              <button class="chip" data-gfps="15" aria-pressed="true">15 fps</button>
+              <button class="chip" data-gfps="30" aria-pressed="false">30 fps</button>
+            </div>
+          </div>
+          <div class="note" id="fmtnote"></div>
+        </div>
         <div class="row"><button class="btn go" id="bExport">Export</button></div>
         <div id="rprog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
         <div id="rinfo" class="stat" hidden></div>
         <a id="dl" class="btn dl" hidden download>download</a>
         <video id="outvid" hidden controls loop playsinline></video>
+        <img id="outimg" hidden alt="exported GIF">
       </div>
     </section>
   </aside>

@@ -6,19 +6,35 @@
  "pageErrors": [],
  "requestFailures": [
   {
-   "url": "http://127.0.0.1:8765/api/jobs/44055ec46157/out.mp4?t=1787211119677",
+   "url": "http://127.0.0.1:8765/api/jobs/9046db895d7d/output/mp4?t=1787213445407",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8765/api/jobs/7a3fdd20c44c/out.mp4?t=1787211143060",
+   "url": "http://127.0.0.1:8765/api/jobs/fa07d67669f3/output/mp4?t=1787213470361",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8765/api/jobs/7a3fdd20c44c/out.mp4?t=1787211161346",
+   "url": "http://127.0.0.1:8765/api/jobs/fa07d67669f3/output/mp4?t=1787213488738",
    "why": "net::ERR_ABORTED"
   },
   {
-   "url": "http://127.0.0.1:8765/api/jobs/7a3fdd20c44c/out.mp4?t=1787211161346",
+   "url": "http://127.0.0.1:8765/api/jobs/fa07d67669f3/output/mp4?t=1787213488738",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8765/api/jobs/2819cdeb996b/output/mp4?t=1787213515664",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8765/api/jobs/2819cdeb996b/output/webm?t=1787213518880",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8765/api/jobs/2819cdeb996b/output/webm-alpha?t=1787213526694",
+   "why": "net::ERR_ABORTED"
+  },
+  {
+   "url": "http://127.0.0.1:8765/api/jobs/2819cdeb996b/output/webm-alpha?t=1787213526694",
    "why": "net::ERR_ABORTED"
   }
  ],
@@ -184,7 +200,7 @@
   },
   "whole": {
    "source": "150 frames · 1280×720 · 30 fps",
-   "job": "44055ec46157",
+   "job": "9046db895d7d",
    "preview": {
     "w": 1280,
     "h": 720,
@@ -208,7 +224,7 @@
      ]
     ]
    },
-   "previewFps": "58.1 fps",
+   "previewFps": "56.2 fps",
    "previewFrame20": {
     "w": 1280,
     "h": 720,
@@ -232,7 +248,7 @@
      ]
     ]
    },
-   "render": "rendered 150 frames in 10.3 s (14.6 fps)",
+   "render": "rendered 150 frames in 10.3 s (14.6 fps) · 7.2 MB",
    "ffprobe": {
     "width": 1280,
     "height": 720,
@@ -241,7 +257,7 @@
    }
   },
   "tracked": {
-   "job": "7a3fdd20c44c",
+   "job": "fa07d67669f3",
    "subjectChips": [
     "#1 · 1pt+box @ 0✕",
     "#2 · 1pt+box @ 0✕"
@@ -264,14 +280,14 @@
     }
    ],
    "qualityDefault": 768,
-   "trackInfo": "tracked 150 frames in 12.5 s (12.0 fps) on MPS coreml · 2 subjects",
-   "trackWallSeconds": 13.1,
+   "trackInfo": "tracked 150 frames in 13.8 s (10.8 fps) on MPS coreml · 2 subjects",
+   "trackWallSeconds": 14.6,
    "status": {
     "state": "done",
     "done_frames": 150,
     "n_frames": 150,
-    "elapsed_s": 12.5,
-    "fps": 12,
+    "elapsed_s": 13.83,
+    "fps": 10.85,
     "error": null,
     "device": "mps",
     "backend": "coreml",
@@ -315,8 +331,8 @@
      ]
     ]
    },
-   "dotsFps": "44.2 fps · 3989 dots",
-   "dotsRender": "rendered 150 frames in 3.8 s (39.5 fps)",
+   "dotsFps": "42.7 fps · 3989 dots",
+   "dotsRender": "rendered 150 frames in 3.8 s (39.1 fps) · 0.6 MB",
    "dotsProbe": {
     "width": 1280,
     "height": 720,
@@ -367,7 +383,7 @@
      ]
     ]
    },
-   "mixedRender": "rendered 150 frames in 12.3 s (12.1 fps)",
+   "mixedRender": "rendered 150 frames in 12.3 s (12.2 fps) · 27.5 MB",
    "mixedProbe": {
     "width": 1280,
     "height": 720,
@@ -381,14 +397,14 @@
    }
   },
   "trackedFast": {
-   "job": "6593bc6f72d1",
+   "job": "2819cdeb996b",
    "selected": 512,
-   "trackInfo": "tracked 150 frames in 8.3 s (18.0 fps) on MPS coreml · 1 subject",
-   "trackWallSeconds": 9.1,
+   "trackInfo": "tracked 150 frames in 7.9 s (19.0 fps) on MPS coreml · 1 subject",
+   "trackWallSeconds": 8.6,
    "imageSize": 512,
    "backend": "coreml",
    "doneFrames": 150,
-   "fps": 18.04,
+   "fps": 18.97,
    "maskBytes": 7260,
    "maskSize": [
     1280,
@@ -414,21 +430,157 @@
     ]
    }
   },
+  "formats": {
+   "formats": {
+    "mp4": {
+     "seconds": 3.2,
+     "bytes": 432303,
+     "probe": {
+      "codec_name": "h264",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "yuv420p",
+      "r_frame_rate": "30/1",
+      "nb_read_frames": "150",
+      "tags": {}
+     },
+     "info": "rendered 150 frames in 2.6 s (57.1 fps) · 0.4 MB"
+    },
+    "webm": {
+     "seconds": 3.2,
+     "bytes": 381748,
+     "probe": {
+      "codec_name": "vp9",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "yuv420p",
+      "r_frame_rate": "30/1",
+      "nb_read_frames": "150",
+      "tags": {}
+     },
+     "info": "rendered 150 frames in 2.7 s (55.2 fps) · 0.4 MB"
+    },
+    "gif": {
+     "seconds": 3.1,
+     "bytes": 160921,
+     "probe": {
+      "codec_name": "gif",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "bgra",
+      "r_frame_rate": "15/1",
+      "nb_read_frames": "75"
+     },
+     "info": "rendered 150 frames in 2.6 s (56.9 fps) · 0.2 MB"
+    },
+    "webm-alpha": {
+     "seconds": 4.7,
+     "bytes": 773867,
+     "probe": {
+      "codec_name": "vp9",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "yuv420p",
+      "r_frame_rate": "30/1",
+      "nb_read_frames": "150",
+      "tags": {
+       "alpha_mode": "1"
+      }
+     },
+     "info": "rendered 150 frames in 4.2 s (35.6 fps) · 0.8 MB · alpha channel written"
+    },
+    "prores": {
+     "seconds": 4.5,
+     "bytes": 19711207,
+     "probe": {
+      "codec_name": "prores",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "yuva444p12le",
+      "r_frame_rate": "30/1",
+      "nb_read_frames": "150",
+      "tags": {}
+     },
+     "info": "rendered 150 frames in 3.1 s (48.6 fps) · 19.7 MB · ProRes 4444 does not play in a browser — download it"
+    }
+   },
+   "job": "2819cdeb996b",
+   "offered": [
+    {
+     "available": true,
+     "note": "",
+     "id": "mp4",
+     "ext": "mp4",
+     "mime": "video/mp4",
+     "alpha": false,
+     "label": "MP4 · H.264"
+    },
+    {
+     "available": true,
+     "note": "",
+     "id": "webm",
+     "ext": "webm",
+     "mime": "video/webm",
+     "alpha": false,
+     "label": "WebM · VP9"
+    },
+    {
+     "available": true,
+     "note": "",
+     "id": "gif",
+     "ext": "gif",
+     "mime": "image/gif",
+     "alpha": false,
+     "label": "GIF · looping"
+    },
+    {
+     "available": true,
+     "note": "the flat background is keyed out; only the dots are opaque",
+     "id": "webm-alpha",
+     "ext": "webm",
+     "mime": "video/webm",
+     "alpha": true,
+     "label": "WebM · VP9 + alpha"
+    },
+    {
+     "available": true,
+     "note": "the flat background is keyed out; only the dots are opaque",
+     "id": "prores",
+     "ext": "mov",
+     "mime": "video/quicktime",
+     "alpha": true,
+     "label": "ProRes 4444 · alpha"
+    }
+   ],
+   "alpha": {
+    "webm-alpha": {
+     "pixels": 921600,
+     "transparentPct": 99.3,
+     "opaquePct": 0.7
+    },
+    "prores": {
+     "pixels": 921600,
+     "transparentPct": 99.3,
+     "opaquePct": 0.7
+    }
+   },
+   "gifColours": 2
+  },
   "lasso": {
-   "job": "dbe88de5483b",
-   "boxPreviewText": "frame 0 · 1 subject in 0.21 s (768 px) · #1 12767 px",
-   "boxPreviewWallSeconds": 0.52,
+   "job": "e1edf68b9433",
+   "boxPreviewText": "frame 0 · 1 subject in 0.18 s (768 px) · #1 12767 px",
+   "boxPreviewWallSeconds": 0.53,
    "boxPreviewOverlay": 1,
    "shapes": [
     27
    ],
    "maskDataURLBytes": 36138,
-   "lassoPreviewText": "frame 0 · 1 subject in 0.11 s (768 px) · #1 12093 px",
+   "lassoPreviewText": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12093 px",
    "lassoPreviewWallSeconds": 0.53,
-   "trackInfo": "tracked 150 frames in 10.1 s (14.9 fps) on MPS coreml · 1 subject",
+   "trackInfo": "tracked 150 frames in 10.1 s (14.8 fps) on MPS coreml · 1 subject",
    "trackWallSeconds": 10.6,
    "doneFrames": 150,
-   "fps": 14.86,
+   "fps": 14.79,
    "backend": "coreml",
    "promptRecorded": {
     "frame_idx": 0,

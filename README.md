@@ -227,17 +227,39 @@ palette per subject *plus* one for the background.
 
 ### 5 · Export
 Stills render at full source resolution in the tab and download as PNG, on both
-engines. Clips depend on the engine:
+engines. Clips get a **format** select, and what is in it depends on the engine.
 
-* **browser** — every frame is dithered into a canvas and fed to `MediaRecorder`
-  through a capture stream, giving **WebM (VP9)**. Writing H.264 in the tab would
-  mean vendoring ~32 MB of ffmpeg.wasm to keep the no-CDN rule — a bigger
-  download than the tracker itself. The recorder timestamps each frame when the
-  page hands it over, so the loop is paced to the clip's own frame interval; if a
-  frame takes longer to dither than that, the file plays slow and the export line
-  tells you so.
-* **server** — numpy plus the C dither loop, encoded by ffmpeg to **H.264 MP4**
-  at crf 18.
+| Format | id | browser | server | notes |
+|---|---|---|---|---|
+| MP4 · H.264 | `mp4` | — | ✅ crf 18, yuv420p | writing H.264 in the tab means vendoring ~32 MB of ffmpeg.wasm, which is a bigger download than the tracker |
+| WebM · VP9 | `webm` | ✅ `MediaRecorder` | ✅ libvpx-vp9 crf 32 | the browser's default |
+| GIF · looping | `gif` | ✅ `web/vendor/gifenc.js` | ✅ ffmpeg `palettegen`/`paletteuse` | 15 or 30 fps, loops forever |
+| WebM + alpha | `webm-alpha` | ✅ VP8 (`alpha_mode=1`) | ✅ VP9 `yuva420p` | dots on transparency |
+| ProRes 4444 | `prores` | — | ✅ `yuva444p12le` | the lossless-ish alpha master |
+
+Formats the running engine cannot write stay in the menu, greyed, with the
+reason — a menu that quietly has three entries in the tab and five on the server
+would be worse.
+
+**GIF** is not a consolation prize here. The looks this tool produces are two to
+four flat colours, which is exactly what a 256-entry palette is good at: on the
+150-frame parkour clip the server's GIF is **161 KB** against **432 KB** for the
+same frames as H.264 (measured, `docs/verify-report.json`). The server builds the
+palette from the whole clip in one pass (`palettegen stats_mode=full`) and maps
+with `dither=none`, because the frames are already flat and a second dither would
+fuzz the dots. In the tab, `web/vendor/gifenc.js` is our own ~220-line LZW
+encoder: one global colour table taken from the palette you chose, every frame
+stored whole, no interframe delta. It holds the whole animation in memory as one
+byte per pixel per frame (~0.9 MB a frame at 720p), which the UI says out loud.
+
+**Transparent export** keys the flat background out and leaves only the dots
+opaque — `cutout` compose only, since `keep scene` has no background to remove
+and a whole-frame dither has nothing to key. Both engines produce it from the
+same rule (`p.alpha` in `web/dither.js` and `render.py`), so the transparent file
+is the opaque file minus its background. Measured on the parkour clip, frame 10:
+**99.3 % of the frame transparent, 0.7 % opaque**, in both the server's VP9 and
+its ProRes. Alpha in a lossy codec is a lossy plane — the dots' edges come back a
+few values off 255 in WebM, and clean in ProRes.
 
 **Compare** (in the transport bar) drags a before/after divider across the frame,
 and it keeps working while the clip plays.
@@ -736,7 +758,11 @@ why the setting exists rather than a silently lowered default.
   download.
 * **Subjects cost linearly.** One full pass each: N subjects, N × the time. The
   server batches them into one.
-* **WebM, not MP4.** `MediaRecorder` gives VP9. Older Safari will not play it.
+* **WebM, GIF and alpha-WebM — no MP4, no ProRes.** `MediaRecorder` gives VP9
+  (VP8 when alpha is asked for, because that is the codec Chrome carries an
+  alpha plane in). The menu says which ones need the server and why.
+* **A GIF is built whole in memory.** One byte per pixel per frame: ~0.9 MB a
+  frame at 720p, so ~280 MB of scratch for a 300-frame clip.
 * **The export is paced in real time.** A frame that takes longer to dither than
   the clip's frame interval makes the file play slow; the export line says when
   that happened.
@@ -787,6 +813,10 @@ why the setting exists rather than a silently lowered default.
   drag sliders.
 * **Compare is preview-only** — not baked into the export.
 * **No audio.** Video export is picture only.
+* **Alpha is cutout-only.** `keep scene` and whole-frame dithers export fully
+  opaque, because there is no flat background to key out. And a lossy codec
+  rounds the alpha plane: WebM's dot edges are a few values off 255, ProRes 4444
+  is clean.
 * **EdgeTAM patch.** `setup.sh` rewrites two `.view(...)` calls to `.reshape(...)`
   in `sam2/modeling/perceiver.py`; upstream throws *"view size is not compatible
   with input tensor's size and stride"* as soon as more than one object is

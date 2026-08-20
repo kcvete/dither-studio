@@ -390,7 +390,8 @@ function pixUpRGBA(src, w2, h2, P, w, h) {
     for (let x = 0; x < w; x++) {
       const sx = Math.min(Math.floor(x / P), w2 - 1);
       const s = (sy * w2 + sx) * 4, d = (y * w + x) * 4;
-      out[d] = src[s]; out[d + 1] = src[s + 1]; out[d + 2] = src[s + 2]; out[d + 3] = 255;
+      out[d] = src[s]; out[d + 1] = src[s + 1]; out[d + 2] = src[s + 2];
+      out[d + 3] = src[s + 3];
     }
   }
   return out;
@@ -400,6 +401,10 @@ function pixUpRGBA(src, w2, h2, P, w, h) {
      srcRGBA  full-resolution source pixels
      masks    array of Float32Array(w*h) coverage, 0..1 (empty = whole frame)
      palettes [backgroundPalette, subject1Palette, ...]
+   With p.alpha the flat background is left transparent (alpha 0) and only the
+   dithered subjects are opaque — the transparent exports. `overlay` compose and
+   whole-frame dithers have no background to remove and stay opaque, exactly as
+   render.py::_frame_pixels does it.
    Returns Uint8ClampedArray(w*h*4). */
 function composeFrame(srcRGBA, w, h, masks, p, palettes, bg) {
   const P = Math.max(1, p.pixel | 0);
@@ -409,6 +414,7 @@ function composeFrame(srcRGBA, w, h, masks, p, palettes, bg) {
   if (!masks.length) {
     const out = new Uint8ClampedArray(d.data);
     ditherRGBA(d.data, out, w2, h2, Object.assign({}, p, { palette: palettes[0] }), null);
+    for (let q = 3, n = N2 * 4; q < n; q += 4) out[q] = 255;
     return pixUpRGBA(out, w2, h2, P, w, h);
   }
 
@@ -426,9 +432,9 @@ function composeFrame(srcRGBA, w, h, masks, p, palettes, bg) {
     ditherRGBA(d.data, tmp, w2, h2, Object.assign({}, p, { palette: palettes[0] }), null);
     out.set(tmp);
   } else {
-    const c = hexRGB(bg);
+    const c = hexRGB(bg), a0 = p.alpha ? 0 : 255;
     for (let q = 0, n = N2 * 4; q < n; q += 4) {
-      out[q] = c[0]; out[q + 1] = c[1]; out[q + 2] = c[2]; out[q + 3] = 255;
+      out[q] = c[0]; out[q + 1] = c[1]; out[q + 2] = c[2]; out[q + 3] = a0;
     }
   }
 

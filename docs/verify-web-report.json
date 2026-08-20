@@ -19,7 +19,54 @@
      "multiObject": "batched",
      "exportMime": "video/mp4",
      "exportExt": "mp4",
-     "exportPlayable": true
+     "exportPlayable": true,
+     "formats": [
+      {
+       "available": true,
+       "note": "",
+       "id": "mp4",
+       "ext": "mp4",
+       "mime": "video/mp4",
+       "alpha": false,
+       "label": "MP4 · H.264"
+      },
+      {
+       "available": true,
+       "note": "",
+       "id": "webm",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": false,
+       "label": "WebM · VP9"
+      },
+      {
+       "available": true,
+       "note": "",
+       "id": "gif",
+       "ext": "gif",
+       "mime": "image/gif",
+       "alpha": false,
+       "label": "GIF · looping"
+      },
+      {
+       "available": true,
+       "note": "the flat background is keyed out; only the dots are opaque",
+       "id": "webm-alpha",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": true,
+       "label": "WebM · VP9 + alpha"
+      },
+      {
+       "available": true,
+       "note": "the flat background is keyed out; only the dots are opaque",
+       "id": "prores",
+       "ext": "mov",
+       "mime": "video/quicktime",
+       "alpha": true,
+       "label": "ProRes 4444 · alpha"
+      }
+     ]
     },
     "modelsMissing": null,
     "tried": [
@@ -41,7 +88,54 @@
      "multiObject": "sequential",
      "exportMime": "video/webm",
      "exportExt": "webm",
-     "exportPlayable": true
+     "exportPlayable": true,
+     "formats": [
+      {
+       "id": "webm",
+       "label": "WebM · VP9",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": false,
+       "available": true,
+       "note": ""
+      },
+      {
+       "id": "gif",
+       "label": "GIF · looping",
+       "ext": "gif",
+       "mime": "image/gif",
+       "alpha": false,
+       "available": true,
+       "note": "encoded in the tab; a 300-frame 720p GIF needs ~280 MB of scratch memory"
+      },
+      {
+       "id": "webm-alpha",
+       "label": "WebM · VP8 + alpha",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": true,
+       "available": true,
+       "note": "alpha only survives in players that read WebM alpha (Chrome, Firefox)"
+      },
+      {
+       "id": "mp4",
+       "label": "MP4 · H.264",
+       "ext": "mp4",
+       "mime": "video/mp4",
+       "alpha": false,
+       "available": false,
+       "note": "needs the local server — writing H.264 in the tab means vendoring a ~32 MB encoder"
+      },
+      {
+       "id": "prores",
+       "label": "ProRes 4444 · alpha",
+       "ext": "mov",
+       "mime": "video/quicktime",
+       "alpha": true,
+       "available": false,
+       "note": "needs the local server"
+      }
+     ]
     },
     "modelsMissing": null,
     "tried": [
@@ -52,8 +146,8 @@
     ]
    },
    "browserChip": "Browser · free",
-   "deadPort": 54733,
-   "badCustom": "could not reach http://127.0.0.1:54733 — running in the browser instead",
+   "deadPort": 58815,
+   "badCustom": "could not reach http://127.0.0.1:58815 — running in the browser instead",
    "afterBadCustom": {
     "id": "browser",
     "label": "Browser",
@@ -65,7 +159,54 @@
      "multiObject": "sequential",
      "exportMime": "video/webm",
      "exportExt": "webm",
-     "exportPlayable": true
+     "exportPlayable": true,
+     "formats": [
+      {
+       "id": "webm",
+       "label": "WebM · VP9",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": false,
+       "available": true,
+       "note": ""
+      },
+      {
+       "id": "gif",
+       "label": "GIF · looping",
+       "ext": "gif",
+       "mime": "image/gif",
+       "alpha": false,
+       "available": true,
+       "note": "encoded in the tab; a 300-frame 720p GIF needs ~280 MB of scratch memory"
+      },
+      {
+       "id": "webm-alpha",
+       "label": "WebM · VP8 + alpha",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": true,
+       "available": true,
+       "note": "alpha only survives in players that read WebM alpha (Chrome, Firefox)"
+      },
+      {
+       "id": "mp4",
+       "label": "MP4 · H.264",
+       "ext": "mp4",
+       "mime": "video/mp4",
+       "alpha": false,
+       "available": false,
+       "note": "needs the local server — writing H.264 in the tab means vendoring a ~32 MB encoder"
+      },
+      {
+       "id": "prores",
+       "label": "ProRes 4444 · alpha",
+       "ext": "mov",
+       "mime": "video/quicktime",
+       "alpha": true,
+       "available": false,
+       "note": "needs the local server"
+      }
+     ]
     },
     "modelsMissing": null,
     "tried": [
@@ -121,6 +262,7 @@
     "codec_name": "png",
     "width": 1280,
     "height": 720,
+    "pix_fmt": "rgba",
     "r_frame_rate": "25/1",
     "nb_read_frames": "1"
    }
@@ -139,15 +281,19 @@
     "h": 720,
     "distinctColours": 4
    },
-   "render": "rendered 150 frames in 5.3 s (28.6 fps) · 2.6 MB · WebM (VP9) — the server engine writes H.264 MP4",
+   "render": "rendered 150 frames in 5.2 s (28.9 fps) · 3.2 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
    "renderSeconds": 5.6,
-   "bytes": 2595546,
+   "bytes": 3244415,
    "probe": {
     "codec_name": "vp9",
     "width": 1280,
     "height": 720,
-    "r_frame_rate": "353/12",
-    "nb_read_frames": "150"
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "1000/1",
+    "nb_read_frames": "150",
+    "tags": {
+     "alpha_mode": "1"
+    }
    }
   },
   "tracked": {
@@ -158,26 +304,118 @@
    "qualityChips": [
     "balanced · 768 px 12 fps"
    ],
-   "previewText": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12825 px",
-   "previewSeconds": 1.57,
-   "trackText": "tracked 150 frames in 12.1 s (12.4 fps) on WEBGPU fp16 · 1 subject",
-   "trackSeconds": 12.2,
-   "trackFps": 12.4,
+   "previewText": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12825 px",
+   "previewSeconds": 1.65,
+   "trackText": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject",
+   "trackSeconds": 13.6,
+   "trackFps": 11.3,
    "dots": {
     "w": 1280,
     "h": 720,
     "distinctColours": 2
    },
-   "dotsFps": "43.5 fps · 774 dots",
-   "render": "rendered 150 frames in 5.1 s (29.5 fps) · 1.0 MB · WebM (VP9) — the server engine writes H.264 MP4",
+   "dotsFps": "42.4 fps · 774 dots",
+   "render": "rendered 150 frames in 5.1 s (29.5 fps) · 1.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
    "renderSeconds": 5.2,
-   "bytes": 955648,
+   "bytes": 1110010,
    "probe": {
     "codec_name": "vp9",
     "width": 1280,
     "height": 720,
-    "r_frame_rate": "179/6",
-    "nb_read_frames": "150"
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "1000/1",
+    "nb_read_frames": "150",
+    "tags": {
+     "alpha_mode": "1"
+    }
+   },
+   "offered": [
+    {
+     "id": "webm",
+     "label": "WebM · VP9",
+     "ext": "webm",
+     "mime": "video/webm",
+     "alpha": false,
+     "available": true,
+     "note": ""
+    },
+    {
+     "id": "gif",
+     "label": "GIF · looping",
+     "ext": "gif",
+     "mime": "image/gif",
+     "alpha": false,
+     "available": true,
+     "note": "encoded in the tab; a 300-frame 720p GIF needs ~280 MB of scratch memory"
+    },
+    {
+     "id": "webm-alpha",
+     "label": "WebM · VP8 + alpha",
+     "ext": "webm",
+     "mime": "video/webm",
+     "alpha": true,
+     "available": true,
+     "note": "alpha only survives in players that read WebM alpha (Chrome, Firefox)"
+    },
+    {
+     "id": "mp4",
+     "label": "MP4 · H.264",
+     "ext": "mp4",
+     "mime": "video/mp4",
+     "alpha": false,
+     "available": false,
+     "note": "needs the local server — writing H.264 in the tab means vendoring a ~32 MB encoder"
+    },
+    {
+     "id": "prores",
+     "label": "ProRes 4444 · alpha",
+     "ext": "mov",
+     "mime": "video/quicktime",
+     "alpha": true,
+     "available": false,
+     "note": "needs the local server"
+    }
+   ],
+   "unavailable": [
+    "mp4",
+    "prores"
+   ],
+   "formats": {
+    "gif": {
+     "seconds": 3.4,
+     "bytes": 347378,
+     "probe": {
+      "codec_name": "gif",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "bgra",
+      "r_frame_rate": "100/7",
+      "nb_read_frames": "75"
+     },
+     "info": "rendered 75 frames in 3.4 s (22.3 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
+    },
+    "webm-alpha": {
+     "seconds": 5.7,
+     "bytes": 1977799,
+     "probe": {
+      "codec_name": "vp8",
+      "width": 1280,
+      "height": 720,
+      "pix_fmt": "yuv420p",
+      "r_frame_rate": "179/6",
+      "nb_read_frames": "150",
+      "tags": {
+       "alpha_mode": "1"
+      }
+     },
+     "info": "rendered 150 frames in 5.1 s (29.3 fps) · 2.0 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too",
+     "alphaTag": "1",
+     "census": {
+      "pixels": 921600,
+      "transparentPct": 99.1,
+      "opaquePct": 0.7
+     }
+    }
    }
   },
   "lasso": {
@@ -185,9 +423,9 @@
     27
    ],
    "previewText": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12125 px",
-   "previewSeconds": 1.57,
-   "trackText": "tracked 150 frames in 12.1 s (12.4 fps) on WEBGPU fp16 · 1 subject",
-   "trackSeconds": 12.2,
+   "previewSeconds": 1.66,
+   "trackText": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject",
+   "trackSeconds": 13.7,
    "areas": [
     12063,
     12809,
@@ -352,9 +590,9 @@
    ],
    "offFrameHint": "#1 prompted @ 0 — jump",
    "subject1MarksHidden": true,
-   "previewText": "frame 48 · 1 subject in 0.11 s (768 px) · #2 7600 px",
-   "trackText": "tracked 149 frames in 24.6 s (12.1 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each",
-   "trackSeconds": 24.8,
+   "previewText": "frame 48 · 1 subject in 0.12 s (768 px) · #2 7600 px",
+   "trackText": "tracked 149 frames in 25.6 s (11.6 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each",
+   "trackSeconds": 25.8,
    "tree": {
     "firstOn": 0,
     "empty": 0,
@@ -386,8 +624,8 @@
      8347
     ]
    },
-   "dotsBefore": "32.5 fps · 2085 dots",
-   "dotsAfter": "53.5 fps · 2610 dots",
+   "dotsBefore": "40.5 fps · 2085 dots",
+   "dotsAfter": "56.2 fps · 2610 dots",
    "dotsBeforeN": 2085,
    "dotsAfterN": 2610
   },
@@ -401,9 +639,9 @@
    ],
    "offFrameHint": "#1 prompted @ 0 — jump",
    "subject1MarksHidden": true,
-   "previewText": "frame 48 · 1 subject in 0.16 s (768 px) · #2 6959 px",
-   "trackText": "tracked 149 frames in 15.6 s (9.6 fps) on MPS coreml · 2 subjects prompted on 2 different frames",
-   "trackSeconds": 16.1,
+   "previewText": "frame 48 · 1 subject in 0.17 s (768 px) · #2 6959 px",
+   "trackText": "tracked 149 frames in 14.9 s (10.0 fps) on MPS coreml · 2 subjects prompted on 2 different frames",
+   "trackSeconds": 15.1,
    "tree": {
     "firstOn": 0,
     "empty": 0,
@@ -435,13 +673,13 @@
      8358
     ]
    },
-   "dotsBefore": "37.2 fps · 1253 dots",
-   "dotsAfter": "62.1 fps · 1759 dots",
+   "dotsBefore": "37.0 fps · 1253 dots",
+   "dotsAfter": "60.6 fps · 1759 dots",
    "dotsBeforeN": 1253,
    "dotsAfterN": 1759
   },
   "apiKey": {
-   "port": 55002,
+   "port": 59108,
    "withoutKey": 401,
    "wrongKey": 401,
    "withKey": 200,
@@ -459,13 +697,20 @@
      1024
     ],
     "default_track_size": 768,
-    "per_object_prompt_frames": true
+    "per_object_prompt_frames": true,
+    "formats": [
+     "mp4",
+     "webm",
+     "gif",
+     "webm-alpha",
+     "prores"
+    ]
    },
    "pageWithoutKey": 200,
    "engine": {
     "id": "remote",
     "label": "Remote server",
-    "baseUrl": "http://127.0.0.1:55002",
+    "baseUrl": "http://127.0.0.1:59108",
     "supports": {
      "maskPrompt": true,
      "perObjectPromptFrames": true,
@@ -473,12 +718,59 @@
      "multiObject": "batched",
      "exportMime": "video/mp4",
      "exportExt": "mp4",
-     "exportPlayable": true
+     "exportPlayable": true,
+     "formats": [
+      {
+       "available": true,
+       "note": "",
+       "id": "mp4",
+       "ext": "mp4",
+       "mime": "video/mp4",
+       "alpha": false,
+       "label": "MP4 · H.264"
+      },
+      {
+       "available": true,
+       "note": "",
+       "id": "webm",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": false,
+       "label": "WebM · VP9"
+      },
+      {
+       "available": true,
+       "note": "",
+       "id": "gif",
+       "ext": "gif",
+       "mime": "image/gif",
+       "alpha": false,
+       "label": "GIF · looping"
+      },
+      {
+       "available": true,
+       "note": "the flat background is keyed out; only the dots are opaque",
+       "id": "webm-alpha",
+       "ext": "webm",
+       "mime": "video/webm",
+       "alpha": true,
+       "label": "WebM · VP9 + alpha"
+      },
+      {
+       "available": true,
+       "note": "the flat background is keyed out; only the dots are opaque",
+       "id": "prores",
+       "ext": "mov",
+       "mime": "video/quicktime",
+       "alpha": true,
+       "label": "ProRes 4444 · alpha"
+      }
+     ]
     },
     "modelsMissing": null,
     "tried": [
      {
-      "url": "http://127.0.0.1:55002",
+      "url": "http://127.0.0.1:59108",
       "ok": true
      }
     ]
@@ -561,7 +853,7 @@
   {
    "name": "whole-frame clip exports",
    "ok": true,
-   "detail": "rendered 150 frames in 5.3 s (28.6 fps) · 2.6 MB · WebM (VP9) — the server engine writes H.264 MP4"
+   "detail": "rendered 150 frames in 5.2 s (28.9 fps) · 3.2 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
   },
   {
    "name": "the WebM has every frame",
@@ -585,22 +877,61 @@
   {
    "name": "frame-0 preview runs in the tab",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.12 s (768 px) · #1 12825 px"
+   "detail": "frame 0 · 1 subject in 0.13 s (768 px) · #1 12825 px"
   },
   {
    "name": "the clip tracks in the tab",
    "ok": true,
-   "detail": "tracked 150 frames in 12.1 s (12.4 fps) on WEBGPU fp16 · 1 subject"
+   "detail": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject"
   },
   {
    "name": "the dots look draws dots",
    "ok": true,
-   "detail": "43.5 fps · 774 dots"
+   "detail": "42.4 fps · 774 dots"
   },
   {
    "name": "the tracked clip exports",
    "ok": true,
-   "detail": "rendered 150 frames in 5.1 s (29.5 fps) · 1.0 MB · WebM (VP9) — the server engine writes H.264 MP4"
+   "detail": "rendered 150 frames in 5.1 s (29.5 fps) · 1.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+  },
+  {
+   "name": "the browser engine says plainly that MP4 and ProRes need the server",
+   "ok": true,
+   "detail": "[\"mp4\",\"prores\"]"
+  },
+  {
+   "name": "every unavailable format carries a reason",
+   "ok": true,
+   "detail": "[{\"id\":\"webm\",\"label\":\"WebM · VP9\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":false,\"available\":true,\"note\":\"\"},{\"id\":\"gif\",\"label\":\"GIF · looping\",\"ext\":\"gif\",\"mime\":\"image/gif\",\"alpha\":false,\"available\":true,\"note\":\"encoded in the tab; a 300-frame 720p GIF needs ~280 MB of scratch memory\"},{\"id\":\"webm-alpha\",\"label\":\"WebM · VP8 + alpha\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":true,\"available\":true,\"note\":\"alpha only survives in players that read WebM alpha (Chrome, Firefox)\"},{\"id\":\"mp4\",\"label\":\"MP4 · H.264\",\"ext\":\"mp4\",\"mime\":\"video/mp4\",\"alpha\":false,\"available\":false,\"note\":\"needs the local server — writing H.264 in the tab means vendoring a ~32 MB encoder\"},{\"id\":\"prores\",\"label\":\"ProRes 4444 · alpha\",\"ext\":\"mov\",\"mime\":\"video/quicktime\",\"alpha\":true,\"available\":false,\"note\":\"needs the local server\"}]"
+  },
+  {
+   "name": "browser · gif exports",
+   "ok": true,
+   "detail": "rendered 75 frames in 3.4 s (22.3 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
+  },
+  {
+   "name": "browser · webm-alpha exports",
+   "ok": true,
+   "detail": "rendered 150 frames in 5.1 s (29.3 fps) · 2.0 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
+  },
+  {
+   "name": "browser · the GIF is a GIF and loops",
+   "ok": true,
+   "detail": "{\"codec_name\":\"gif\",\"width\":1280,\"height\":720,\"pix_fmt\":\"bgra\",\"r_frame_rate\":\"100/7\",\"nb_read_frames\":\"75\"}"
+  },
+  {
+   "name": "browser · the GIF carries the loop-forever extension",
+   "ok": true
+  },
+  {
+   "name": "browser · the alpha WebM declares an alpha channel",
+   "ok": true,
+   "detail": "{\"codec_name\":\"vp8\",\"width\":1280,\"height\":720,\"pix_fmt\":\"yuv420p\",\"r_frame_rate\":\"179/6\",\"nb_read_frames\":\"150\",\"tags\":{\"alpha_mode\":\"1\"}}"
+  },
+  {
+   "name": "browser · the alpha WebM really is mostly transparent",
+   "ok": true,
+   "detail": "{\"pixels\":921600,\"transparentPct\":99.1,\"opaquePct\":0.7}"
   },
   {
    "name": "the polygon was captured",
@@ -620,7 +951,7 @@
   {
    "name": "a mask prompt tracks the clip",
    "ok": true,
-   "detail": "tracked 150 frames in 12.1 s (12.4 fps) on WEBGPU fp16 · 1 subject"
+   "detail": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject"
   },
   {
    "name": "the mask-prompted subject survives the clip",
@@ -648,17 +979,17 @@
   {
    "name": "browser · preview covers only this frame's subject",
    "ok": true,
-   "detail": "frame 48 · 1 subject in 0.11 s (768 px) · #2 7600 px"
+   "detail": "frame 48 · 1 subject in 0.12 s (768 px) · #2 7600 px"
   },
   {
    "name": "browser · both subjects track",
    "ok": true,
-   "detail": "tracked 149 frames in 24.6 s (12.1 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
+   "detail": "tracked 149 frames in 25.6 s (11.6 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
   },
   {
    "name": "browser · the two prompt frames are reported",
    "ok": true,
-   "detail": "tracked 149 frames in 24.6 s (12.1 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
+   "detail": "tracked 149 frames in 25.6 s (11.6 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each"
   },
   {
    "name": "browser · the subject present from the start is never empty",
@@ -701,17 +1032,17 @@
   {
    "name": "remote · preview covers only this frame's subject",
    "ok": true,
-   "detail": "frame 48 · 1 subject in 0.16 s (768 px) · #2 6959 px"
+   "detail": "frame 48 · 1 subject in 0.17 s (768 px) · #2 6959 px"
   },
   {
    "name": "remote · both subjects track",
    "ok": true,
-   "detail": "tracked 149 frames in 15.6 s (9.6 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
+   "detail": "tracked 149 frames in 14.9 s (10.0 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
   },
   {
    "name": "remote · the two prompt frames are reported",
    "ok": true,
-   "detail": "tracked 149 frames in 15.6 s (9.6 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
+   "detail": "tracked 149 frames in 14.9 s (10.0 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
   },
   {
    "name": "remote · the subject present from the start is never empty",
@@ -750,7 +1081,7 @@
   {
    "name": "DV_API_KEY: /api/meta advertises the gate",
    "ok": true,
-   "detail": "{\"ok\":true,\"name\":\"dither-studio\",\"api\":1,\"device\":\"mps\",\"backend\":null,\"auth\":\"bearer\",\"max_objects\":6,\"track_sizes\":[512,768,1024],\"default_track_size\":768,\"per_object_prompt_frames\":true}"
+   "detail": "{\"ok\":true,\"name\":\"dither-studio\",\"api\":1,\"device\":\"mps\",\"backend\":null,\"auth\":\"bearer\",\"max_objects\":6,\"track_sizes\":[512,768,1024],\"default_track_size\":768,\"per_object_prompt_frames\":true,\"formats\":[\"mp4\",\"webm\",\"gif\",\"webm-alpha\",\"prores\"]}"
   },
   {
    "name": "DV_API_KEY: the page itself stays reachable",
@@ -760,7 +1091,7 @@
   {
    "name": "DV_API_KEY: the remote engine connects with the key",
    "ok": true,
-   "detail": "{\"id\":\"remote\",\"label\":\"Remote server\",\"baseUrl\":\"http://127.0.0.1:55002\",\"supports\":{\"maskPrompt\":true,\"perObjectPromptFrames\":true,\"backward\":true,\"multiObject\":\"batched\",\"exportMime\":\"video/mp4\",\"exportExt\":\"mp4\",\"exportPlayable\":true},\"modelsMissing\":null,\"tried\":[{\"url\":\"http://127.0.0.1:55002\",\"ok\":true}]}"
+   "detail": "{\"id\":\"remote\",\"label\":\"Remote server\",\"baseUrl\":\"http://127.0.0.1:59108\",\"supports\":{\"maskPrompt\":true,\"perObjectPromptFrames\":true,\"backward\":true,\"multiObject\":\"batched\",\"exportMime\":\"video/mp4\",\"exportExt\":\"mp4\",\"exportPlayable\":true,\"formats\":[{\"available\":true,\"note\":\"\",\"id\":\"mp4\",\"ext\":\"mp4\",\"mime\":\"video/mp4\",\"alpha\":false,\"label\":\"MP4 · H.264\"},{\"available\":true,\"note\":\"\",\"id\":\"webm\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":false,\"label\":\"WebM · VP9\"},{\"available\":true,\"note\":\"\",\"id\":\"gif\",\"ext\":\"gif\",\"mime\":\"image/gif\",\"alpha\":false,\"label\":\"GIF · looping\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"webm-alpha\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":true,\"label\":\"WebM · VP9 + alpha\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"prores\",\"ext\":\"mov\",\"mime\":\"video/quicktime\",\"alpha\":true,\"label\":\"ProRes 4444 · alpha\"}]},\"modelsMissing\":null,\"tried\":[{\"url\":\"http://127.0.0.1:59108\",\"ok\":true}]}"
   }
  ],
  "browser": {
@@ -769,6 +1100,6 @@
   "webgpu": "ok",
   "clipSeconds": 5
  },
- "checksPassed": 57,
- "checksTotal": 57
+ "checksPassed": 65,
+ "checksTotal": 65
 }

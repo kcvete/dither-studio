@@ -87,6 +87,9 @@ body.dragging #drop b{opacity:1}
 .prog .bar i{display:block;height:100%;width:0;background:var(--go);transition:width .18s}
 .prog span{font-size:10px;opacity:.6;font-variant-numeric:tabular-nums;white-space:nowrap}
 #outvid{width:100%;margin-top:9px;border-radius:8px;display:block;background:#000}
+/* a GIF export is an image, and a transparent one wants a checker under it */
+#outimg{width:100%;margin-top:9px;border-radius:8px;display:block;
+  background:repeating-conic-gradient(#1b2b24 0% 25%,#0f1f18 0% 50%) 50%/16px 16px}
 
 /* ---------------------------------------------------------------- stage */
 #stage{flex:1;min-width:0;position:relative;display:flex;flex-direction:column;

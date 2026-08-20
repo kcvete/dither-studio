@@ -37,6 +37,24 @@ function ffprobe(f) {
   return JSON.parse(out).streams[0];
 }
 
+/* codec + pixel format + the alpha_mode tag WebM carries an alpha plane under */
+function ffprobeFull(f) {
+  const out = execFileSync('ffprobe', ['-v', 'error', '-count_frames',
+    '-select_streams', 'v:0', '-show_entries',
+    'stream=codec_name,pix_fmt,width,height,nb_read_frames,r_frame_rate:stream_tags=alpha_mode',
+    '-of', 'json', f]);
+  return JSON.parse(out).streams[0];
+}
+
+/* One decoded frame as RGBA, straight out of ffmpeg. */
+function decodeFrameRGBA(file, n, w, h, extraIn) {
+  const args = ['-v', 'error'].concat(extraIn || [],
+    ['-i', file, '-vf', `select=eq(n\\,${n})`, '-vframes', '1',
+     '-pix_fmt', 'rgba', '-f', 'rawvideo', '-']);
+  const buf = execFileSync('ffmpeg', args, { maxBuffer: 1 << 28 });
+  return { data: buf, w, h };
+}
+
 /* colour census of the live preview canvas */
 const census = (page) => page.evaluate(() => {
   const c = document.querySelector('#vcv');
@@ -455,6 +473,97 @@ async function runTrackedFast(page) {
   return r;
 }
 
+/* ---------- F: every export format the server can write --------------------
+ * Reuses whatever clip is already tracked on the page, so this costs five
+ * renders and no tracking. Each file is ffprobed, and both alpha formats have
+ * a frame decoded to prove the background really is transparent.
+ */
+async function runFormats(page) {
+  const r = { formats: {} };
+  const job = await page.evaluate(() => window.DV.job);
+  r.job = job;
+  r.offered = await page.evaluate(() => window.DV_formats());
+  if (!r.offered.length) throw new Error('the server engine offered no formats');
+  await setMode(page, 'dots');
+  await openStep(page, 'st5');
+  const files = { mp4: 'out.mp4', webm: 'out.webm', gif: 'out.gif',
+                  'webm-alpha': 'out.alpha.webm', prores: 'out.mov' };
+  for (const id of ['mp4', 'webm', 'gif', 'webm-alpha', 'prores']) {
+    const t0 = Date.now();
+    const sel = await page.evaluate((x) => window.DV_setFormat(x), id);
+    if (sel.id !== id) throw new Error(`could not select ${id}`);
+    await page.click('#bExport');
+    const txt = await waitText(page, '#rinfo', /rendered|failed/, 300000);
+    if (/failed/.test(txt)) throw new Error(`${id}: ${txt}`);
+    const file = path.join(HERE, 'jobs', job, files[id]);
+    const st = fs.statSync(file);
+    const probe = ffprobeFull(file);
+    r.formats[id] = { seconds: +((Date.now() - t0) / 1000).toFixed(1), bytes: st.size,
+                      probe, info: txt.trim() };
+  }
+  const F = r.formats;
+  const nFrames = +F.mp4.probe.nb_read_frames;
+  if (F.mp4.probe.codec_name !== 'h264' || F.mp4.probe.pix_fmt !== 'yuv420p') {
+    throw new Error('mp4: ' + JSON.stringify(F.mp4.probe));
+  }
+  if (F.webm.probe.codec_name !== 'vp9') throw new Error('webm: ' + JSON.stringify(F.webm.probe));
+  if (F.gif.probe.codec_name !== 'gif') throw new Error('gif: ' + JSON.stringify(F.gif.probe));
+  // the GIF is asked for at 15 fps against a 30 fps clip: half the frames
+  const gifFrames = +F.gif.probe.nb_read_frames;
+  if (Math.abs(gifFrames - nFrames / 2) > 1) {
+    throw new Error(`gif has ${gifFrames} frames, expected ~${nFrames / 2}`);
+  }
+  if (F['webm-alpha'].probe['tags:alpha_mode'] !== '1'
+      && F['webm-alpha'].probe.tags?.alpha_mode !== '1') {
+    throw new Error('webm-alpha carries no alpha_mode tag: '
+      + JSON.stringify(F['webm-alpha'].probe));
+  }
+  if (!/^yuva/.test(F.prores.probe.pix_fmt)) {
+    throw new Error('prores has no alpha plane: ' + F.prores.probe.pix_fmt);
+  }
+  // decode one frame out of each and count what the alpha channel says
+  const w = +F.mp4.probe.width, h = +F.mp4.probe.height;
+  const alphaCensus = (file, extraIn) => {
+    const { data } = decodeFrameRGBA(file, 10, w, h, extraIn);
+    // lossy codecs round the alpha plane, so this is a threshold, not equality
+    let zero = 0, full = 0;
+    for (let p = 3; p < data.length; p += 4) {
+      if (data[p] < 16) zero++; else if (data[p] > 200) full++;
+    }
+    const n = data.length / 4;
+    return { pixels: n, transparentPct: +(100 * zero / n).toFixed(1),
+             opaquePct: +(100 * full / n).toFixed(1) };
+  };
+  r.alpha = {
+    'webm-alpha': alphaCensus(path.join(HERE, 'jobs', job, files['webm-alpha']),
+                              ['-c:v', 'libvpx-vp9']),
+    prores: alphaCensus(path.join(HERE, 'jobs', job, files.prores)),
+  };
+  for (const [k, v] of Object.entries(r.alpha)) {
+    if (v.transparentPct < 50) {
+      throw new Error(`${k}: only ${v.transparentPct}% of the frame is transparent`);
+    }
+    if (v.opaquePct < 0.2) throw new Error(`${k}: nothing is opaque — no dots?`);
+  }
+  // and the GIF decodes to the flat colours it was given
+  const gifPng = path.join(DOCS, 'f-gif-frame.png');
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i',
+    path.join(HERE, 'jobs', job, files.gif), '-vf', 'select=eq(n\\,5)',
+    '-vframes', '1', gifPng]);
+  const raw = execFileSync('ffmpeg', ['-v', 'error', '-i', gifPng, '-f', 'rawvideo',
+    '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 28 });
+  const seen = new Set();
+  for (let p = 0; p < raw.length; p += 3) {
+    seen.add((raw[p] << 16) | (raw[p + 1] << 8) | raw[p + 2]);
+  }
+  r.gifColours = seen.size;
+  if (seen.size < 2 || seen.size > 8) {
+    throw new Error('the GIF frame has ' + seen.size + ' colours, expected the flat few');
+  }
+  await page.screenshot({ path: path.join(DOCS, 'f-formats.png') });
+  return r;
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -473,6 +582,7 @@ try {
   R.runs.whole = await runWhole(page);
   R.runs.tracked = await runTracked(page);
   R.runs.trackedFast = await runTrackedFast(page);
+  R.runs.formats = await runFormats(page);
   R.runs.lasso = await runLasso(page);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);

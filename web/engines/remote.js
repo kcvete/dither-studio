@@ -32,6 +32,10 @@ export class RemoteEngine {
       exportMime: 'video/mp4',
       exportExt: 'mp4',
       exportPlayable: true,
+      // filled in from /api/palettes; this is what a server too old to
+      // advertise formats can be assumed to do
+      formats: [{ id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', mime: 'video/mp4',
+                  alpha: false, available: true, note: '' }],
     };
   }
 
@@ -69,6 +73,12 @@ export class RemoteEngine {
 
   async meta() {
     const m = await this.api('/api/palettes');
+    if (Array.isArray(m.formats) && m.formats.length) {
+      this.supports.formats = m.formats.map((f) => Object.assign({
+        available: true,
+        note: f.alpha ? 'the flat background is keyed out; only the dots are opaque' : '',
+      }, f));
+    }
     return Object.assign({}, m, {
       engine: 'remote',
       // the server exports three tracker resolutions; the browser only has the
@@ -170,6 +180,9 @@ export class RemoteEngine {
 
   /* ------------------------------------------------------------- export */
   async exportClip(params, onProgress) {
+    const fmt = params.format || 'mp4';
+    const f = (this.supports.formats || []).find((x) => x.id === fmt)
+      || { id: fmt, ext: 'mp4', mime: 'video/mp4', alpha: false };
     await this.api(this.jobPath('/render'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -181,12 +194,18 @@ export class RemoteEngine {
                      text: `${st.done_frames}/${st.n_frames}` });
       }
       if (st.state === 'done') {
+        const path = this.jobPath('/output/' + fmt);
         // Cache-bust: the same URL is re-rendered in place on every export.
-        let url = this.url(this.jobPath('/out.mp4')) + '?t=' + Date.now();
-        if (this.apiKey) url = URL.createObjectURL(await this.blob(this.jobPath('/out.mp4')));
-        return { url, mime: 'video/mp4', ext: 'mp4', playable: true,
+        let url = this.url(path) + '?t=' + Date.now();
+        if (this.apiKey) url = URL.createObjectURL(await this.blob(path));
+        return { url, mime: f.mime, ext: f.ext,
+                 playable: fmt !== 'gif' && fmt !== 'prores',
+                 image: fmt === 'gif', alpha: !!f.alpha,
                  frames: st.done_frames, elapsedS: st.elapsed_s, fps: st.fps,
-                 note: '' };
+                 bytes: st.bytes || 0,
+                 note: fmt === 'prores'
+                   ? 'ProRes 4444 does not play in a browser — download it'
+                   : (f.alpha ? 'alpha channel written' : '') };
       }
       if (st.state === 'error') throw new Error(st.error);
       await sleep(300);

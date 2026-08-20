@@ -40,7 +40,65 @@ DEFAULTS = dict(
     n=8000, cell=4, dotpx=3, fill=0.7, stray=0.02, band=9,
     # output
     fps=30, seed=7,
+    # container: see FORMATS. 'format' picks the encoder, gif_fps only bites for GIF.
+    format="mp4", gif_fps=None,
 )
+
+
+# --------------------------------------------------------------- formats
+# One rendered frame sequence, five containers. `alpha` decides whether the
+# frames are handed to ffmpeg as rgb24 or rgba -- and, upstream of that,
+# whether the flat background is painted or left transparent.
+#
+# GIF is here because the looks this tool produces are 2-4 flat colours, which
+# is exactly what a 256-entry global palette is good at; a 150-frame 720p dots
+# render is smaller as a GIF than as an MP4 (see the README's formats table).
+FORMATS = {
+    "mp4":        {"ext": "mp4",  "file": "out.mp4",         "mime": "video/mp4",
+                   "alpha": False, "label": "MP4 · H.264"},
+    "webm":       {"ext": "webm", "file": "out.webm",        "mime": "video/webm",
+                   "alpha": False, "label": "WebM · VP9"},
+    "gif":        {"ext": "gif",  "file": "out.gif",         "mime": "image/gif",
+                   "alpha": False, "label": "GIF · looping"},
+    "webm-alpha": {"ext": "webm", "file": "out.alpha.webm",  "mime": "video/webm",
+                   "alpha": True,  "label": "WebM · VP9 + alpha"},
+    "prores":     {"ext": "mov",  "file": "out.mov",         "mime": "video/quicktime",
+                   "alpha": True,  "label": "ProRes 4444 · alpha"},
+}
+
+
+def ffmpeg_cmd(fmt, W, H, fps, out_path, gif_fps=None):
+    """The encoder invocation for one format, reading raw frames on stdin."""
+    f = FORMATS[fmt]
+    pix = "rgba" if f["alpha"] else "rgb24"
+    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", pix,
+           "-s", "%dx%d" % (W, H), "-r", str(int(fps)), "-i", "-"]
+    if fmt == "mp4":
+        cmd += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart"]
+    elif fmt == "webm":
+        cmd += ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0",
+                "-pix_fmt", "yuv420p", "-row-mt", "1"]
+    elif fmt == "webm-alpha":
+        # yuva420p is what makes the alpha survive; -auto-alt-ref 0 is required
+        # by libvpx-vp9 when the alpha plane is present.
+        cmd += ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0",
+                "-pix_fmt", "yuva420p", "-row-mt", "1", "-auto-alt-ref", "0"]
+    elif fmt == "prores":
+        cmd += ["-c:v", "prores_ks", "-profile:v", "4444",
+                "-pix_fmt", "yuva444p10le", "-alpha_bits", "16", "-vendor", "apl0"]
+    elif fmt == "gif":
+        # One pass: split the piped stream, build a palette from the whole clip
+        # (stats_mode=full), then map through it. dither=none because the frames
+        # are already flat colours -- an extra dither would fuzz the dots.
+        g = int(gif_fps or min(int(fps), 30))
+        cmd += ["-filter_complex",
+                "fps=%d,split[a][b];[a]palettegen=stats_mode=full:max_colors=256[p];"
+                "[b][p]paletteuse=dither=none" % g,
+                "-loop", "0"]
+    else:
+        raise RuntimeError("unknown format %r" % fmt)
+    return cmd + [out_path]
 
 PALETTES = DI.PALETTES
 MODES = DI.MODES
@@ -186,7 +244,11 @@ def _subject_palette(s, i, bg):
 
 
 # ------------------------------------------------------------ dots renderer
-def _frame_dots(rgb, masks, a, F, dots_cols, bg):
+def _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha=False):
+    """One dots frame. With `alpha`, the flat background is left transparent
+    and only the dots themselves are opaque -- that is the whole of what the
+    ProRes 4444 / WebM-alpha exports need. `overlay` compose has no background
+    to key out, so it stays fully opaque."""
     H, W = rgb.shape[:2]
     cell = int(a['cell'])
     thr, cy, cx, stray_r, gh, gw = F
@@ -209,6 +271,10 @@ def _frame_dots(rgb, masks, a, F, dots_cols, bg):
                          0, 255).astype(np.uint8)
     else:
         canvas = np.broadcast_to(np.array(hexcol(bg), np.uint8), (H, W, 3)).copy()
+    if alpha:
+        a0 = 255 if a['compose'] == 'overlay' else 0
+        canvas = np.concatenate(
+            [canvas, np.full((H, W, 1), a0, np.uint8)], axis=2)
 
     dp = int(a['dotpx'])
     off = np.arange(dp) - dp // 2
@@ -231,13 +297,18 @@ def _frame_dots(rgb, masks, a, F, dots_cols, bg):
             continue
         yy = np.clip(np.rint(cy[on])[:, None] + oy, 0, H - 1).astype(np.int32)
         xx = np.clip(np.rint(cx[on])[:, None] + ox, 0, W - 1).astype(np.int32)
-        canvas[yy.ravel(), xx.ravel()] = np.array(hexcol(dots_cols[k]), np.uint8)
+        canvas[yy.ravel(), xx.ravel()] = np.array(
+            hexcol(dots_cols[k]) + ([255] if alpha else []), np.uint8)
     return canvas
 
 
 # ------------------------------------------------------- per-pixel renderer
-def _frame_pixels(rgb, masks, a, blue, palettes, bg):
-    """masks may be empty -> the whole frame is dithered with palettes[0]."""
+def _frame_pixels(rgb, masks, a, blue, palettes, bg, alpha=False):
+    """masks may be empty -> the whole frame is dithered with palettes[0].
+
+    With `alpha`, everything that is flat background becomes transparent. That
+    only means something in `cutout` compose with subjects; a whole-frame dither
+    has no background to remove, so it comes back fully opaque."""
     H, W = rgb.shape[:2]
     P = max(1, int(a['pixel']))
     base = dict(a)
@@ -249,6 +320,9 @@ def _frame_pixels(rgb, masks, a, blue, palettes, bg):
     if not masks:
         p = dict(base); p['palette'] = palettes[0]
         out = DI.dither_rgb(small, p)
+        if alpha:
+            out = np.concatenate(
+                [out, np.full(out.shape[:2] + (1,), 255, np.uint8)], axis=2)
         return upscale(out, P, H, W)
 
     ms = [downscale(m, P) for m in masks]
@@ -271,6 +345,12 @@ def _frame_pixels(rgb, masks, a, blue, palettes, bg):
         d = DI.dither_rgb(small, p, gate)
         g3 = gate.astype(bool)[:, :, None]
         out = np.where(g3, d, out)
+    if alpha:
+        if a['compose'] == 'overlay':
+            av = np.full((h2, w2, 1), 255, np.uint8)
+        else:
+            av = (inside[:, :, None] * 255).astype(np.uint8)
+        out = np.concatenate([out, av], axis=2)
     return upscale(out, P, H, W)
 
 
@@ -310,11 +390,13 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
                              + (jx - .5) * cell * .8, (gh, gw))
         F = (thr, cy, cx, stray_r, gh, gw)
 
+    fmt = str(a.get('format') or 'mp4')
+    if fmt not in FORMATS:
+        raise RuntimeError('unknown format %r (have %s)'
+                           % (fmt, ', '.join(FORMATS)))
+    alpha = FORMATS[fmt]['alpha']
     p = subprocess.Popen(
-        ['ffmpeg', '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24',
-         '-s', '%dx%d' % (W, H), '-r', str(int(a['fps'])), '-i', '-',
-         '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p',
-         '-movflags', '+faststart', out_path],
+        ffmpeg_cmd(fmt, W, H, a['fps'], out_path, a.get('gif_fps')),
         stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
     last = [None] * len(subjects)
@@ -327,9 +409,9 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
                 last[k] = _load_mask(s['masks'], i, H, W, last[k])
                 masks.append(last[k])
             if a['mode'] == 'dots':
-                canvas = _frame_dots(rgb, masks, a, F, dots_cols, bg)
+                canvas = _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha)
             else:
-                canvas = _frame_pixels(rgb, masks, a, blue, palettes, bg)
+                canvas = _frame_pixels(rgb, masks, a, blue, palettes, bg, alpha)
             p.stdin.write(np.ascontiguousarray(canvas, np.uint8).tobytes())
             if progress:
                 progress(i + 1, total)
@@ -341,7 +423,8 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
     err = p.stderr.read().decode('utf-8', 'replace')
     if p.wait() != 0:
         raise RuntimeError('ffmpeg failed: ' + err[-800:])
-    return {'out': out_path, 'frames': total, 'w': W, 'h': H}
+    return {'out': out_path, 'frames': total, 'w': W, 'h': H, 'format': fmt,
+            'bytes': os.path.getsize(out_path)}
 
 
 if __name__ == '__main__':
@@ -356,7 +439,7 @@ if __name__ == '__main__':
         if isinstance(v, bool):
             ap.add_argument('--' + k, action='store_true')
         else:
-            ap.add_argument('--' + k, type=type(v), default=v)
+            ap.add_argument('--' + k, type=(int if v is None else type(v)), default=v)
     args = ap.parse_args()
     subs = []
     for idx, spec in enumerate(args.masks):

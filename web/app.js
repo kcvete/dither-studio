@@ -56,6 +56,8 @@ const S = {
   // engine
   engine: null, enginePref: null, modelsMissing: null,
   exportURL: null, frameURL: null,
+  // export
+  format: '', gifFps: 15,
 };
 const E = () => S.engine;
 
@@ -130,7 +132,9 @@ async function loadStill(f) {
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = true;
     $('#composeui').hidden = true; $('#bgui').hidden = true;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
+    $('#outimg').hidden = true;
     $('#s5sum').textContent = ''; $('#bExport').textContent = 'Download PNG';
+    $('#fmtui').hidden = true;
     $('#offframe').hidden = true;
     buildTargets(); renderModes(); openStep(3);
     await draw();
@@ -161,7 +165,8 @@ async function uploadClip(f) {
     $('#bPlay').hidden = $('#sFrame').hidden = $('#fcount').hidden = false;
     $('#dl').hidden = true; $('#outvid').hidden = true; $('#rinfo').hidden = true;
     $('#tinfo').hidden = true; $('#s5sum').textContent = '';
-    $('#bExport').textContent = 'Render ' + E().supports.exportExt.toUpperCase();
+    $('#outimg').hidden = true;
+    buildFormats();
     if (S.P.mode === 'dots') setMode('bluenoise');
     showSteps('video'); setScope('whole');
     buildTargets(); renderModes(); openStep(2);
@@ -797,6 +802,9 @@ function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
   }
 
   const out = new Uint8ClampedArray(W * H * 4), bgc = Dither.hexRGB(bg);
+  // P.alpha: leave the flat background transparent and let only the dots be
+  // opaque. `overlay` keeps the scene, so there is nothing to key out.
+  const bga = (P.alpha && P.compose !== 'overlay') ? 0 : 255;
   if (P.compose === 'overlay') {
     for (let p = 0, n = W * H * 4; p < n; p += 4) {
       const lum = (0.2126 * srcData[p] + 0.7152 * srcData[p + 1] + 0.0722 * srcData[p + 2]) / 255;
@@ -805,7 +813,7 @@ function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
     }
   } else {
     for (let p = 0, n = W * H * 4; p < n; p += 4) {
-      out[p] = bgc[0]; out[p + 1] = bgc[1]; out[p + 2] = bgc[2]; out[p + 3] = 255;
+      out[p] = bgc[0]; out[p + 1] = bgc[1]; out[p + 2] = bgc[2]; out[p + 3] = bga;
     }
   }
 
@@ -1178,7 +1186,7 @@ $('#bExport').addEventListener('click', () => (S.kind === 'image' ? exportPNG() 
 
 /* One frame of the finished picture at the clip's own resolution — what the
  * browser engine feeds its recorder, frame by frame. */
-async function composeAt(i) {
+async function composeAt(i, opts) {
   const rec = await frameAt(i);
   const c = ctx2d(S.W, S.H, 'exp');
   c.clearRect(0, 0, S.W, S.H);
@@ -1187,9 +1195,11 @@ async function composeAt(i) {
   const masks = usingSubjects()
     ? rec.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, 'x' + k)) : [];
   const pal = palettesForRender();
+  // `alpha` is the transparent exports: same pixels, background keyed out
+  const P = (opts && opts.alpha) ? Object.assign({}, S.P, { alpha: true }) : S.P;
   const out = (S.P.mode === 'dots' && masks.length)
-    ? renderDots(src, S.W, S.H, masks, S.P, pal, S.bg, BLUE).out
-    : Dither.composeFrame(src, S.W, S.H, masks, S.P, pal, S.bg);
+    ? renderDots(src, S.W, S.H, masks, P, pal, S.bg, BLUE).out
+    : Dither.composeFrame(src, S.W, S.H, masks, P, pal, S.bg);
   return new ImageData(out, S.W, S.H);
 }
 
@@ -1223,24 +1233,70 @@ async function exportPNG() {
   busy(false);
 }
 
+/* ---- the format select ------------------------------------------------
+ * The list comes from the live engine, unavailable entries included: a
+ * greyed-out "MP4 · needs the local server" says more than a menu that
+ * quietly has three items in the tab and five on the server. */
+function engineFormats() {
+  return (E() && E().supports && E().supports.formats) || [];
+}
+function currentFormat() {
+  const list = engineFormats();
+  return list.find((f) => f.id === S.format)
+    || list.find((f) => f.available) || { id: 'webm', ext: 'webm', alpha: false };
+}
+function buildFormats() {
+  const sel = $('#sFmt'), list = engineFormats();
+  $('#fmtui').hidden = S.kind !== 'video' || !list.length;
+  sel.textContent = '';
+  list.forEach((f) => {
+    const o = document.createElement('option');
+    o.value = f.id;
+    o.textContent = f.label + (f.available ? '' : ' — unavailable here');
+    o.disabled = !f.available;
+    sel.append(o);
+  });
+  if (!list.some((f) => f.id === S.format && f.available)) {
+    const first = list.find((f) => f.available);
+    S.format = first ? first.id : '';
+  }
+  sel.value = S.format;
+  paintFormat();
+}
+function paintFormat() {
+  const f = currentFormat();
+  $('#vFmt').textContent = f.ext ? f.ext.toUpperCase() : '';
+  $('#fmtnote').textContent = f.note || '';
+  $('#giffps').hidden = f.id !== 'gif';
+  $('#bExport').textContent = S.kind === 'image' ? 'Download PNG'
+    : 'Render ' + (f.ext || '').toUpperCase();
+}
+$('#sFmt').addEventListener('change', (e) => { S.format = e.target.value; paintFormat(); });
+$$('[data-gfps]').forEach((b) => b.addEventListener('click', () => {
+  S.gifFps = +b.dataset.gfps;
+  $$('[data-gfps]').forEach((o) => o.setAttribute('aria-pressed', String(o === b)));
+}));
+
 async function exportClip() {
   const btn = $('#bExport'); btn.disabled = true;
-  $('#dl').hidden = true; $('#outvid').hidden = true;
+  $('#dl').hidden = true; $('#outvid').hidden = true; $('#outimg').hidden = true;
   const info = $('#rinfo'); info.hidden = true; info.textContent = '';
   const prog = $('#rprog'); prog.hidden = false;
   const bar = $('.bar i', prog), lab = $('span', prog);
   bar.style.width = '0%'; lab.textContent = 'starting…';
   stop();
   try {
+    const fmt = currentFormat();
     const params = Object.assign({}, S.P, {
       bg: S.bg, palette: S.palette, fps: S.fps,
+      format: fmt.id, gif_fps: S.gifFps,
       subjects: usingSubjects()
         ? S.subjects.map((s) => ({ id: s.id, palette: s.palette })) : [],
     });
     const r = await E().exportClip(params, (p) => {
       bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
       lab.textContent = p.text;
-    }, composeAt);
+    }, (i) => composeAt(i, { alpha: fmt.alpha }));
     prog.hidden = true;
     if (S.exportURL) { URL.revokeObjectURL(S.exportURL); S.exportURL = null; }
     if (r.url.startsWith('blob:')) S.exportURL = r.url;
@@ -1248,7 +1304,8 @@ async function exportClip() {
     dl.href = r.url;
     dl.download = `${S.fileName || 'dither'}-${S.P.mode}.${r.ext}`;
     dl.hidden = false;
-    if (r.playable) { const v = $('#outvid'); v.src = r.url; v.hidden = false; }
+    if (r.image) { const im = $('#outimg'); im.src = r.url; im.hidden = false; }
+    else if (r.playable) { const v = $('#outvid'); v.src = r.url; v.hidden = false; }
     const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
     box.textContent = `rendered ${r.frames} frames in ${r.elapsedS.toFixed(1)} s `
       + `(${r.fps.toFixed(1)} fps)`
@@ -1277,8 +1334,7 @@ function paintEngine() {
   $$('#engpop .opt').forEach((b) => b.setAttribute('aria-pressed',
     String(b.dataset.eng === mode
       || (mode === 'auto' && b.dataset.eng === (e.id === 'browser' ? 'browser' : 'local')))));
-  const ext = e.supports.exportExt.toUpperCase();
-  $('#bExport').textContent = S.kind === 'image' ? 'Download PNG' : 'Render ' + ext;
+  buildFormats();
 }
 
 function openEnginePop(on) {
@@ -1345,6 +1401,7 @@ function resetClip() {
   dropCache();
   $('#upstat').hidden = true; $('#tinfo').hidden = true; $('#rinfo').hidden = true;
   $('#dl').hidden = true; $('#outvid').hidden = true; $('#pvinfo').hidden = true;
+  $('#outimg').hidden = true; $('#fmtui').hidden = true;
   $('#pwrap').hidden = true; $('#vwrap').hidden = true;
   showSteps('none');
 }
@@ -1430,5 +1487,10 @@ async function checkModels() {
                               tried: S.engineTried });
   window.DV_switchEngine = switchEngine;
   window.DV_composeAt = composeAt;
+  window.DV_formats = engineFormats;
+  window.DV_setFormat = (id) => {
+    S.format = id; $('#sFmt').value = id; paintFormat();
+    return currentFormat();
+  };
   window.DV_ready = true;
 })();
