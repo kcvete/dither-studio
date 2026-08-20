@@ -531,6 +531,74 @@ function densityPairs(a, b, opts = {}) {
   return frames;
 }
 
+/* ------------------------------------------------- thinning, for the flight
+ * A dot cloud made by one of the pixel dither modes is one lit PIXEL per dot:
+ * tens of thousands of them a frame. Flying that dot for dot is neither
+ * affordable nor legible, and it is not what a morph is for. So a join thins
+ * whichever side is over the cap and flies the survivors — the cloud visibly
+ * loosens into particles, which is the effect — while the dots left behind are
+ * shed in place over the first fifth of the flight and the incoming ones spawn
+ * in place over the last fifth. Frame 0 of a transition is therefore the
+ * outgoing item's last frame and the final frame the incoming item's first, at
+ * full density and to within a dot or two of the same count, with the thinning
+ * only in between.
+ *
+ * The thinning is density-weighted rather than uniform: the frame is bucketed
+ * into a coarse grid, every occupied bucket keeps at least one dot, and the
+ * rest of the budget is shared out in proportion to how many dots a bucket
+ * holds. A thin limb or an outline survives that; taking every Nth dot in scan
+ * order does not. The seed comes from the join, so a sequence always flies the
+ * same particles.
+ */
+const PARTICLE_CAP = 8000;
+
+/** -> { keep, rest }: `keep` is at most `cap` dots, `rest` is everything else
+ *  in a deterministic shuffle so it can be dissolved a slice at a time. */
+function thinCloud(xy, cap, seed, bucket) {
+  const n = xy.length >> 1;
+  if (n <= cap) return { keep: xy, rest: EMPTY };
+  const g = Math.max(4, bucket || 24);
+  const rnd = mulberry32((seed | 0) || 1);
+  const cells = new Map();
+  for (let i = 0; i < n; i++) {
+    const q = (((xy[i * 2 + 1] / g) | 0) * 4096) + ((xy[i * 2] / g) | 0);
+    let a = cells.get(q);
+    if (!a) { a = []; cells.set(q, a); }
+    a.push(i);
+  }
+  // a deterministic shuffle inside every bucket, so the quota is not a
+  // scan-order slice
+  for (const a of cells.values()) {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = (rnd() * (i + 1)) | 0;
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+  }
+  const B = cells.size;
+  const budget = Math.max(0, cap - B);
+  const keep = [], rest = [];
+  for (const a of cells.values()) {
+    const quota = Math.min(a.length, 1 + Math.floor(budget * (a.length / n)));
+    for (let i = 0; i < a.length; i++) {
+      (i < quota ? keep : rest).push(a[i]);
+    }
+  }
+  // interleave the leftovers across buckets, so a partial spawn fills the whole
+  // shape rather than one corner of it
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = (rnd() * (i + 1)) | 0;
+    const t = rest[i]; rest[i] = rest[j]; rest[j] = t;
+  }
+  const pick = (idx) => {
+    const out = new Uint16Array(idx.length * 2);
+    for (let i = 0; i < idx.length; i++) {
+      out[i * 2] = xy[idx[i] * 2]; out[i * 2 + 1] = xy[idx[i] * 2 + 1];
+    }
+    return out;
+  };
+  return { keep: pick(keep), rest: pick(rest) };
+}
+
 /**
  * One transition, whichever kind. `kind` is 'morph' | 'scatter' | 'cut' |
  * 'density'; anything else is a morph.
@@ -558,8 +626,15 @@ const TRANSITIONS = [
  *
  *   items   [{ name, frames:[Uint16Array], color }]                 one track
  *           [{ name, tracks:[{ frames:[Uint16Array], color }] }]    several
- *           each may carry { transition: { kind, ms } } — the join BEFORE it.
- *   opts    { w, h, fps, dotpx, bg, durationMs, kind, seed, cell }
+ *           each may carry { transition: { kind, ms } } — the join BEFORE it —
+ *           and { cell }, the dot grid it was made on, which a density fade
+ *           coarsens from.
+ *   opts    { w, h, fps, dotpx, bg, durationMs, kind, seed, cell, cap }
+ *
+ * `cap` is the most dots a single transition will actually fly (8,000 by
+ * default, 0 to disable): a pixel-mode item is one dot per lit pixel, and the
+ * flight is thinned to the cap and handed back at full density on arrival. See
+ * `thinCloud`.
  *
  * Colour is per item (and per track inside an item), not per document: the
  * output has one .dots subject track per DISTINCT COLOUR, and every item's dots
@@ -574,6 +649,9 @@ function buildSequence(items, opts = {}) {
   const norm = items.map((it, i) => ({
     name: it.name || ('#' + (i + 1)),
     transition: it.transition || null,
+    // the dot cell this item was made at — a density fade coarsens from it, so
+    // an item with its own cell gets its own ladder rather than the strip's
+    cell: it.cell || 0,
     tracks: (it.tracks && it.tracks.length ? it.tracks
       : [{ frames: it.frames || [], color: it.color || fallback }])
       .map((t) => ({ frames: t.frames || [], color: t.color || fallback })),
@@ -604,30 +682,50 @@ function buildSequence(items, opts = {}) {
       const ms = (it.transition && it.transition.ms) || opts.durationMs || 900;
       const pairs = [];
       const n = Math.max(prev.tracks.length, it.tracks.length);
-      let len = 0;
+      const cap = opts.cap === undefined ? PARTICLE_CAP : opts.cap;
+      let len = 0, thinned = 0;
       for (let k = 0; k < n; k++) {
         const pt = prev.tracks[k], nt = it.tracks[k];
-        const from = (pt && pt.frames[pt.frames.length - 1]) || EMPTY;
-        const to = (nt && nt.frames[0]) || EMPTY;
-        const tween = buildTransition(from, to, {
-          w, h, fps, durationMs: ms, kind, cell: opts.cell,
-          seed: (opts.seed || 11) + i * 7919 + k * 101,
+        const fromAll = (pt && pt.frames[pt.frames.length - 1]) || EMPTY;
+        const toAll = (nt && nt.frames[0]) || EMPTY;
+        const seed = (opts.seed || 11) + i * 7919 + k * 101;
+        // a pixel-mode item is one dot per lit pixel: cap what actually flies
+        const A = cap ? thinCloud(fromAll, cap, seed, opts.bucket)
+                      : { keep: fromAll, rest: EMPTY };
+        const B = cap ? thinCloud(toAll, cap, seed + 1, opts.bucket)
+                      : { keep: toAll, rest: EMPTY };
+        thinned += (A.rest.length + B.rest.length) >> 1;
+        const tween = buildTransition(A.keep, B.keep, {
+          w, h, fps, durationMs: ms, kind,
+          cell: it.cell || prev.cell || opts.cell,
+          seed,
         });
         pairs.push({ tween,
                      a: colourOf((pt || it.tracks[0]).color),
-                     b: colourOf((nt || prev.tracks[0]).color) });
+                     b: colourOf((nt || prev.tracks[0]).color),
+                     shed: A.rest, grow: B.rest });
         len = Math.max(len, tween.length);
       }
       if (len) {
-        marks.push({ kind, start: frames.length, frames: len, ms,
+        marks.push({ kind, start: frames.length, frames: len, ms, thinned,
                      name: prev.name + ' → ' + it.name });
+        // the dots the thinning left behind do not fly: A's dissolve in place
+        // over the first fifth, B's spawn in place over the last fifth, so the
+        // two ends of the flight are the items themselves at full density
+        const HOLD = 0.2;
+        const slice = (buckets, idx, xy, frac) => {
+          const m = Math.round(Math.min(1, Math.max(0, frac)) * (xy.length >> 1));
+          const b = buckets[idx];
+          for (let q = 0; q < m * 2; q++) b.push(xy[q]);
+        };
         for (let f = 0; f < len; f++) {
           const buckets = blank();
+          const t = len > 1 ? f / (len - 1) : 1;
           for (const p of pairs) {
             const fr = p.tween[f];
-            if (!fr) continue;
-            add(buckets, p.a, fr.a);
-            add(buckets, p.b, fr.b);
+            if (fr) { add(buckets, p.a, fr.a); add(buckets, p.b, fr.b); }
+            if (p.shed.length) slice(buckets, p.a, p.shed, 1 - t / HOLD);
+            if (p.grow.length) slice(buckets, p.b, p.grow, (t - (1 - HOLD)) / HOLD);
           }
           push(buckets);
         }
@@ -759,6 +857,7 @@ class Player {
 return { Player, encode, decode, gzip, gunzip, pack, unpack, toJSON, fromJSON,
          paintFrame, buildMorph, morphPairs, scatterPairs, densityPairs, regrid,
          buildTransition, TRANSITIONS, buildSequence, hilbertOrder, hexRGB,
+         thinCloud, PARTICLE_CAP,
          easeInOut, mulberry32, version: 1 };
 })();
 

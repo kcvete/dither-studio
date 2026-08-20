@@ -10,22 +10,32 @@ CDN at run time.
 ```
 index.html        the page: two views, Studio and Sequence
 app.js            Studio: source -> subjects -> look -> palette -> export
-                  Sequence: a strip of dot clouds and the joins between them
+                  Sequence: a strip of dot clouds and the joins between them.
+                  A strip item is a live reference — its source plus its own
+                  copy of the look — and its dots are re-derived on demand and
+                  cached per (item, look).
 dither.js         the dithering engine (server/dither.py mirrors it exactly)
 polish.js         mask polish — motion-aware temporal smoothing of the tracker's
                   masks (server/polish.py mirrors it exactly)
 style.css
 engines/
   index.js        which engine to run, and the /api/meta probe that decides
-  browser.js      everything in the tab: decode, track, dither, encode
-  remote.js       the REST API in server/ — local or rented, same client
+  browser.js      everything in the tab: decode, track, dither, encode.
+                  `snapshot()` hands out a detached handle on the open clip,
+                  which is what lets a sequence item outlive it
+  remote.js       the REST API in server/ — local or rented, same client.
+                  `snapshot()` is the same idea: the two job routes with the
+                  id already bound
 track.js          EdgeTAM's tracking loop in JS over the ONNX graphs
 vendor/
   gifenc.js       a GIF89a/LZW encoder, ~220 lines, no dependencies
 player/
   dither-player.js  plays a .dots.gz on a canvas: the codec, the four
                     transitions, the sequence builder and the player, one file,
-                    no dependencies. Carries the format spec.
+                    no dependencies. Carries the format spec. A join thins a
+                    cloud over 8,000 dots down to particles for the flight and
+                    hands the rest back in place at the two ends, so a pixel
+                    dither mode morphs like a swarm.
   dither-player.mjs the same thing as ES module exports
   demo.html         a page around it — drop a file, scrub, recolour, resize
 bluenoise.json    the server's default 64x64 threshold tile, so both engines

@@ -254,10 +254,15 @@ def dots_fields(H, W, a, blue):
     gh, gw = H // cell, W // cell
     thr = np.tile(blue, (gh // 64 + 1, gw // 64 + 1))[:gh, :gw]
     jx, jy, stray_r = cell_fields(gh, gw, seed)
+    # the jitter that keeps a dot cloud from looking like graph paper. At cell 1
+    # there is no room for it and no need: one cell is one pixel, and jittering
+    # it by a pixel would turn a Bayer screen into noise. web/app.js dotFields
+    # has the same line.
+    jit = .8 if cell > 1 else 0.0
     cy = np.broadcast_to(np.arange(gh)[:, None] * cell + cell / 2.0
-                         + (jy - .5) * cell * .8, (gh, gw))
+                         + (jy - .5) * cell * jit, (gh, gw))
     cx = np.broadcast_to(np.arange(gw)[None, :] * cell + cell / 2.0
-                         + (jx - .5) * cell * .8, (gh, gw))
+                         + (jx - .5) * cell * jit, (gh, gw))
     return (thr, cy, cx, stray_r, gh, gw)
 
 

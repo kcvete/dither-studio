@@ -23,6 +23,13 @@
  *   W8  the SEQUENCE view: four items added through the UI (two clips, a still
  *       cutout, a shape), per-item trims and colours, three transition kinds,
  *       drag-reorder, preview, .dots.gz and an MP4 off the server
+ *   W10 pixel modes as particles: a cell-1 Bayer cutout morphing into a Dots
+ *       subject with the flight capped and handed back at full density, plus
+ *       "+ image… -> select a subject" bringing a cutout in from the sequence
+ *   W9  a sequence item's OWN look: the studio's controls scoped to one card —
+ *       every mode, the dot sliders, a palette and the mask polish — changing
+ *       item 2 while items 1 and 3 stay byte-identical, through the preview,
+ *       the .dots.gz and the server's MP4
  *   R5  server  · the same two-frame prompt, so the feature is checked on both
  *   K   an optional DV_API_KEY server: 401 without the header, 200 with it
  *
@@ -1347,6 +1354,462 @@ async function runSequence() {
   return r;
 }
 
+/* ====== W9: an item's look is its own ======================================
+ * The strip used to hold frozen snapshots: a card had a subject, a trim, a
+ * hold and a colour, and the dots inside it were whatever the studio happened
+ * to be showing when it was captured. Now a card is a LIVE reference — it
+ * keeps its source and its own copy of the whole look — so this run builds
+ * three items, opens the middle one, and changes the mode, the palette, the
+ * dot sliders and the mask polish on THAT ITEM.
+ *
+ * What it proves, in order:
+ *   - the panel really is the studio's controls, scoped: every mode chip, the
+ *     dot sliders, a colour per subject, a polish slider, the trim
+ *   - changing them moves item 2's dots and nothing else's — items 1 and 3
+ *     hash identically before and after, to the byte
+ *   - the preview, the .dots.gz and the server's MP4 all show the change,
+ *     because all three read the same re-derived dots
+ *   - the background and the dot size stay per SEQUENCE
+ */
+async function runSeqItemLook() {
+  const r = {};
+  const { ctx, page } = await newPage({ mode: 'local', url: '', key: '' });
+
+  /** FNV-1a over one item's dot positions, exactly as the strip holds them. */
+  const itemHash = (i) => page.evaluate((k) => {
+    const d = window.DV_seq.itemDots(k);
+    let h = 2166136261, n = 0;
+    for (const t of d) for (const f of t) {
+      n += f.length >> 1;
+      for (const v of f) { h ^= v; h = Math.imul(h, 16777619); }
+    }
+    return { hash: (h >>> 0).toString(16), dots: n, frames: (d[0] || []).length };
+  }, i);
+  /** The same hash over the BUILT DOCUMENT, region by region — these are the
+   *  exact bytes `pack()` writes into the .dots.gz and the server rasterises. */
+  const docHashes = () => page.evaluate(() => {
+    const d = window.DV_seq.doc();
+    return d.marks.filter((m) => m.kind === 'item').map((m) => {
+      let h = 2166136261, n = 0;
+      for (let f = m.start; f < m.start + m.frames; f++) {
+        for (const tr of d.frames[f]) {
+          n += tr.length >> 1;
+          for (const v of tr) { h ^= v; h = Math.imul(h, 16777619); }
+        }
+      }
+      return { name: m.name, hash: (h >>> 0).toString(16), dots: n, frames: m.frames };
+    });
+  });
+  const hashes = async () => {
+    const n = await page.evaluate(() => window.DV_seq.strip().length);
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(await itemHash(i));
+    return out;
+  };
+
+  // --- a tracked clip, added twice, plus a shape: three items, two of them
+  // from the same capture so the second can diverge from the first
+  await loadClip(page, CLIP, BR.seconds);
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+  await promptBoxPoint(page, SUBJECT_A);
+  await page.click('#bTrack');
+  const t = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('item look · the clip tracks', !/failed/.test(t), t);
+  await setMode(page, 'dots');
+  await page.click('#bToSeq');
+  await page.waitForFunction(() => window.DV_seq.strip().length === 1,
+                             null, { timeout: 600000 });
+  await page.evaluate(() => window.DV_seq.add('lib', window.DV_seq.library()[0].id));
+  await page.waitForFunction(() => window.DV_seq.strip().length === 2,
+                             null, { timeout: 600000 });
+  await page.evaluate(() => window.DV_seq.add('shape', 'ring'));
+  await page.waitForFunction(() => window.DV_seq.strip().length === 3,
+                             null, { timeout: 120000 });
+  await page.evaluate(() => {
+    window.DV_seq.set(0, { in: 0, out: 29 });
+    window.DV_seq.set(1, { in: 0, out: 29 });
+    window.DV_seq.set(2, { hold: 20 });
+  });
+  await page.click('#bSeqPrev');
+  await waitText(page, '#seqinfo', /frames|failed/, 300000);
+
+  r.before = await hashes();
+  check('item look · three items, all with dots on them',
+        r.before.length === 3 && r.before.every((x) => x.dots > 0),
+        JSON.stringify(r.before));
+  check('item look · the two copies of one capture start identical',
+        r.before[0].hash === r.before[1].hash,
+        `${r.before[0].hash} vs ${r.before[1].hash}`);
+
+  const docBefore = await page.evaluate(() => {
+    const d = window.DV_seq.doc();
+    return { frames: d.frames.length, dotpx: d.dotpx, bg: d.bg,
+             palette: d.palette, marks: d.marks };
+  });
+  r.docBefore = docBefore;
+  r.docItemsBefore = await docHashes();
+
+  // the .dots.gz and the MP4 as they stand
+  const gzA = path.join(DOCS, 'seq-item-look-before.dots.gz');
+  const [dlA] = await Promise.all([
+    page.waitForEvent('download', { timeout: 120000 }), page.click('#bSeqDots')]);
+  await dlA.saveAs(gzA);
+  r.beforeBytes = fs.statSync(gzA).size;
+
+  // --- open item 2 and read what the panel offers
+  await page.click('#strip2 .card[data-i="1"]');
+  await sleep(300);
+  r.panel = await page.evaluate(() => ({
+    modes: Array.from(document.querySelectorAll('#seqinspect .chip[data-mode]'))
+      .map((b) => b.dataset.mode),
+    sliders: document.querySelectorAll('#seqinspect input[type=range]').length,
+    colours: document.querySelectorAll('#seqinspect input[type=color]').length,
+    polish: document.querySelectorAll('#seqinspect .chip.pol').length,
+    labels: Array.from(document.querySelectorAll('#seqinspect .lbl > span:first-child'))
+      .map((s) => s.textContent),
+  }));
+  const wantModes = await page.evaluate(() => window.DV_seq.modes().map((m) => m.id));
+  r.wantModes = wantModes;
+  check('item look · the panel offers every studio mode',
+        wantModes.length >= 7 && wantModes.every((m) => r.panel.modes.includes(m)),
+        JSON.stringify(r.panel.modes));
+  check('item look · the panel carries the dot sliders, a colour and a polish',
+        r.panel.sliders >= 7 && r.panel.colours >= 1 && r.panel.polish === 1,
+        JSON.stringify(r.panel));
+  check('item look · and says the background is not one of them',
+        /background/i.test(await page.textContent('#seqinspect')),
+        (await page.textContent('#seqinspect')).slice(0, 120));
+  await page.screenshot({ path: path.join(DOCS, 'seq-item-look-panel.png') });
+
+  // --- change the MODE on item 2 only
+  r.modes = {};
+  for (const m of wantModes) {
+    r.modes[m] = await page.evaluate(async (mm) => {
+      await window.DV_seq.setLook(1, { mode: mm });
+      const d = window.DV_seq.itemDots(1);
+      return d[0].reduce((a, f) => a + f.length / 2, 0) / d[0].length;
+    }, m);
+  }
+  check('item look · every mode produces a cloud of dots',
+        Object.values(r.modes).every((n) => n > 50), JSON.stringify(r.modes));
+  check('item look · the modes disagree about which cells survive',
+        new Set(Object.values(r.modes).map((n) => Math.round(n))).size >= 5,
+        JSON.stringify(r.modes));
+
+  // --- settle on one look for item 2: a different mode, palette, cell, count
+  // and the mask polish on
+  await page.evaluate(() => window.DV_seq.setLook(1, { mode: 'bluenoise' }));
+  await page.click('#seqinspect .chip.pal');                 // a palette, per item
+  await sleep(400);
+  await page.$eval('#seqinspect .chip.pol', (b) => b.click());  // polish on
+  await page.waitForFunction(() => !document.querySelector('#seqinspect .chip.pol')
+    || document.querySelector('#seqinspect .chip.pol').getAttribute('aria-pressed') === 'true',
+    null, { timeout: 120000 });
+  r.after1 = await page.evaluate(async () => {
+    await window.DV_seq.setLook(1, { cell: 6, gamma: 1.4 });
+    return window.DV_seq.itemLook(1);
+  });
+  check('item look · item 2 kept every change',
+        r.after1.mode === 'bluenoise' && r.after1.cell === 6
+          && Math.abs(r.after1.gamma - 1.4) < 1e-6
+          && Object.keys(r.after1.polish).length === 1
+          && Object.keys(r.after1.colors).length >= 1,
+        JSON.stringify(r.after1));
+  r.looks = await page.evaluate(() => window.DV_seq.strip().map((x) => x.look.mode));
+  check('item look · items 1 and 3 are still on dots',
+        r.looks[0] === 'dots' && r.looks[2] === 'dots', JSON.stringify(r.looks));
+
+  await page.click('#bSeqPrev');
+  await waitText(page, '#seqinfo', /frames|failed/, 300000);
+  r.after = await hashes();
+  check('item look · item 2 is a different cloud now',
+        r.after[1].hash !== r.before[1].hash,
+        `${r.before[1].hash} -> ${r.after[1].hash}`);
+  check('item look · item 1 is byte for byte what it was',
+        r.after[0].hash === r.before[0].hash && r.after[0].dots === r.before[0].dots,
+        `${r.before[0].hash} vs ${r.after[0].hash}`);
+  check('item look · item 3 is byte for byte what it was',
+        r.after[2].hash === r.before[2].hash && r.after[2].dots === r.before[2].dots,
+        `${r.before[2].hash} vs ${r.after[2].hash}`);
+  r.docItemsAfter = await docHashes();
+  check('item look · in the document itself, item 1 is unchanged and item 2 is not',
+        r.docItemsAfter[0].hash === r.docItemsBefore[0].hash
+          && r.docItemsAfter[2].hash === r.docItemsBefore[2].hash
+          && r.docItemsAfter[1].hash !== r.docItemsBefore[1].hash,
+        JSON.stringify([r.docItemsBefore, r.docItemsAfter]));
+  await page.screenshot({ path: path.join(DOCS, 'seq-item-look-preview.png') });
+
+  // --- the sequence's own look is still the sequence's
+  r.canvas = await page.evaluate(() => {
+    window.DV_seq.look({ dotpx: 5, bg: '#101418' });
+    const d = window.DV_seq.doc();
+    return { dotpx: d.dotpx, docBg: d.bg, seq: window.DV.seq };
+  });
+  check('item look · dot size and background stay per sequence',
+        r.canvas.seq.dotpx === 5 && r.canvas.seq.bg === '#101418',
+        JSON.stringify(r.canvas));
+  await page.evaluate(() => window.DV_seq.look({ dotpx: 3, bg: '#c9d4c5' }));
+
+  // --- and the exports agree with the preview
+  const gzB = path.join(DOCS, 'seq-item-look-after.dots.gz');
+  const [dlB] = await Promise.all([
+    page.waitForEvent('download', { timeout: 120000 }), page.click('#bSeqDots')]);
+  await dlB.saveAs(gzB);
+  r.afterBytes = fs.statSync(gzB).size;
+  check('item look · the .dots.gz changed with the item',
+        !fs.readFileSync(gzA).equals(fs.readFileSync(gzB)),
+        `${r.beforeBytes} -> ${r.afterBytes} bytes`);
+
+  const docAfter = await page.evaluate(() => {
+    const d = window.DV_seq.doc();
+    return { frames: d.frames.length, palette: d.palette,
+             subjects: d.subjects.length };
+  });
+  r.docAfter = docAfter;
+  check('item look · the item’s new colour reached the document palette',
+        docAfter.palette.length > docBefore.palette.length
+          || docAfter.palette.join() !== docBefore.palette.join(),
+        JSON.stringify([docBefore.palette, docAfter.palette]));
+
+  const up = await page.request.post(`${BASE}/api/sequence`, {
+    multipart: { file: { name: 'sequence.dots.gz',
+                         mimeType: 'application/octet-stream',
+                         buffer: fs.readFileSync(gzB) },
+                 format: 'mp4' },
+    timeout: 300000,
+  });
+  check('item look · the server rasterises the re-derived dots', up.ok(),
+        String(up.status()));
+  r.server = await up.json();
+  const mp4 = path.join(DOCS, 'seq-item-look.mp4');
+  fs.writeFileSync(mp4, await (await page.request.get(`${BASE}${r.server.url}`)).body());
+  r.mp4 = { bytes: fs.statSync(mp4).size, probe: probe(mp4) };
+  check('item look · the MP4 has every frame the preview does',
+        +r.mp4.probe.nb_read_frames === docAfter.frames,
+        `${r.mp4.probe.nb_read_frames} vs ${docAfter.frames}`);
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', mp4,
+    '-vf', `select='not(mod(n\,${Math.max(1, Math.floor(docAfter.frames / 12))}))',`
+      + 'scale=300:-1,tile=4x3', '-frames:v', '1', '-update', '1',
+    path.join(DOCS, 'seq-item-look-sheet.png')]);
+
+  // --- back to where it started: the cache still holds the original
+  r.reverted = await page.evaluate(async () => {
+    await window.DV_seq.setLook(1, { mode: 'dots', cell: 4, gamma: 1,
+                                     polish: {}, colors: {} });
+    const d = window.DV_seq.itemDots(1);
+    let h = 2166136261;
+    for (const t of d) for (const f of t) for (const v of f) {
+      h ^= v; h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
+  });
+  check('item look · putting the look back puts the dots back',
+        r.reverted === r.before[1].hash, `${r.reverted} vs ${r.before[1].hash}`);
+
+  await page.screenshot({ path: path.join(DOCS, 'seq-item-look-reverted.png') });
+  await ctx.close();
+  return r;
+}
+
+/* ====== W10: pixel modes fly as particles, and a picture can bring a subject ==
+ * Two things that only make sense together.
+ *
+ * A pixel dither mode at cell 1 is one dot per lit PIXEL — hundreds of
+ * thousands of them — which is a picture, not a swarm. It still has to morph,
+ * so a join thins whichever side is over the cap and flies the survivors, and
+ * hands the rest back in place: the frame the transition starts on is exactly
+ * the outgoing item, the frame it ends on is exactly the incoming one, and the
+ * loosening is in between. That is checked here on a Bayer-dithered cutout
+ * morphing into a tracked subject drawn with Dots.
+ *
+ * And a picture brought in from the sequence can now say WHICH bit of itself it
+ * means: the add row offers each segmented subject on its own, the whole frame,
+ * and — for a picture that has never been in the studio — "select a subject…",
+ * which opens it there and lets the header carry the cutout back.
+ */
+async function runSeqPixel() {
+  const r = {};
+  const { ctx, page } = await newPage({ mode: 'local', url: '', key: '' });
+
+  const counts = (i) => page.evaluate((k) => {
+    const d = window.DV_seq.itemDots(k);
+    return d[0].map((f) => f.length / 2);
+  }, i);
+
+  // --- 1. a photograph, one subject clicked out of it, offered per subject
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', { timeout: 60000 });
+  await sleep(600);
+  await openStep(page, 'st2');
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(700);
+  await promptBoxPoint(page, SUBJECT_A);
+  r.seg = await waitText(page, '#pvinfo', /subject|failed/, 300000);
+  check('pixel · the still subject segments', !/failed/.test(r.seg), r.seg);
+  await page.click('#bTrack'); await sleep(700);
+  await setMode(page, 'dots');
+  r.candidates = await page.evaluate(() => window.DV_seq.candidates());
+  check('pixel · a segmented still offers its subject AND the whole picture',
+        r.candidates.length === 2
+          && r.candidates[0].arg.subject === 0
+          && r.candidates[1].arg.whole === true,
+        JSON.stringify(r.candidates));
+
+  await page.click('#bToSeq');                    // the subject entry is first
+  await page.waitForFunction(() => window.DV_seq.strip().length === 1,
+                             null, { timeout: 300000 });
+  r.cutTracks = (await page.evaluate(() => window.DV_seq.library()))[0].tracks.length;
+  check('pixel · the cutout went in as one track', r.cutTracks === 1,
+        String(r.cutTracks));
+
+  // --- 2. the same picture again, whole this time, and dithered with Bayer.
+  // Choosing a pixel mode drops the cell to 1, which is where a dither is a
+  // dither rather than a screen at dot size — and where it stops being a swarm.
+  await page.evaluate(() => window.DV_seq.add('still', { whole: true }));
+  await page.waitForFunction(() => window.DV_seq.strip().length === 2,
+                             null, { timeout: 300000 });
+  r.bayer = await page.evaluate(async () => {
+    const before = window.DV_seq.itemLook(1);
+    await window.DV_seq.setLook(1, { mode: 'ordered' });
+    return { before: before.cell, look: window.DV_seq.itemLook(1) };
+  });
+  check('pixel · Bayer drops the item to cell 1',
+        r.bayer.look.mode === 'ordered' && r.bayer.look.cell === 1
+          && r.bayer.before === 4,
+        JSON.stringify(r.bayer));
+  await page.evaluate(() => {
+    window.DV_seq.set(0, { hold: 6 });
+    window.DV_seq.set(1, { hold: 6 });
+  });
+  r.pixelDots = (await counts(1))[0];
+  r.cutoutDots = (await counts(0))[0];
+  r.cap = await page.evaluate(() => window.DV_seq.cap());
+  check('pixel · a cell-1 Bayer frame is hundreds of thousands of dots',
+        r.pixelDots > r.cap * 20, `${r.pixelDots} dots vs a ${r.cap} cap`);
+  await page.click('#strip2 .card[data-i="1"]');
+  await page.screenshot({ path: path.join(DOCS, 'seq-particle-bayer.png') });
+
+  // --- 3. a tracked subject on Dots, after it
+  await page.click('#bSeqNew');
+  await loadClip(page, CLIP, BR.seconds);
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+  await promptBoxPoint(page, SUBJECT_A);
+  await page.click('#bTrack');
+  const t = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('pixel · the clip tracks', !/failed/.test(t), t);
+  await setMode(page, 'dots');
+  await page.click('#bToSeq');
+  await page.waitForFunction(() => window.DV_seq.strip().length === 3,
+                             null, { timeout: 600000 });
+  await page.evaluate(() => {
+    window.DV_seq.set(2, { in: 0, out: 11 });
+    window.DV_seq.trans(1, 'cut');
+    window.DV_seq.trans(2, 'morph', 900);
+  });
+
+  await page.click('#bSeqPrev');
+  r.preview = await waitText(page, '#seqinfo', /frames|failed/, 300000);
+  check('pixel · a pixel-mode item previews next to a dots one',
+        !/failed/.test(r.preview), r.preview);
+
+  r.join = await page.evaluate(() => {
+    const d = window.DV_seq.doc();
+    const items = d.marks.filter((m) => m.kind === 'item');
+    const m = d.marks.filter((x) => x.kind !== 'item').pop();   // Bayer -> dots
+    const at = (f) => d.frames[f].reduce((a, t) => a + t.length / 2, 0);
+    const flight = [];
+    for (let f = m.start; f < m.start + m.frames; f++) flight.push(at(f));
+    return {
+      kind: m.kind, frames: m.frames, thinned: m.thinned, start: m.start,
+      lastOfA: at(items[1].start + items[1].frames - 1),
+      firstOfB: at(items[2].start),
+      first: flight[0], last: flight[flight.length - 1],
+      min: Math.min(...flight), max: Math.max(...flight),
+      mid: flight[Math.floor(flight.length / 2)],
+    };
+  });
+  const j = r.join;
+  check('pixel · the flight is thinned, and says by how much',
+        j.thinned > 0 && j.kind === 'morph', JSON.stringify(j));
+  check('pixel · mid-flight never exceeds two capfuls of particles',
+        j.mid <= r.cap * 2 && j.mid < r.pixelDots / 4, JSON.stringify(j));
+  check('pixel · the transition starts on the outgoing item at full density',
+        Math.abs(j.first - j.lastOfA) <= 8,
+        `${j.first} vs ${j.lastOfA} (${j.lastOfA - j.first} dots)`);
+  check('pixel · and ends on the incoming one at full density',
+        Math.abs(j.last - j.firstOfB) <= 8,
+        `${j.last} vs ${j.firstOfB} (${j.firstOfB - j.last} dots)`);
+  await sleep(500);
+  await page.screenshot({ path: path.join(DOCS, 'seq-particle-preview.png') });
+
+  // --- the whole thing as a video, and a contact sheet of the join itself
+  const gz = path.join(DOCS, 'seq-particle.dots.gz');
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 300000 }), page.click('#bSeqDots')]);
+  await dl.saveAs(gz);
+  r.dotsBytes = fs.statSync(gz).size;
+  const up = await page.request.post(`${BASE}/api/sequence`, {
+    multipart: { file: { name: 'sequence.dots.gz',
+                         mimeType: 'application/octet-stream',
+                         buffer: fs.readFileSync(gz) },
+                 format: 'mp4' },
+    timeout: 600000,
+  });
+  check('pixel · the server rasterises a pixel-mode sequence', up.ok(),
+        String(up.status()));
+  r.server = await up.json();
+  const mp4 = path.join(DOCS, 'seq-particle.mp4');
+  fs.writeFileSync(mp4, await (await page.request.get(`${BASE}${r.server.url}`)).body());
+  r.mp4 = { bytes: fs.statSync(mp4).size, probe: probe(mp4) };
+  const total = await page.evaluate(() => window.DV_seq.doc().frames.length);
+  check('pixel · the MP4 has every frame of it',
+        +r.mp4.probe.nb_read_frames === total,
+        `${r.mp4.probe.nb_read_frames} vs ${total}`);
+  // twelve frames straddling the join: the Bayer picture, the loosening, the swarm
+  const start = Math.max(0, r.join.start - 2);
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', mp4,
+    '-vf', `select='between(n\,${start}\,${start + j.frames})*not(mod(n\,3))',`
+      + 'scale=320:-1,tile=4x3', '-frames:v', '1', '-update', '1',
+    path.join(DOCS, 'seq-particle-morph.png')]);
+
+  // --- 4. "+ image…" -> "select a subject…" -> a cutout in the strip
+  await page.evaluate(() => window.DV_seq.view('sequence'));
+  await page.setInputFiles('#shapeFile', STILL);
+  await page.waitForFunction(() => window.DV_seq.pending() !== null,
+                             null, { timeout: 60000 });
+  r.addChips = await page.$$eval('#seqadd .chip', (n) => n.map((e) => e.textContent));
+  check('pixel · a picture is asked what it is before it goes in',
+        r.addChips.includes('whole image')
+          && r.addChips.includes('select a subject…'),
+        JSON.stringify(r.addChips));
+  await page.screenshot({ path: path.join(DOCS, 'seq-image-subject-ask.png') });
+  await page.click('#seqadd .chip:has-text("select a subject…")');
+  await page.waitForFunction(() => window.DV.view === 'studio'
+    && window.DV.kind === 'image' && window.DV.scope === 'track',
+                             null, { timeout: 120000 });
+  check('pixel · "select a subject" opens it in the studio, on the subject step',
+        true, 'studio · image · track');
+  await promptBoxPoint(page, SUBJECT_A);
+  r.seg2 = await waitText(page, '#pvinfo', /subject|failed/, 300000);
+  check('pixel · the picture segments where it landed', !/failed/.test(r.seg2),
+        r.seg2);
+  await page.click('#bTrack'); await sleep(700);
+  await page.click('#bToSeq');
+  await page.waitForFunction(() => window.DV_seq.strip().length === 4,
+                             null, { timeout: 300000 });
+  r.strip = await page.evaluate(() => window.DV_seq.strip());
+  const last = r.strip[3];
+  const lib = (await page.evaluate(() => window.DV_seq.library()))
+    .find((x) => x.id === last.lib);
+  check('pixel · the cutout, not the whole picture, is what went in',
+        lib.kind === 'still' && lib.tracks.length === 1
+          && !/whole/.test(lib.name),
+        JSON.stringify({ kind: lib.kind, name: lib.name, tracks: lib.tracks.length }));
+  await page.screenshot({ path: path.join(DOCS, 'seq-image-subject-added.png') });
+
+  await ctx.close();
+  return r;
+}
+
 /* ================================== K: the optional bearer-token gate ======== */
 async function runApiKey() {
   const r = {};
@@ -1437,6 +1900,8 @@ try {
   await run('dotsRemote', runDots, 'remote');
   await run('dotsBrowser', runDots, 'browser');
   await run('sequence', runSequence);
+  await run('seqItemLook', runSeqItemLook);
+  await run('seqPixel', runSeqPixel);
   await run('entryBrowser', runEntry, 'browser');
   await run('entryRemote', runEntry, 'remote');
   await run('apiKey', runApiKey);

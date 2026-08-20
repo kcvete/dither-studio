@@ -15,7 +15,7 @@ export const {
   Player, encode, decode, gzip, gunzip, pack, unpack, toJSON, fromJSON,
   paintFrame, buildMorph, morphPairs, scatterPairs, densityPairs, regrid,
   buildTransition, TRANSITIONS, buildSequence, hilbertOrder, hexRGB,
-  easeInOut, mulberry32, version,
+  thinCloud, PARTICLE_CAP, easeInOut, mulberry32, version,
 } = P;
 
 export default P;

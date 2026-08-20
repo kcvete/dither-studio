@@ -22,3 +22,7 @@ web/ort/
 
 # verify-web.mjs re-exports these on every run; the screenshots are the evidence
 docs/w-*-export.*
+docs/seq-item-look-*.dots.gz
+docs/seq-item-look.mp4
+docs/seq-particle.dots.gz
+docs/seq-particle.mp4

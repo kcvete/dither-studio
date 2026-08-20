@@ -85,6 +85,13 @@ select{width:100%;background:#0a1310;color:var(--ink);border:1px solid var(--lin
 body.dragging #drop b{opacity:1}
 .note{margin-top:9px;font-size:10px;line-height:1.55;opacity:.42}
 .note.warn{opacity:.95;color:var(--warn)}
+.note.small{margin-top:5px;font-size:9.5px;opacity:.34}
+/* a mode that flickers frame to frame on a clip: the chip says so */
+#seqinspect .chip.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)}
+#seqinspect select{width:100%;margin:4px 0 2px}
+/* the "add it as" answer the sequence wants you to take */
+#seqadd .chip.go{background:var(--go);color:#0e1512;border-color:transparent;
+  font-weight:600;opacity:1}
 .note b{opacity:.9}
 .stat{margin-top:9px;font-size:10.5px;line-height:1.55;opacity:.78;
   font-variant-numeric:tabular-nums;border-left:2px solid var(--line);padding-left:8px}

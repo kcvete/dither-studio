@@ -192,6 +192,62 @@ function gifPalette(params) {
 }
 
 /* ============================================================= the engine === */
+/* The tracker's output is 192x192 logits. The server upsamples logits to the
+ * clip's resolution and THEN takes the sigmoid; doing it the other way round
+ * widens the soft edge by a pixel or two, so this does it in the same order,
+ * carrying the logit through the canvas resampler as a clamped +/-20 ramp.
+ * `cache` is any object to hang the two scratch canvases off. */
+function upsampleMask(low, w, h, cache) {
+  const P = 192;
+  const small = cache._msk || (cache._msk = new OffscreenCanvas(P, P));
+  const sg = small.getContext('2d', { willReadFrequently: true });
+  const id = sg.createImageData(P, P);
+  for (let q = 0; q < P * P; q++) {
+    const v = low ? low[q] : NO_OBJ;
+    const t = Math.max(0, Math.min(255, Math.round((v + 20) * (255 / 40))));
+    id.data[q * 4] = t; id.data[q * 4 + 3] = 255;
+  }
+  sg.putImageData(id, 0, 0);
+  const big = cache._mskBig || (cache._mskBig = new OffscreenCanvas(w, h));
+  if (big.width !== w || big.height !== h) { big.width = w; big.height = h; }
+  const bg = big.getContext('2d', { willReadFrequently: true });
+  bg.clearRect(0, 0, w, h);
+  bg.drawImage(small, 0, 0, w, h);
+  const px = bg.getImageData(0, 0, w, h);
+  const d = px.data;
+  for (let q = 0, p = 0; q < w * h; q++, p += 4) {
+    const logit = d[p] * (40 / 255) - 20;
+    const a = Math.round(255 / (1 + Math.exp(-logit)));
+    d[p] = a; d[p + 1] = a; d[p + 2] = a; d[p + 3] = 255;
+  }
+  bg.putImageData(px, 0, 0);
+  return createImageBitmap(big);
+}
+
+/** What `BrowserEngine.snapshot()` hands out: frames and masks, no tracker,
+ *  no lifecycle. The frame blobs are shared with the engine (they are
+ *  immutable), the mask logits are a shallow copy of the map, so loading
+ *  another clip cannot take either away. */
+export class LocalClipSource {
+  constructor(clip, masks) {
+    this.id = 'browser';
+    this.w = clip.w; this.h = clip.h;
+    this.nFrames = clip.nFrames; this.fps = clip.fps;
+    this.frames = clip.frames;
+    this.masks = masks;
+  }
+
+  async frame(i) {
+    return createImageBitmap(
+      this.frames[Math.max(0, Math.min(this.nFrames - 1, i))]);
+  }
+
+  async mask(objId, i) {
+    return upsampleMask((this.masks.get(String(objId)) || [])[i],
+                        this.w, this.h, this);
+  }
+}
+
 export class BrowserEngine {
   constructor(opts = {}) {
     this.id = 'browser';
@@ -386,35 +442,21 @@ export class BrowserEngine {
    * widens the soft edge by a pixel or two, so this does it in the same order,
    * carrying the logit through the canvas resampler as a clamped +/-20 ramp. */
   maskBitmap(objId, i) {
-    const seq = this.masks.get(String(objId));
-    const P = 192, { w, h } = this.clip;
-    const low = (seq && seq[i]) || null;
-    const small = this._msk || (this._msk = new OffscreenCanvas(P, P));
-    const sg = small.getContext('2d', { willReadFrequently: true });
-    const id = sg.createImageData(P, P);
-    for (let q = 0; q < P * P; q++) {
-      const v = low ? low[q] : NO_OBJ;
-      const t = Math.max(0, Math.min(255, Math.round((v + 20) * (255 / 40))));
-      id.data[q * 4] = t; id.data[q * 4 + 3] = 255;
-    }
-    sg.putImageData(id, 0, 0);
-    const big = this._mskBig || (this._mskBig = new OffscreenCanvas(w, h));
-    if (big.width !== w || big.height !== h) { big.width = w; big.height = h; }
-    const bg = big.getContext('2d', { willReadFrequently: true });
-    bg.clearRect(0, 0, w, h);
-    bg.drawImage(small, 0, 0, w, h);
-    const px = bg.getImageData(0, 0, w, h);
-    const d = px.data;
-    for (let q = 0, p = 0; q < w * h; q++, p += 4) {
-      const logit = d[p] * (40 / 255) - 20;
-      const a = Math.round(255 / (1 + Math.exp(-logit)));
-      d[p] = a; d[p + 1] = a; d[p + 2] = a; d[p + 3] = 255;
-    }
-    bg.putImageData(px, 0, 0);
-    return createImageBitmap(big);
+    const { w, h } = this.clip;
+    return upsampleMask((this.masks.get(String(objId)) || [])[i], w, h, this);
   }
 
   async mask(objId, i) { return this.maskBitmap(objId, i); }
+
+  /** A detached handle on the clip that is open RIGHT NOW: the same frame
+   *  blobs and the same mask logits, in an object that does not care what the
+   *  engine loads next. A sequence item keeps one of these so it can redraw
+   *  its dots at any look long after its clip has left the studio. */
+  snapshot() {
+    const c = this.clip;
+    if (!c) return null;
+    return new LocalClipSource(c, new Map(this.masks));
+  }
 
   async frameURL(i) {
     const b = this.clip.frames[Math.max(0, Math.min(this.clip.nFrames - 1, i))];

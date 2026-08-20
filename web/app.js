@@ -73,7 +73,7 @@ const S = {
   // sequence itself: instances of pool items, each carrying its own trim,
   // colour and the transition that leads into it.
   view: 'studio', library: [], strip: [], sel: null, seqDoc: null,
-  returnToSeq: false,
+  returnToSeq: false, pendingImage: null,
   seq: { dotpx: 3, bg: '#c9d4c5', fps: 30, format: '' },
 };
 const E = () => S.engine;
@@ -1297,8 +1297,23 @@ function bitmapAlpha(bmp, w, h, slot) {
  *            images), so a padded crop and the whole frame give the same
  *            answer — which is a claim the parity gate also covers.
  */
-const PM = { key: null, raw: new Map(), out: new Map(), pool: [] };
+/* A mask WELL: where raw masks come from, how big they are, and the two LRU
+ * caches that make polishing them affordable. The studio has one — the clip on
+ * the stage, through the engine — and every sequence item that came from a
+ * clip has its own, because an item outlives the clip it was captured from and
+ * still has to be able to re-polish at a new strength. */
 const PM_RAW_MAX = 64, PM_OUT_MAX = 48;
+function newWell(id, cfg) {
+  return Object.assign({ id, key: null, raw: new Map(), out: new Map(), pool: [] },
+                       cfg);
+}
+function wellReset(W) { W.raw.clear(); W.out.clear(); }
+
+/* The studio's well: the clip that is open, fetched through the engine. */
+const PM = newWell('pm', {
+  get: (objId, j) => E().mask(objId, j),
+  size: () => ({ w: S.W, h: S.H, n: S.nFrames }),
+});
 
 const polishOn = () => S.kind === 'video' && usingSubjects()
   && S.subjects.some((s) => (s.polish | 0) > 0);
@@ -1307,25 +1322,25 @@ function polishKey() {
   return JSON.stringify([E().id, S.job, S.W, S.H,
                          S.subjects.map((s) => [s.id, s.polish | 0])]);
 }
-function dropPolish() { PM.key = null; PM.raw.clear(); PM.out.clear(); }
+function dropPolish() { PM.key = null; wellReset(PM); }
 function checkPolishKey() {
   const k = polishKey();
-  if (PM.key !== k) { PM.key = k; PM.raw.clear(); PM.out.clear(); }
+  if (PM.key !== k) { PM.key = k; wellReset(PM); }
 }
 function lru(map, max) {
   while (map.size > max) { const k = map.keys().next().value; map.delete(k); }
 }
 
 /** One subject's raw mask on one frame: 8-bit coverage, its stats and the box
- *  outside which it is exactly zero. Fetched through the engine, not through
+ *  outside which it is exactly zero. Fetched through the well, not through
  *  frameAt — polish wants six neighbouring MASKS, not six neighbouring frames. */
-async function rawMask(k, j) {
-  const key = k + ':' + j;
-  const hit = PM.raw.get(key);
-  if (hit) { PM.raw.delete(key); PM.raw.set(key, hit); return hit; }
-  const bmp = await E().mask(S.subjects[k].id, j);
-  const w = S.W, h = S.H;
-  const c = ctx2d(w, h, 'pm');
+async function rawMask(W, objId, j) {
+  const key = objId + ':' + j;
+  const hit = W.raw.get(key);
+  if (hit) { W.raw.delete(key); W.raw.set(key, hit); return hit; }
+  const bmp = await W.get(objId, j);
+  const { w, h } = W.size();
+  const c = ctx2d(w, h, W.id + 'raw');
   c.clearRect(0, 0, w, h);
   c.drawImage(bmp, 0, 0, w, h);
   if (bmp.close) bmp.close();
@@ -1347,15 +1362,15 @@ async function rawMask(k, j) {
   const rec = { u8, box: x1 < 0 ? null : { x0, y0, x1, y1 },
                 st: n ? { area: n, cx: sx / n, cy: sy / n }
                       : { area: 0, cx: 0, cy: 0 } };
-  PM.raw.set(key, rec); lru(PM.raw, PM_RAW_MAX);
+  W.raw.set(key, rec); lru(W.raw, PM_RAW_MAX);
   return rec;
 }
 
-/** A cropped float view of a raw mask, from the shared pool. */
-function crop(rec, box, w, slot) {
+/** A cropped float view of a raw mask, from the well's shared pool. */
+function crop(W, rec, box, w, slot) {
   const cw = box.x1 - box.x0 + 1, ch = box.y1 - box.y0 + 1;
-  let a = PM.pool[slot];
-  if (!a || a.length < cw * ch) a = PM.pool[slot] = new Float32Array(cw * ch);
+  let a = W.pool[slot];
+  if (!a || a.length < cw * ch) a = W.pool[slot] = new Float32Array(cw * ch);
   for (let y = 0; y < ch; y++) {
     const src = (box.y0 + y) * w + box.x0, dst = y * cw;
     for (let x = 0; x < cw; x++) a[dst + x] = rec.u8[src + x] / 255;
@@ -1363,20 +1378,21 @@ function crop(rec, box, w, slot) {
   return a.length === cw * ch ? a : a.subarray(0, cw * ch);
 }
 
-/** Subject k's polished mask on frame i, as the renderer wants it. */
-async function polishedMask(k, i) {
-  const sub = S.subjects[k], strength = sub.polish | 0;
-  const w = S.W, h = S.H;
-  const key = k + ':' + i;
-  const hit = PM.out.get(key);
+/** Subject `objId`'s polished mask on frame `i`, as the renderer wants it.
+ *  `slot` names the scratch Float32Array it is expanded into — callers that
+ *  hold several masks at once must pass different ones. */
+async function polishedMask(W, objId, i, strength, slot) {
+  const { w, h, n: nF } = W.size();
+  const key = objId + ':' + strength + ':' + i;
+  const hit = W.out.get(key);
   if (hit) {
-    PM.out.delete(key); PM.out.set(key, hit);
-    return expand(hit, w * h, 'pf' + k);
+    W.out.delete(key); W.out.set(key, hit);
+    return expand(hit, w * h, slot);
   }
   const P = MaskPolish.params(strength);
-  const lo = Math.max(0, i - P.radius), hi = Math.min(S.nFrames - 1, i + P.radius);
+  const lo = Math.max(0, i - P.radius), hi = Math.min(nF - 1, i + P.radius);
   const recs = [];
-  for (let j = lo; j <= hi; j++) recs.push(await rawMask(k, j));
+  for (let j = lo; j <= hi; j++) recs.push(await rawMask(W, objId, j));
   const pad = 2 * P.morph + P.blur + 2;
   let box = null;
   for (const r of recs) {
@@ -1390,15 +1406,15 @@ async function polishedMask(k, i) {
     box = { x0: clamp(box.x0 - pad, 0, w - 1), y0: clamp(box.y0 - pad, 0, h - 1),
             x1: clamp(box.x1 + pad, 0, w - 1), y1: clamp(box.y1 + pad, 0, h - 1) };
     const cw = box.x1 - box.x0 + 1, ch = box.y1 - box.y0 + 1;
-    const win = recs.map((r, n) => crop(r, box, w, n));
+    const win = recs.map((r, n) => crop(W, r, box, w, n));
     const st = recs.map((r) => r.st);
     const got = MaskPolish.polishFrame(win, i - lo, cw, ch, strength, st);
     const q = MaskPolish.quantise(got);
     for (let y = 0; y < ch; y++) out.set(q.subarray(y * cw, y * cw + cw),
                                         (box.y0 + y) * w + box.x0);
   }
-  PM.out.set(key, out); lru(PM.out, PM_OUT_MAX);
-  return expand(out, w * h, 'pf' + k);
+  W.out.set(key, out); lru(W.out, PM_OUT_MAX);
+  return expand(out, w * h, slot);
 }
 
 const EXP = {};
@@ -1420,7 +1436,8 @@ async function masksFor(i, rec, slot) {
   const out = [];
   for (let k = 0; k < S.subjects.length; k++) {
     out.push((S.subjects[k].polish | 0) > 0
-      ? await polishedMask(k, i)
+      ? await polishedMask(PM, S.subjects[k].id, i, S.subjects[k].polish | 0,
+                           'pf' + k)
       : bitmapAlpha(rec.masks[k], S.W, S.H, slot + k));
   }
   return out;
@@ -1434,11 +1451,16 @@ function dotFields(W, H, cell, seed, tile) {
   const gw = (W / cell) | 0, gh = (H / cell) | 0, N = gw * gh;
   const thr = new Float32Array(N), cx = new Float32Array(N), cy = new Float32Array(N),
         strayR = new Float32Array(N);
+  // the jitter that keeps a dot cloud from looking like graph paper. At cell 1
+  // there is no room for it and no need: one cell is one pixel, and jittering
+  // it by a pixel would turn a Bayer screen into noise. server/render.py has
+  // the same line.
+  const jit = cell > 1 ? 0.8 : 0;
   for (let i = 0; i < gh; i++) for (let j = 0; j < gw; j++) {
     const q = i * gw + j;
     thr[q] = tile[(i % 64) * 64 + (j % 64)];
-    cx[q] = j * cell + cell / 2 + (Dither.hash01(i, j, 1, seed) - 0.5) * cell * 0.8;
-    cy[q] = i * cell + cell / 2 + (Dither.hash01(i, j, 2, seed) - 0.5) * cell * 0.8;
+    cx[q] = j * cell + cell / 2 + (Dither.hash01(i, j, 1, seed) - 0.5) * cell * jit;
+    cy[q] = i * cell + cell / 2 + (Dither.hash01(i, j, 2, seed) - 0.5) * cell * jit;
     strayR[q] = Dither.hash01(i, j, 3, seed);
   }
   DOTS.key = key; DOTS.F = { gw, gh, N, thr, cx, cy, strayR, cell };
@@ -1547,6 +1569,78 @@ function dotXY(F, on) {
     xy[i++] = Math.round(cx[q]); xy[i++] = Math.round(cy[q]);
   }
   return xy;
+}
+
+/* ------------------------------------------------- the modes, on the dot grid
+ * A sequence is dot positions and nothing else, so "which cells are lit" is
+ * the only question a look has to answer, and every dither mode can answer it.
+ *
+ *   dots       answers it the way the studio's dots look does: blue noise, a
+ *              target count, a fill ratio, stray dots in a halo around the
+ *              subject. That is `dotsOn` above, unchanged.
+ *   everything the per-cell tone field becomes a gw x gh greyscale image — one
+ *   else       pixel per cell — and goes through web/dither.js exactly as a
+ *              picture would, black on white, the subject's coverage as the
+ *              gate. A cell is lit where that comes back black.
+ *
+ * So Bayer, halftone, blue noise, white noise, error diffusion and Riemersma
+ * all produce clouds that morph like any other: they are dots on the same
+ * grid, they just disagree about which ones survive. Error diffusion and
+ * Riemersma flicker frame to frame on a clip exactly as they do in the studio
+ * — the mode chips say so — but they morph, so nothing is greyed out.
+ *
+ * `n`, `fill`, `stray` and `halo` belong to the dots renderer alone; the
+ * inspector hides them for the other modes rather than pretending.
+ */
+const MODE_PAL = ['#ffffff', '#000000'];
+function dotsOnMode(srcData, W, H, masks, P, tile) {
+  if (!P.mode || P.mode === 'dots') return dotsOn(srcData, W, H, masks, P, tile);
+  const cell = P.cell | 0;
+  const F = dotFields(W, H, cell, P.seed, tile);
+  const { gw, gh, N } = F;
+  const K = masks.length;
+  const lum = new Float32Array(N), cov = [];
+  for (let k = 0; k < K; k++) cov.push(new Float32Array(N));
+  const useH = gh * cell, useW = gw * cell;
+  for (let y = 0; y < useH; y++) {
+    const row = ((y / cell) | 0) * gw, base = y * W * 4, mrow = y * W;
+    for (let x = 0; x < useW; x++) {
+      const p = base + x * 4, q = row + ((x / cell) | 0);
+      lum[q] += (0.2126 * srcData[p] + 0.7152 * srcData[p + 1]
+                 + 0.0722 * srcData[p + 2]) / 255;
+      for (let k = 0; k < K; k++) cov[k][q] += masks[k][mrow + x];
+    }
+  }
+  const cc = cell * cell;
+  const img = new Uint8ClampedArray(N * 4);
+  for (let q = 0; q < N; q++) {
+    const v = Math.round(clamp(lum[q] / cc, 0, 1) * 255);
+    img[q * 4] = v; img[q * 4 + 1] = v; img[q * 4 + 2] = v; img[q * 4 + 3] = 255;
+  }
+  // one owner per cell, as in dotsOn: two subjects never light the same dot
+  const owner = new Int8Array(N).fill(-1);
+  for (let q = 0; q < N; q++) {
+    let bv = 0, best = -1;
+    for (let k = 0; k < K; k++) if (cov[k][q] > bv) { bv = cov[k][q]; best = k; }
+    owner[q] = best;
+  }
+  const p = { mode: P.mode, algo: P.algo || 'floyd-steinberg',
+              matrix: P.matrix || 4, serpentine: !!P.serpentine,
+              strength: P.strength === undefined ? 1 : P.strength,
+              seed: P.seed, brightness: 0, contrast: 1,
+              gamma: P.gamma, invert: P.invert, palette: MODE_PAL };
+  const out = new Uint8ClampedArray(N * 4);
+  const gate = new Float32Array(N);
+  const ons = [];
+  for (let k = 0; k < K; k++) {
+    for (let q = 0; q < N; q++) gate[q] = owner[q] === k ? 1 : 0;
+    out.fill(255);
+    Dither.ditherRGBA(img, out, gw, gh, p, gate);
+    const on = new Uint8Array(N);
+    for (let q = 0; q < N; q++) if (gate[q] > 0 && out[q * 4] < 128) on[q] = 1;
+    ons.push(on);
+  }
+  return { F, on: ons };
 }
 
 function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
@@ -2242,14 +2336,14 @@ function download(blob, name) {
 /** A still as a one-frame dots document. The player shows it as a static
  *  frame; it is the same file a clip writes, with n_frames = 1. Computed at
  *  the picture's own resolution so the positions match the exported PNG. */
-async function dotsDocStill() {
+async function dotsDocStill(whole) {
   const P = await playerLib();
   const w = S.natW, h = S.natH;
   const c = ctx2d(w, h, 'exp');
   c.clearRect(0, 0, w, h);
   c.drawImage(S.bitmap, 0, 0, w, h);
   const src = c.getImageData(0, 0, w, h).data;
-  const use = usingSubjects();
+  const use = !whole && usingSubjects();
   const masks = use ? stillMasksAt(w, h, 'xm') : [fullMask(w, h)];
   const r = dotsOn(src, w, h, masks, S.P, BLUE);
   const cols = use ? S.subjects.map((x) => x.palette[x.palette.length - 1])
@@ -2365,48 +2459,270 @@ $('#bDotsJson').addEventListener('click', () => exportDots(true));
 let SEQID = 1;
 const libOf = (id) => S.library.find((x) => x.id === id);
 const KINDS = ['morph', 'scatter', 'cut', 'density'];
+const EMPTY_XY = new Uint16Array(0);
 
+/* The look of the SEQUENCE, as opposed to the look of an item in it: the
+ * canvas. One background, one dot size, one frame rate for the whole strip.
+ * Dot size is here and not on the item because a .dots.gz stores exactly one
+ * of it — the whole point of the format is that size and colour are not baked
+ * into the positions — so a per-item dot size could not survive an export. */
 function seqLook() {
   return { dotpx: S.seq.dotpx, bg: S.seq.bg, fps: S.seq.fps,
            cell: S.P.cell, seed: S.P.seed };
+}
+
+/* ===================================================== an item's own look ===
+ * Everything that decides where an item's dots land. A strip entry carries its
+ * own copy, so two entries made from the same capture diverge freely: change
+ * the mode on item 2 and items 1 and 3 do not move a dot.
+ *
+ * `colors` and `polish` are keyed by SUBJECT id, not by index, so they survive
+ * a subject picker change. `colors` is the only thing in here that does not
+ * change the positions — which is why `lookKey` leaves it out, and why
+ * re-colouring an item costs nothing.
+ */
+const LOOK_GEOM = ['mode', 'algo', 'matrix', 'serpentine', 'strength', 'cell',
+                   'n', 'fill', 'stray', 'band', 'gamma', 'invert', 'seed'];
+/* The bounds the inspector's sliders use. Wider than the studio's on purpose:
+ * an item in a sequence is often much smaller in frame than the thing that was
+ * dithered to make it — and `cell` reaches 1, where a pixel dither mode is a
+ * true pixel dither rather than a screen at dot size. */
+const LOOK_RANGE = { n: [200, 60000], cell: [1, 16], band: [0, 30] };
+
+/* Choosing a pixel dither mode drops the cell to 1 — Bayer at cell 4 is a
+ * chunky screen, Bayer at cell 1 is Bayer — and choosing Dots again puts the
+ * cell the item was captured at back. `dotCell` remembers it; it is not part of
+ * LOOK_GEOM, so it never enters the derivation key. */
+function modeSwitch(look, mode) {
+  if (mode === look.mode) return { mode };
+  if (mode === 'dots') return { mode, cell: look.dotCell || look.cell };
+  if (look.mode === 'dots') return { mode, cell: 1, dotCell: look.cell };
+  return { mode };
+}
+
+/** The look an item is captured at: the studio's dot settings, its subject
+ *  colours and its mask polish, copied. The MODE is always `dots` — the studio
+ *  hands the sequence a dot cloud whatever it is showing itself, and that is
+ *  what has always gone in, so adding an item still changes nothing on screen.
+ *  Every other mode is one click away on the item afterwards. */
+function lookFromStudio(subjects) {
+  const P = S.P;
+  const look = {
+    mode: 'dots', algo: P.algo, matrix: P.matrix, serpentine: P.serpentine,
+    strength: P.strength, cell: P.cell, n: P.n, fill: P.fill, stray: P.stray,
+    band: P.band, gamma: P.gamma, invert: P.invert, seed: P.seed,
+    colors: {}, polish: {},
+  };
+  (subjects || []).forEach((s) => {
+    if (s.color) look.colors[s.id] = s.color;
+    if ((s.polish | 0) > 0) look.polish[s.id] = s.polish | 0;
+  });
+  return look;
+}
+
+const cloneLook = (l) => JSON.parse(JSON.stringify(l));
+
+/** The identity of a derivation: the geometry knobs plus the polish, with the
+ *  colours left out because they do not move a dot. */
+function lookKey(look) {
+  const pol = Object.keys(look.polish || {}).sort()
+    .map((k) => k + '=' + look.polish[k]);
+  return JSON.stringify(LOOK_GEOM.map((k) => look[k])) + '|' + pol.join(',');
+}
+
+/* ==================================================== the derivation cache ===
+ * An item is a LIVE reference: it keeps its source, not a picture, and its
+ * dots are worked out on demand at whatever look it is wearing. That is only
+ * affordable with a cache, so this is it — one slot per (library item, look),
+ * each holding the frames that have actually been asked for.
+ *
+ * Capture seeds the slot for the look the item was captured at with the exact
+ * positions the studio produced, so an item nobody has touched is byte for
+ * byte what it always was, and costs nothing to draw.
+ */
+const DERIVED = new Map();
+const DERIVED_MAX = 32;
+
+function derivedSlot(item, look) {
+  const key = item.id + '|' + lookKey(look);
+  let d = DERIVED.get(key);
+  if (d) { DERIVED.delete(key); } else { d = { key, frames: new Map() }; }
+  DERIVED.set(key, d);
+  // oldest first, but never the capture slots: those hold the exact positions
+  // the studio produced, which is the whole of "an untouched item is what it
+  // always was" and the only copy of them there is
+  for (const [k, v] of DERIVED) {
+    if (DERIVED.size <= DERIVED_MAX) break;
+    if (!v.pinned && k !== key) DERIVED.delete(k);
+  }
+  return d;
+}
+const derivedPeek = (item, look) => DERIVED.get(item.id + '|' + lookKey(look));
+
+/** The capture: the positions the studio made, at the look it made them at. */
+function seedDerived(item, look, frames) {
+  const d = derivedSlot(item, look);
+  frames.forEach((f, i) => d.frames.set(i, f));
+  d.pinned = true;
+  return d;
+}
+
+/** Redraw one frame of one item at one look. This is the whole of it: the
+ *  source frame, the masks (polished if the look asks), the dot grid. Both
+ *  engines come through here, so there is one answer and not two. */
+async function deriveFrame(item, look, i) {
+  const src = item.src, W = item.w, H = item.h;
+  const c = ctx2d(W, H, 'dv');
+  let masks;
+  if (src.kind === 'shape') {
+    paintShape(c, src, W, H);
+    masks = [fullMask(W, H)];
+  } else if (src.kind === 'still') {
+    c.clearRect(0, 0, W, H);
+    c.drawImage(src.bitmap, 0, 0, W, H);
+    masks = src.masks
+      ? src.masks.map((m, k) => (m.image
+          ? bitmapAlpha(m.image, W, H, 'dm' + k) : new Float32Array(W * H)))
+      : [fullMask(W, H)];
+  } else {
+    const bmp = await src.source.frame(i);
+    c.clearRect(0, 0, W, H);
+    c.drawImage(bmp, 0, 0, W, H);
+    if (bmp.close) bmp.close();
+    masks = [];
+    for (let k = 0; k < item.tracks.length; k++) {
+      const id = item.tracks[k].id;
+      const strength = (look.polish || {})[id] | 0;
+      if (strength > 0) {
+        masks.push(await polishedMask(src.well, id, i, strength,
+                                      'iw' + item.id + '.' + k));
+      } else {
+        const mb = await src.source.mask(id, i);
+        masks.push(bitmapAlpha(mb, W, H, 'dm' + k));
+        if (mb.close) mb.close();
+      }
+    }
+  }
+  const data = c.getImageData(0, 0, W, H).data;
+  const r = dotsOnMode(data, W, H, masks, look, BLUE);
+  return r.on.map((o) => dotXY(r.F, o));
+}
+
+/* Derivations run one at a time. Two overlapping builds — a debounced preview
+ * and an explicit one, say — would otherwise decode the same frames twice and
+ * fight over the cache's eviction order. */
+let DERIVE_Q = Promise.resolve();
+const serialise = (fn) => {
+  const next = DERIVE_Q.then(fn, fn);
+  DERIVE_Q = next.catch(() => {});
+  return next;
+};
+
+/** Make sure frames `from`..`to` of `item` exist at `look`. Only the frames an
+ *  item actually uses are ever derived, which is why dragging a trim is cheap
+ *  and changing the mode on a 45-frame item is a second, not a minute. */
+function deriveRange(item, look, from, to, onProgress) {
+  return serialise(() => deriveRangeNow(item, look, from, to, onProgress));
+}
+
+async function deriveRangeNow(item, look, from, to, onProgress) {
+  const d = derivedSlot(item, look);
+  const need = [];
+  for (let i = from; i <= to; i++) if (!d.frames.has(i)) need.push(i);
+  if (!need.length) return d;
+  await playerLib();
+  for (let k = 0; k < need.length; k++) {
+    d.frames.set(need[k], await deriveFrame(item, look, need[k]));
+    if (onProgress) onProgress({ done: k + 1, total: need.length });
+    if ((k & 3) === 3) await sleep(0);
+  }
+  return d;
 }
 
 /* ------------------------------------------------------------- the pool */
 /** Everything the current source could contribute, as pool items. */
 async function captureClip() {
   const { doc } = await dotsDoc((pr) => seqInfo('reading dot positions ' + pr.text));
+  const source = E().snapshot ? E().snapshot() : null;
+  if (!source) throw new Error('this engine has no handle on that clip');
+  const subs = doc.subjects.map((sub, k) => ({
+    id: (S.subjects[k] || {}).id || (k + 1),
+    color: sub.color,
+    polish: (S.subjects[k] || {}).polish | 0,
+  }));
   const item = {
     id: SEQID++, kind: 'clip', name: S.fileName || 'clip',
-    w: doc.w, h: doc.h, fps: doc.fps,
-    tracks: doc.subjects.map((sub, k) => ({
-      id: (S.subjects[k] || {}).id || (k + 1),
-      color: sub.color,
-      frames: doc.frames.map((f) => f[k] || new Uint16Array(0)),
-    })),
+    w: doc.w, h: doc.h, fps: doc.fps, nFrames: doc.frames.length,
+    tracks: subs.map((s) => ({ id: s.id, color: s.color })),
+    look: lookFromStudio(subs),
+    src: { kind: 'clip', source,
+           // its own polish well: this item can be re-polished long after the
+           // clip it came from has left the studio
+           well: newWell('iw' + SEQID, {
+             get: (objId, j) => source.mask(objId, j),
+             size: () => ({ w: doc.w, h: doc.h, n: doc.frames.length }),
+           }) },
   };
+  seedDerived(item, item.look, doc.frames);
   S.library.push(item);
   return item;
 }
 
-async function captureStill() {
-  const { doc } = await dotsDocStill();
+/** An independent copy of a mask image, so closing the original cannot take it
+ *  away. Returns null for a subject that has none. */
+async function cloneMask(img) {
+  if (!img) return null;
+  try { return await createImageBitmap(img); } catch (e) { return img; }
+}
+
+/** Everything about the studio that decides what a still capture contains, so
+ *  adding subject #1 and then subject #2 of the same photograph reuses one
+ *  library entry instead of dithering it twice. */
+function stillCapKey(whole) {
+  return JSON.stringify([!!whole, S.fileName, S.natW, S.natH, S.bg,
+    S.P.cell, S.P.n, S.P.fill, S.P.stray, S.P.band, S.P.gamma, S.P.invert,
+    S.P.seed, S.palette,
+    whole ? [] : S.subjects.map((x) => [x.id, x.palette])]);
+}
+
+/** The picture in the studio, as an item. `whole` ignores whatever is selected
+ *  and takes the entire frame; otherwise the subjects come across as one track
+ *  each and the strip entry picks which of them to show. */
+async function captureStill(opts) {
+  const whole = !!(opts && opts.whole);
+  const key = stillCapKey(whole);
+  const had = S.library.find((x) => x.kind === 'still' && x.capKey === key
+                                 && x.src.bitmap === S.bitmap);
+  if (had) return had;
+  const { doc } = await dotsDocStill(whole);
+  const use = !whole && usingSubjects();
+  const subs = doc.subjects.map((sub, k) => ({
+    id: use ? ((S.subjects[k] || {}).id || (k + 1)) : 1,
+    color: sub.color, polish: 0,
+  }));
   const item = {
-    id: SEQID++, kind: 'still', name: S.fileName || 'still',
-    w: doc.w, h: doc.h, fps: 30,
-    tracks: doc.subjects.map((sub, k) => ({
-      id: (S.subjects[k] || {}).id || (k + 1),
-      color: sub.color,
-      frames: [doc.frames[0][k] || new Uint16Array(0)],
-    })),
+    id: SEQID++, kind: 'still',
+    name: (S.fileName || 'still') + (whole && usingSubjects() ? ' (whole)' : ''),
+    w: doc.w, h: doc.h, fps: 30, nFrames: 1, capKey: key,
+    tracks: subs.map((s) => ({ id: s.id, color: s.color })),
+    look: lookFromStudio(subs),
+    src: { kind: 'still', bitmap: S.bitmap, whole,
+           // a COPY of each mask: dropStill() closes the studio's when another
+           // picture is loaded, and this item has to outlive that
+           masks: use ? await Promise.all(S.subjects.map(async (s) => ({
+             id: s.id, image: await cloneMask(S.stillMasks.get(s.id)),
+           }))) : null },
   };
+  seedDerived(item, item.look, [doc.frames[0]]);
   S.library.push(item);
   return item;
 }
 
 /* ---------------------------------------------------------- static shapes
  * A shape becomes dots through the same pipeline a clip does: draw it dark on
- * light, hand it to `dotsOn` with a full-frame mask, keep the positions. So a
- * ring is dithered, not plotted. */
+ * light, hand it to the dot grid with a full-frame mask, keep the positions.
+ * So a ring is dithered, not plotted — and because the item keeps the recipe
+ * rather than the result, changing its look redraws it. */
 function drawRing(g, W, H) {
   g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
   const S0 = Math.min(W, H);
@@ -2444,6 +2760,17 @@ function drawCoral(g, W, H) {
   g.restore();
 }
 
+/** A shape source, painted. `src.shape` is 'ring' | 'coral' | a bitmap's name. */
+function paintShape(c, src, W, H) {
+  if (src.bitmap) {
+    c.fillStyle = '#fff'; c.fillRect(0, 0, W, H);
+    const k = Math.min(W / src.bitmap.width, H / src.bitmap.height) * 0.86;
+    const w = src.bitmap.width * k, h = src.bitmap.height * k;
+    c.drawImage(src.bitmap, (W - w) / 2, (H - h) / 2, w, h);
+  } else if (src.shape === 'coral') drawCoral(c, W, H);
+  else drawRing(c, W, H);
+}
+
 const seqW = () => (S.library[0] ? S.library[0].w : (S.W || 1280));
 const seqH = () => (S.library[0] ? S.library[0].h : (S.H || 720));
 const seqColor = () => (S.library[0] ? S.library[0].tracks[0].color
@@ -2452,28 +2779,21 @@ const seqColor = () => (S.library[0] ? S.library[0].tracks[0].color
 async function addShape(kind, bitmap) {
   await playerLib();
   const W = seqW(), H = seqH();
-  const c = ctx2d(W, H, 'shape');
-  if (bitmap) {
-    c.fillStyle = '#fff'; c.fillRect(0, 0, W, H);
-    const k = Math.min(W / bitmap.width, H / bitmap.height) * 0.86;
-    const w = bitmap.width * k, h = bitmap.height * k;
-    c.drawImage(bitmap, (W - w) / 2, (H - h) / 2, w, h);
-  } else if (kind === 'coral') drawCoral(c, W, H);
-  else drawRing(c, W, H);
-  const src = c.getImageData(0, 0, W, H).data;
-  const mask = new Float32Array(W * H).fill(1);
-  const r = dotsOn(src, W, H, [mask], S.P, BLUE);
-  const xy = dotXY(r.F, r.on[0]);
-  if (!xy.length) throw new Error('that shape came out empty');
+  const src = { kind: 'shape', shape: kind, bitmap: bitmap || null };
+  const color = seqColor();
   const item = { id: SEQID++, kind: 'shape', name: kind, w: W, h: H, fps: 30,
-                 tracks: [{ id: 1, color: seqColor(), frames: [xy] }] };
+                 nFrames: 1, tracks: [{ id: 1, color }],
+                 look: lookFromStudio([{ id: 1, color }]), src };
+  const xy = (await deriveFrame(item, item.look, 0))[0];
+  if (!xy || !xy.length) throw new Error('that shape came out empty');
+  seedDerived(item, item.look, [[xy]]);
   S.library.push(item);
   return item;
 }
 
 /* --------------------------------------------------------------- the strip */
 function stripAdd(item, opts) {
-  const n = item.tracks.reduce((a, t) => Math.max(a, t.frames.length), 0);
+  const n = item.nFrames;
   const clip = n > 1;
   const start = clip ? clamp(S.cur || 0, 0, Math.max(0, n - 2)) : 0;
   const inst = Object.assign({
@@ -2481,43 +2801,98 @@ function stripAdd(item, opts) {
     in: clip ? start : 0,
     out: clip ? Math.min(n - 1, start + 44) : 0,
     hold: 30, color: null,
+    look: cloneLook(item.look),
     trans: { kind: 'morph', ms: 900 },
   }, opts || {});
+  if (!inst.look) inst.look = cloneLook(item.look);
   S.strip.push(inst);
   S.sel = { type: 'item', i: S.strip.length - 1 };
   renderSeq();
   return inst;
 }
 
-/** One strip entry as the player wants it: tracks of dot frames, trimmed. */
+/** The frames an entry uses out of its item: [first, last]. */
+function stripRange(inst) {
+  const it = libOf(inst.lib);
+  const n = it ? it.nFrames : 1;
+  if (n <= 1) return [0, 0];
+  const a = clamp(inst.in | 0, 0, n - 1);
+  return [a, clamp(inst.out | 0, a, n - 1)];
+}
+
+/** How long an entry runs — arithmetic, not a count of what has been derived,
+ *  so a trim reads back immediately and a still still holds. */
+const stripLen = (inst) => {
+  const it = libOf(inst.lib);
+  if (!it) return 0;
+  if (it.nFrames > 1) { const [a, b] = stripRange(inst); return b - a + 1; }
+  return Math.max(1, inst.hold | 0);
+};
+
+/** Which subject indices this entry draws. */
+function stripPick(inst, it) {
+  if (inst.subject === 'all') return it.tracks.map((t, k) => k);
+  const k = +inst.subject;
+  return [Number.isFinite(k) && it.tracks[k] ? k : 0];
+}
+
+/** The colour one of an entry's tracks is drawn in: the whole-item override
+ *  first (that is what a palette preset sets), then the item's own per-subject
+ *  colour, then the colour the subject had when it was captured. */
+function trackColor(inst, it, k) {
+  if (inst.color) return inst.color;
+  const id = it.tracks[k].id;
+  return (inst.look.colors || {})[id] || it.tracks[k].color;
+}
+
+/** One strip entry as the player wants it: tracks of dot frames, trimmed.
+ *  Reads the derivation cache — `ensureStrip` fills it — and falls back to an
+ *  empty frame for anything not derived yet, so nothing here can block. */
 function stripTracks(inst) {
   const it = libOf(inst.lib);
   if (!it) return [];
-  const picked = inst.subject === 'all' ? it.tracks
-    : [it.tracks[inst.subject] || it.tracks[0]];
-  return picked.map((t) => {
+  const d = derivedPeek(it, inst.look);
+  const [a, b] = stripRange(inst);
+  return stripPick(inst, it).map((k) => {
     let frames;
-    if (t.frames.length > 1) {
-      const a = clamp(inst.in | 0, 0, t.frames.length - 1);
-      const b = clamp(inst.out | 0, a, t.frames.length - 1);
-      frames = t.frames.slice(a, b + 1);
+    if (it.nFrames > 1) {
+      frames = [];
+      for (let i = a; i <= b; i++) {
+        const f = d && d.frames.get(i);
+        frames.push((f && f[k]) || EMPTY_XY);
+      }
     } else {
-      frames = new Array(Math.max(1, inst.hold | 0)).fill(
-        t.frames[0] || new Uint16Array(0));
+      const f = d && d.frames.get(0);
+      frames = new Array(Math.max(1, inst.hold | 0))
+        .fill((f && f[k]) || EMPTY_XY);
     }
-    return { frames, color: inst.color || t.color };
+    return { frames, color: trackColor(inst, it, k) };
   });
 }
 
-const stripLen = (inst) => {
-  const t = stripTracks(inst);
-  return t.reduce((a, x) => Math.max(a, x.frames.length), 0);
-};
+/** Derive whatever the strip is currently asking for. Every build goes through
+ *  this, which is what keeps the preview, the .dots.gz and the MP4 the same
+ *  picture: they all read the cache this fills. */
+async function ensureStrip(onProgress) {
+  let derived = 0;
+  for (let i = 0; i < S.strip.length; i++) {
+    const inst = S.strip[i];
+    const it = libOf(inst.lib);
+    if (!it) continue;
+    const [a, b] = stripRange(inst);
+    await deriveRange(it, inst.look, a, b, (pr) => {
+      derived = pr.done;
+      if (onProgress) onProgress({ i, name: it.name, done: pr.done, total: pr.total });
+    });
+  }
+  return derived;
+}
 
 function seqItems() {
   return S.strip.map((inst, i) => {
     const it = libOf(inst.lib) || { name: '?' };
     return { name: `${i + 1}. ${it.name}`, tracks: stripTracks(inst),
+             cell: inst.look ? inst.look.cell : 0,
              transition: i > 0 ? inst.trans : null };
   });
 }
@@ -2525,11 +2900,23 @@ function seqItems() {
 async function buildSeq() {
   const P = await playerLib();
   if (!S.strip.length) throw new Error('nothing in the sequence yet');
+  await ensureStrip((pr) => seqInfo(
+    `redrawing ${pr.name} · ${pr.done}/${pr.total} frames`));
   const doc = P.buildSequence(seqItems(), Object.assign({
     w: seqW(), h: seqH(), color: seqColor(), durationMs: 900,
   }, seqLook()));
   S.seqDoc = doc;
   return doc;
+}
+
+/* An item's look changed: re-derive just that item and play the strip again.
+ * Debounced, because these come off sliders. */
+let SEQ_PENDING = null;
+function seqTouch(quick) {
+  renderStrip();
+  clearTimeout(SEQ_PENDING);
+  SEQ_PENDING = setTimeout(() => { seqPreviewSafe(); },
+                           quick ? 0 : 220);
 }
 
 /* ------------------------------------------------------------ the view */
@@ -2565,9 +2952,15 @@ function paintToSeq() {
   $('#viewbar').dataset.pending = S.returnToSeq ? '1' : '0';
 }
 
-/** What the current source could contribute right now, as add buttons. */
+/** What the current source could contribute right now, as add buttons.
+ *
+ *  A still that has been segmented offers its subjects ONE AT A TIME as well as
+ *  together and as the whole frame — a photograph with two people in it is
+ *  usually two items, not one — and the cut-out entries come first because that
+ *  is what someone who bothered to click on something wants. */
 function seqCandidates() {
   const out = [];
+  const name = S.fileName || 'this picture';
   if (S.kind === 'video' && dotsReady()) {
     out.push({ id: 'clip', label: 'this clip · '
       + S.subjects.length + ' subject' + (S.subjects.length > 1 ? 's' : ''),
@@ -2575,9 +2968,22 @@ function seqCandidates() {
         + ', at the current look' });
   }
   if (S.kind === 'image') {
-    out.push({ id: 'still', label: 'this still',
-      note: (usingSubjects() ? 'the subjects cut out of ' : 'the whole of ')
-        + (S.fileName || 'this picture') + ', as dots' });
+    const cut = usingSubjects();
+    if (cut) {
+      S.subjects.forEach((sub, k) => out.push({
+        id: 'still', arg: { subject: k },
+        label: `this still · #${sub.id}`,
+        note: `subject #${sub.id}, cut out of ${name}, as dots`,
+      }));
+      if (S.subjects.length > 1) {
+        out.push({ id: 'still', arg: { subject: 'all' },
+          label: `this still · all ${S.subjects.length}`,
+          note: `every subject cut out of ${name}, as one item` });
+      }
+    }
+    out.push({ id: 'still', arg: { whole: true },
+      label: cut ? 'this still · whole picture' : 'this still',
+      note: 'the whole frame of ' + name + ', as dots' });
   }
   return out;
 }
@@ -2586,20 +2992,22 @@ async function seqAdd(what, arg) {
   const t0 = performance.now();
   busy(true);
   try {
-    let item;
+    let item, opts = null;
     if (what === 'clip') item = await captureClip();
-    else if (what === 'still') item = await captureStill();
-    else if (what === 'shape') item = await addShape(arg);
+    else if (what === 'still') {
+      item = await captureStill(arg);
+      if (arg && arg.subject !== undefined) opts = { subject: arg.subject };
+    } else if (what === 'shape') item = await addShape(arg);
     else if (what === 'image') item = await addShape(arg.name, arg.bitmap);
     else if (what === 'lib') item = libOf(arg);
     if (!item) throw new Error('nothing to add');
-    stripAdd(item);
+    stripAdd(item, opts);
     setView('sequence', { skipPreview: true });
     await seqPreviewSafe();
     seqInfo(`added ${item.name} · ${item.tracks.length} track`
       + `${item.tracks.length > 1 ? 's' : ''} · `
-      + `${item.tracks[0].frames.length} frame`
-      + `${item.tracks[0].frames.length > 1 ? 's' : ''} · `
+      + `${item.nFrames} frame`
+      + `${item.nFrames > 1 ? 's' : ''} · `
       + `${((performance.now() - t0) / 1000).toFixed(1)} s`);
     S.returnToSeq = false;
   } catch (err) {
@@ -2625,11 +3033,31 @@ function renderAdd() {
     wrap.append(b);
     return b;
   };
-  seqCandidates().forEach((c) => mk('+ ' + c.label, c.note, () => seqAdd(c.id)));
+  seqCandidates().forEach((c) => mk('+ ' + c.label, c.note,
+                                    () => seqAdd(c.id, c.arg)));
   mk('+ ring', 'a dithered ring', () => seqAdd('shape', 'ring'));
   mk('+ coral', 'a dithered branching form', () => seqAdd('shape', 'coral'));
-  mk('+ image…', 'a picture, rasterised through the same dots pipeline',
+  mk('+ image…', 'a picture — whole, or with a subject clicked out of it',
      () => $('#shapeFile').click());
+  /* A picture waiting to be told what it is: the whole frame, or one thing
+   * clicked out of it. The second answer is the studio's still-subject step,
+   * because that is where the live segmentation lives — the sequence sends the
+   * picture there and the header carries it back. */
+  if (S.pendingImage) {
+    const lbl = document.createElement('span');
+    lbl.className = 'seqsep';
+    lbl.textContent = `${S.pendingImage.name} — add it as`;
+    wrap.append(lbl);
+    mk('whole image', 'rasterised through the same dots pipeline', () => {
+      const p = S.pendingImage; S.pendingImage = null;
+      seqAdd('image', { name: p.name, bitmap: p.bitmap });
+    }).classList.add('go');
+    mk('select a subject…', 'open it in the studio and click the thing you '
+       + 'want cut out', imageToStudio);
+    mk('cancel', '', () => {
+      S.pendingImage = null; renderAdd(); $('#seqinfo').hidden = true;
+    });
+  }
   if (S.library.length) {
     const lbl = document.createElement('span');
     lbl.className = 'seqsep';
@@ -2637,7 +3065,7 @@ function renderAdd() {
     wrap.append(lbl);
     S.library.forEach((it, i) => mk(`${i + 1}. ${it.name}`,
       `${it.kind} · ${it.tracks.length} track(s) · `
-        + `${it.tracks[0].frames.length} frame(s)`,
+        + `${it.nFrames} frame(s)`,
       () => seqAdd('lib', it.id)));
   }
   $('#seqsrc').textContent = S.library.length
@@ -2647,13 +3075,24 @@ function renderAdd() {
       + 'picture and come back.';
 }
 
+/* =========================================================== the inspector ===
+ * Clicking a card in the strip opens THAT ITEM's look — the whole of it, the
+ * same controls the studio has, scoped to one item. Mode, per-subject colour,
+ * the dot sliders, the mask polish, the trim. Changing any of them re-derives
+ * that item's dots and nothing else's.
+ *
+ * What is deliberately NOT here: the background, the canvas size and the dot
+ * size. Those are the sequence's, not the item's — one .dots.gz has one
+ * background and one dot square, and the rail says so in as many words.
+ */
 function renderInspector() {
   const box = $('#seqinspect');
   box.textContent = '';
   const sel = S.sel;
-  const note = (t) => {
+  const note = (t, cls) => {
     const d = document.createElement('div');
-    d.className = 'note'; d.textContent = t; box.append(d); return d;
+    d.className = 'note' + (cls ? ' ' + cls : ''); d.textContent = t;
+    box.append(d); return d;
   };
   if (!sel || !S.strip.length) {
     note('Click an item or a join in the strip below the stage.');
@@ -2668,33 +3107,39 @@ function renderInspector() {
     d.append(a, b); box.append(d);
     return b;
   };
-  const slider = (min, max, val, fmt, onIn) => {
+  const slider = (min, max, step, val, onIn) => {
     const i = document.createElement('input');
-    i.type = 'range'; i.min = String(min); i.max = String(max); i.step = '1';
-    i.value = String(val);
+    i.type = 'range'; i.min = String(min); i.max = String(max);
+    i.step = String(step); i.value = String(val);
     i.addEventListener('input', () => onIn(+i.value));
     box.append(i);
     return i;
+  };
+  const chipRow = (seg) => {
+    const d = document.createElement('div');
+    d.className = 'chips' + (seg ? ' seg' : '');
+    box.append(d); return d;
+  };
+  const chip = (row, label, on, title, fn) => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = label; b.title = title || '';
+    b.setAttribute('aria-pressed', String(!!on));
+    b.addEventListener('click', fn);
+    row.append(b);
+    return b;
   };
 
   if (sel.type === 'join') {
     const inst = S.strip[sel.i];
     $('#sq2sum').textContent = 'join ' + sel.i;
     lbl('Transition', inst.trans.kind);
-    const chips = document.createElement('div');
-    chips.className = 'chips seg';
+    const chips = chipRow(true);
     (DP ? DP.TRANSITIONS : KINDS.map((id) => ({ id, name: id })))
       .forEach((t) => {
-        const b = document.createElement('button');
-        b.className = 'chip'; b.textContent = t.name; b.title = t.note || '';
+        const b = chip(chips, t.name, inst.trans.kind === t.id, t.note || '',
+                       () => { inst.trans.kind = t.id; renderSeq(); seqPreviewSafe(); });
         b.dataset.kind = t.id;
-        b.setAttribute('aria-pressed', String(inst.trans.kind === t.id));
-        b.addEventListener('click', () => {
-          inst.trans.kind = t.id; renderSeq(); seqPreviewSafe();
-        });
-        chips.append(b);
       });
-    box.append(chips);
     const tn = document.createElement('div');
     tn.className = 'note';
     tn.textContent = ((DP && DP.TRANSITIONS.find((x) => x.id === inst.trans.kind))
@@ -2702,7 +3147,7 @@ function renderInspector() {
     box.append(tn);
     if (inst.trans.kind !== 'cut') {
       const out = lbl('Length', inst.trans.ms + ' ms');
-      slider(100, 2500, inst.trans.ms, null, (v) => {
+      slider(100, 2500, 1, inst.trans.ms, (v) => {
         inst.trans.ms = Math.round(v / 50) * 50;
         out.textContent = inst.trans.ms + ' ms';
         renderStrip();
@@ -2714,17 +3159,33 @@ function renderInspector() {
   const inst = S.strip[sel.i];
   const it = libOf(inst.lib);
   if (!it) { note('that item is gone'); return; }
+  const look = inst.look;
   $('#sq2sum').textContent = `${sel.i + 1}. ${it.name}`;
+
+  /* Any change to the look: keep it, re-derive this item, play again. `redraw`
+   * says whether the panel itself has to be rebuilt (a chip changed what the
+   * other controls are) or whether a slider is mid-drag and must not lose the
+   * pointer. */
+  const setLook = (patch, redraw) => {
+    Object.assign(look, patch);
+    if (redraw) renderSeq();
+    seqTouch();
+  };
+
+  note('The look is per item. Background, dot size and canvas belong to the '
+       + 'whole sequence — they are in Look, below.', 'small');
   lbl(it.kind === 'clip' ? 'Clip' : it.kind === 'still' ? 'Still' : 'Shape',
-      `${it.w}×${it.h}`);
+      `${it.w}×${it.h} · ${it.nFrames}f`);
+
+  /* ---------------------------------------------------------- subject */
   if (it.tracks.length > 1) {
-    lbl('Subject', inst.subject === 'all' ? 'all' : '#' + it.tracks[inst.subject].id);
-    const chips = document.createElement('div');
-    chips.className = 'chips seg';
+    lbl('Subject', inst.subject === 'all' ? 'all'
+      : '#' + (it.tracks[inst.subject] || it.tracks[0]).id);
+    const chips = chipRow(true);
     const mk = (v, label, col) => {
       const b = document.createElement('button');
-      b.className = 'chip'; b.setAttribute('aria-pressed',
-                                           String(String(inst.subject) === String(v)));
+      b.className = 'chip';
+      b.setAttribute('aria-pressed', String(String(inst.subject) === String(v)));
       if (col) {
         const sw = document.createElement('span');
         sw.className = 'sw'; sw.style.background = col;
@@ -2732,54 +3193,212 @@ function renderInspector() {
       }
       const t = document.createElement('span'); t.textContent = label;
       b.append(t);
-      b.addEventListener('click', () => { inst.subject = v; renderSeq(); });
+      b.addEventListener('click', () => { inst.subject = v; renderSeq(); seqTouch(); });
       chips.append(b);
     };
     mk('all', 'all');
-    it.tracks.forEach((t, k) => mk(k, '#' + t.id, t.color));
-    box.append(chips);
+    it.tracks.forEach((t, k) => mk(k, '#' + t.id, trackColor(inst, it, k)));
   }
-  const n = it.tracks.reduce((a, t) => Math.max(a, t.frames.length), 0);
-  if (n > 1) {
-    const io = lbl('In / out', `${inst.in} – ${inst.out} · ${stripLen(inst)}f`);
-    slider(0, n - 1, inst.in, null, (v) => {
-      inst.in = Math.min(v, inst.out);
-      io.textContent = `${inst.in} – ${inst.out} · ${stripLen(inst)}f`;
-      renderStrip();
+
+  /* ------------------------------------------------------------- mode */
+  const modes = (S.meta && S.meta.modes) || [{ id: 'dots', name: 'Dots' }];
+  const cur = modes.find((m) => m.id === look.mode) || modes[0];
+  lbl('Mode', cur.name);
+  const mrow = chipRow(true);
+  modes.forEach((m) => {
+    const flick = it.nFrames > 1 && S.meta && S.meta.stable
+      && S.meta.stable[m.id] === false;
+    const b = chip(mrow, m.name, look.mode === m.id,
+                   (m.note || '') + (m.id === 'dots' ? ''
+                     : ' — run on the dot grid, one pixel per cell'),
+                   () => setLook(modeSwitch(look, m.id), true));
+    b.dataset.mode = m.id;
+    if (flick) b.classList.add('warn');
+  });
+  note(cur.id === 'dots'
+    ? (cur.note || '') + ' — the density knobs below are its own'
+    : (cur.note || '') + ': the cell tones go through the same dither the '
+      + 'studio uses, so the lit cells become the dots. At cell 1 that is a '
+      + 'true pixel dither — tens of thousands of dots a frame — and a '
+      + 'transition thins it to ' + (DP ? DP.PARTICLE_CAP : 8000).toLocaleString()
+      + ' particles for the flight, handing the rest back on arrival.');
+
+  if (look.mode === 'errordiff') {
+    lbl('Kernel', '');
+    const sel2 = document.createElement('select');
+    ((S.meta && S.meta.kernels) || [{ id: 'floyd-steinberg', name: 'Floyd–Steinberg' }])
+      .forEach((a) => {
+        const o = document.createElement('option');
+        o.value = a.id; o.textContent = a.name;
+        sel2.append(o);
+      });
+    sel2.value = look.algo;
+    sel2.addEventListener('change', () => setLook({ algo: sel2.value }));
+    box.append(sel2);
+    const r = chipRow();
+    chip(r, 'serpentine', look.serpentine,
+         'alternate the scan direction each row',
+         () => setLook({ serpentine: !look.serpentine }, true));
+  }
+  if (look.mode === 'ordered' || look.mode === 'halftone') {
+    const mo = lbl('Matrix', look.matrix + '×' + look.matrix);
+    const r = chipRow(true);
+    [2, 4, 8, 16].forEach((n) => chip(r, n + '×' + n, look.matrix === n, '',
+                                      () => setLook({ matrix: n }, true)));
+    mo.textContent = look.matrix + '×' + look.matrix;
+  }
+
+  /* ------------------------------------------------------- dot sliders */
+  const cellOut = lbl('Cell', look.cell + ' px');
+  slider(LOOK_RANGE.cell[0], LOOK_RANGE.cell[1], 1, look.cell, (v) => {
+    look.cell = v; cellOut.textContent = v + ' px'; seqTouch();
+  });
+  if (look.mode === 'dots') {
+    const nOut = lbl('Count', look.n.toLocaleString());
+    slider(LOOK_RANGE.n[0], LOOK_RANGE.n[1], 100, look.n, (v) => {
+      look.n = v; nOut.textContent = v.toLocaleString(); seqTouch();
     });
-    slider(0, n - 1, inst.out, null, (v) => {
-      inst.out = Math.max(v, inst.in);
-      io.textContent = `${inst.in} – ${inst.out} · ${stripLen(inst)}f`;
-      renderStrip();
+    const fOut = lbl('Fill', look.fill.toFixed(2));
+    slider(5, 100, 1, Math.round(look.fill * 100), (v) => {
+      look.fill = v / 100; fOut.textContent = look.fill.toFixed(2); seqTouch();
+    });
+    const sOut = lbl('Stray', look.stray.toFixed(3));
+    slider(0, 300, 1, Math.round(look.stray * 1000), (v) => {
+      look.stray = v / 1000; sOut.textContent = look.stray.toFixed(3); seqTouch();
+    });
+    const bOut = lbl('Halo', look.band + ' cells');
+    slider(LOOK_RANGE.band[0], LOOK_RANGE.band[1], 1, look.band, (v) => {
+      look.band = v; bOut.textContent = v + ' cells'; seqTouch();
+    });
+  }
+  const gOut = lbl('Gamma', look.gamma.toFixed(2));
+  slider(20, 300, 1, Math.round(look.gamma * 100), (v) => {
+    look.gamma = v / 100; gOut.textContent = look.gamma.toFixed(2); seqTouch();
+  });
+  const irow = chipRow();
+  chip(irow, 'invert', look.invert, 'dots on the light half instead of the dark',
+       () => setLook({ invert: !look.invert }, true));
+  chip(irow, 'reseed', false, 'a different blue-noise offset for this item',
+       () => setLook({ seed: 1 + Math.floor(Math.random() * 100000) }, true));
+
+  /* ---------------------------------------------------------- colours */
+  lbl('Colour', inst.color ? 'one for the item' : 'per subject');
+  const cw = document.createElement('div');
+  cw.className = 'chips';
+  it.tracks.forEach((t, k) => {
+    const lab = document.createElement('label');
+    lab.className = 'chip sw1';
+    const col = document.createElement('input');
+    col.type = 'color';
+    col.value = trackColor(inst, it, k);
+    col.dataset.sub = String(t.id);
+    col.addEventListener('input', () => {
+      inst.color = null;
+      look.colors = Object.assign({}, look.colors, { [t.id]: col.value });
+      renderSeq();
+    });
+    lab.append(col);
+    if (it.tracks.length > 1) {
+      const n = document.createElement('span');
+      n.textContent = '#' + t.id;
+      lab.append(n);
+    }
+    cw.append(lab);
+  });
+  const reset = document.createElement('button');
+  reset.className = 'chip'; reset.textContent = 'as captured';
+  reset.setAttribute('aria-pressed', String(!inst.color && !Object.keys(look.colors || {}).length));
+  reset.addEventListener('click', () => {
+    inst.color = null; look.colors = {}; renderSeq();
+  });
+  cw.append(reset);
+  box.append(cw);
+  if (S.meta && S.meta.palettes) {
+    const pw = document.createElement('div');
+    pw.className = 'chips';
+    S.meta.palettes.forEach((pal) => {
+      const b = document.createElement('button');
+      b.className = 'chip pal';
+      const pv = document.createElement('span'); pv.className = 'pv';
+      pal.colors.slice(0, 5).forEach((c) => {
+        const sp = document.createElement('b'); sp.style.background = c; pv.append(sp);
+      });
+      const nm = document.createElement('span'); nm.textContent = pal.name;
+      b.append(pv, nm);
+      b.title = 'this item’s subjects take this palette’s colours in order';
+      b.addEventListener('click', () => {
+        const cols = pal.colors.length > 1 ? pal.colors.slice(1) : pal.colors;
+        inst.color = null;
+        look.colors = {};
+        it.tracks.forEach((t, k) => { look.colors[t.id] = cols[k % cols.length]; });
+        renderSeq();
+      });
+      pw.append(b);
+    });
+    box.append(pw);
+  }
+
+  /* ----------------------------------------------------------- polish */
+  if (it.kind === 'clip') {
+    const lit = it.tracks.filter((t) => ((look.polish || {})[t.id] | 0) > 0);
+    lbl('Mask polish', lit.length ? `${lit.length}/${it.tracks.length} on` : 'off');
+    it.tracks.forEach((t) => {
+      const v = (look.polish || {})[t.id] | 0;
+      const on = v > 0;
+      const row = document.createElement('div');
+      row.className = 'mini';
+      const b = document.createElement('button');
+      b.className = 'chip pol';
+      b.setAttribute('aria-pressed', String(on));
+      b.dataset.sub = String(t.id);
+      const sw = document.createElement('span');
+      sw.className = 'sw'; sw.style.background = t.color;
+      const nm = document.createElement('span'); nm.textContent = '#' + t.id;
+      b.append(sw, nm);
+      const sl = document.createElement('input');
+      sl.type = 'range'; sl.min = '10'; sl.max = '100'; sl.step = '5';
+      sl.value = String(on ? v : 70);
+      sl.disabled = !on;
+      const out = document.createElement('b');
+      out.textContent = on ? String(v) : 'off';
+      const put = (x, redraw) => {
+        const pol = Object.assign({}, look.polish);
+        if (x > 0) pol[t.id] = x; else delete pol[t.id];
+        setLook({ polish: pol }, redraw);
+      };
+      b.addEventListener('click', () => put(on ? 0 : (+sl.value || 70), true));
+      sl.addEventListener('input', () => { out.textContent = sl.value; put(+sl.value); });
+      row.append(b, sl, out);
+      box.append(row);
+    });
+    note('Polish steadies this item’s masks before the dots are measured — '
+         + 'the first pass costs a moment a frame.', 'small');
+  }
+
+  /* ------------------------------------------------------ trim / hold */
+  if (it.nFrames > 1) {
+    const io = lbl('In / out', `${inst.in} – ${inst.out} · ${stripLen(inst)}f`);
+    const say = () => { io.textContent = `${inst.in} – ${inst.out} · ${stripLen(inst)}f`; };
+    slider(0, it.nFrames - 1, 1, inst.in, (v) => {
+      inst.in = Math.min(v, inst.out); say(); seqTouch();
+    });
+    slider(0, it.nFrames - 1, 1, inst.out, (v) => {
+      inst.out = Math.max(v, inst.in); say(); seqTouch();
     });
   } else {
     const ho = lbl('Hold', inst.hold + ' frames');
-    slider(1, 150, inst.hold, null, (v) => {
-      inst.hold = v; ho.textContent = v + ' frames'; renderStrip();
+    slider(1, 150, 1, inst.hold, (v) => {
+      inst.hold = v; ho.textContent = v + ' frames'; seqTouch();
     });
   }
-  lbl('Colour', inst.color ? 'this item' : 'as captured');
-  const cw = document.createElement('div');
-  cw.className = 'chips';
-  const lab = document.createElement('label');
-  lab.className = 'chip sw1';
-  const col = document.createElement('input');
-  col.type = 'color';
-  col.value = inst.color || it.tracks[0].color;
-  col.addEventListener('input', () => { inst.color = col.value; renderSeq(); });
-  lab.append(col);
-  const reset = document.createElement('button');
-  reset.className = 'chip'; reset.textContent = 'as captured';
-  reset.setAttribute('aria-pressed', String(!inst.color));
-  reset.addEventListener('click', () => { inst.color = null; renderSeq(); });
-  cw.append(lab, reset);
-  box.append(cw);
+
   const row = document.createElement('div');
   row.className = 'row';
   const rm = document.createElement('button');
   rm.className = 'btn'; rm.textContent = 'remove from the strip';
   rm.addEventListener('click', () => {
     S.strip.splice(sel.i, 1); S.sel = null; renderSeq();
+    if (S.strip.length) seqPreviewSafe(); else if (PLAYER) PLAYER.pause();
   });
   row.append(rm);
   box.append(row);
@@ -2918,6 +3537,7 @@ async function seqPreview() {
     PLAYER.setDoc(doc);
     PLAYER.play();
     $('#bSeqPlay').textContent = 'pause';
+    renderStrip();          // the cards read the same cache the build just filled
     const joins = doc.marks.filter((m) => m.kind !== 'item');
     seqInfo(`${doc.frames.length} frames · ${doc.fps} fps · `
       + `${(doc.frames.length / doc.fps).toFixed(1)} s · `
@@ -3051,7 +3671,7 @@ $$('#viewbar .chip[data-view]').forEach((b) => b.addEventListener('click', () =>
 }));
 $('#bToSeq').addEventListener('click', () => {
   const can = seqCandidates();
-  if (can.length) seqAdd(can[0].id);
+  if (can.length) seqAdd(can[0].id, can[0].arg);
 });
 $('#bSeqNew').addEventListener('click', () => {
   S.returnToSeq = true;
@@ -3063,11 +3683,33 @@ $('#shapeFile').addEventListener('change', async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   try {
-    await seqAdd('image', { name: f.name.replace(/\.[^.]+$/, ''),
-                            bitmap: await createImageBitmap(f) });
+    S.pendingImage = { file: f, name: f.name.replace(/\.[^.]+$/, ''),
+                       bitmap: await createImageBitmap(f) };
+    renderAdd();
+    seqInfo('whole picture, or click a subject out of it?');
   } catch (err) { toast('could not read that image: ' + err.message, true); }
   e.target.value = '';
 });
+
+/** The other answer: send the picture to the studio's still-subject step and
+ *  let the header bring the cutout back. One segmentation flow, not two. */
+async function imageToStudio() {
+  const p = S.pendingImage;
+  if (!p) return;
+  S.pendingImage = null;
+  S.returnToSeq = true;
+  setView('studio');
+  busy(true);
+  try {
+    await take(p.file);
+    openStep(2);
+    if (S.scope !== 'track') setScope('track');
+    toast('click what you want cut out — then "→ add to the sequence"');
+  } catch (err) {
+    toast('could not open that image: ' + why(err), true);
+  }
+  busy(false);
+}
 $('#bSeqClear').addEventListener('click', () => {
   S.strip = []; S.sel = null; S.seqDoc = null;
   if (PLAYER) PLAYER.pause();
@@ -3307,7 +3949,8 @@ async function checkModels() {
     mask: async (id, frame) => {
       const k = S.subjects.findIndex((x) => String(x.id) === String(id));
       checkPolishKey();
-      const m = await polishedMask(k, frame);
+      const m = await polishedMask(PM, S.subjects[k].id, frame,
+                                   S.subjects[k].polish | 0, 'pf' + k);
       const u8 = new Uint8Array(m.length);
       for (let q = 0; q < m.length; q++) u8[q] = Math.round(m[q] * 255);
       return Array.from(u8);
@@ -3334,18 +3977,46 @@ async function checkModels() {
     view: (v) => { setView(v); return S.view; },
     add: (what, arg) => seqAdd(what, arg),
     library: () => S.library.map((x) => ({ id: x.id, name: x.name, kind: x.kind,
-                                           w: x.w, h: x.h,
+                                           w: x.w, h: x.h, nFrames: x.nFrames,
+                                           look: x.look,
                                            tracks: x.tracks.map((t) => ({
                                              id: t.id, color: t.color,
-                                             frames: t.frames.length })) })),
+                                             frames: x.nFrames })) })),
     strip: () => S.strip.map((x, i) => {
       const it = libOf(x.lib) || {};
       return { i, lib: x.lib, name: it.name, kind: it.kind, subject: x.subject,
                in: x.in, out: x.out, hold: x.hold, color: x.color,
+               look: cloneLook(x.look),
+               colors: it.tracks ? it.tracks.map((t, k) => trackColor(x, it, k)) : [],
                frames: stripLen(x), trans: i > 0 ? x.trans : null };
     }),
     set: (i, opts) => { Object.assign(S.strip[i], opts); renderSeq();
                         return S.strip[i]; },
+    /* one item's own look — the inspector's controls, callable */
+    itemLook: (i) => cloneLook(S.strip[i].look),
+    setLook: async (i, patch) => {
+      const look = S.strip[i].look, p = patch || {};
+      // same coupling the mode chips have: picking a mode picks the cell that
+      // suits it, unless the caller says otherwise in the same breath
+      Object.assign(look,
+        (p.mode && p.cell === undefined) ? modeSwitch(look, p.mode) : {}, p);
+      renderSeq();
+      const doc = await buildSeq();
+      renderStrip();
+      return { look: cloneLook(S.strip[i].look), frames: doc.frames.length };
+    },
+    /* the dots one item is actually made of right now, frame by frame: the
+     * cache the preview and both exports all read */
+    itemDots: (i) => {
+      const inst = S.strip[i];
+      return stripTracks(inst).map((t) => t.frames.map((f) => Array.from(f)));
+    },
+    modes: () => (S.meta && S.meta.modes) || [],
+    /* what "+ image…" is waiting to be told, and the two answers */
+    pending: () => (S.pendingImage ? S.pendingImage.name : null),
+    candidates: () => seqCandidates().map((c) => ({ id: c.id, arg: c.arg || null,
+                                                    label: c.label })),
+    cap: () => (DP ? DP.PARTICLE_CAP : null),
     trans: (i, kind, ms) => {
       const inst = S.strip[i];
       if (!inst || !i) throw new Error('no join before item ' + i);

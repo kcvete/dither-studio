@@ -279,5 +279,22 @@ export class RemoteEngine {
              bytes: r.bytes, frames: r.frames, elapsedS: r.elapsed_s };
   }
 
+  /** A detached handle on the job that is open RIGHT NOW. The server keeps
+   *  its frames and masks on disk under the job id, so this is just the two
+   *  routes with the id already bound — which is what lets a sequence item
+   *  redraw its dots at a new look after the studio has moved on. */
+  snapshot() {
+    const c = this.clip;
+    if (!c) return null;
+    const job = c.job;
+    const at = (p) => `/api/jobs/${job}${p}`;
+    return {
+      id: 'remote', job, w: c.w, h: c.h, nFrames: c.nFrames, fps: c.fps,
+      frame: async (i) => createImageBitmap(await this.blob(at(`/frame/${i}`))),
+      mask: async (objId, i) =>
+        createImageBitmap(await this.blob(at(`/mask/${objId}/${i}`))),
+    };
+  }
+
   dispose() { this.clip = null; }
 }

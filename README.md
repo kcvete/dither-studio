@@ -498,17 +498,139 @@ change it in the panel.
   with a full-frame mask). A ring is dithered, not plotted;
 * **everything captured this session**, so an item can go in twice.
 
+A picture is asked **what it is** before it goes in. **+ image…** offers *whole
+image* or *select a subject…*; the second sends it to the studio's subject step —
+the live click / box / lasso segmentation, the one that already exists, not a
+second copy of it — and the header carries the cutout back. A picture that has
+already been segmented in the studio offers **each of its subjects on its own**,
+all of them together, and the whole frame, as separate entries; adding two
+subjects of the same photograph reuses one library entry rather than dithering it
+twice. A camera photo goes the same way: record it, click what you meant, bring
+it back.
+
+![the sequence asking a picture what it is](docs/seq-image-subject-ask.png)
+
 **upload or record something new…** goes back to the studio to bring a source
 in; the header then carries a **→ add to the sequence** button back.
 
-Per item: which **subject** (one, or all of them), **in/out** for a clip, **hold**
-for a still or a shape, and a **colour** — its captured subject colour unless you
-override it.
+### An item's look is its own
+Click a card and the panel is the **studio's Look step, scoped to that item**:
 
-An item is a snapshot of dot positions taken at the look that was on when it was
-captured — dot count, cell, tone, and the [mask polish](#mask-polish) if the
-subject had it. Changing the look in the studio afterwards does not reach back
-into it; add the clip again for that.
+* **mode** — Dots, and every other dither mode, [run on the dot grid](#the-modes-on-the-dot-grid);
+* **cell**, and for Dots also **count**, **fill**, **stray** and **halo**;
+* **gamma**, **invert**, **reseed**;
+* a **colour per subject**, or a palette preset applied to this item alone;
+* **mask polish**, per subject, at any strength — for a clip item;
+* which **subject** (one, or all of them), **in/out** for a clip, **hold** for a
+  still or a shape.
+
+Change any of them and only that item's dots move. An item is a **live
+reference**, not a picture: it keeps its source — the job's frames and masks for
+a clip, the photograph and its masks for a still, the recipe for a shape — and
+its own copy of the whole look, and the dots are worked out from the two on
+demand. Two cards made from the same capture start identical and diverge freely.
+
+That is affordable because of a cache, one slot per (item, look), holding the
+frames that have actually been asked for. Capture seeds the slot for the look
+the item was captured at with the exact positions the studio produced, so **an
+item nobody has touched is byte for byte what it always was** and costs nothing
+to draw; put a look back and the original comes back out of the cache. Only the
+frames inside the trim are ever derived, so moving in/out is cheap.
+
+The item starts on **Dots** whatever the studio is showing, because a dot cloud
+is what the studio has always handed the sequence — adding an item still changes
+nothing on screen. Its dot count, cell, tone, subject colours and
+[mask polish](#mask-polish) come across from the studio as they stand.
+
+![the selected item's own look](docs/seq-item-look-panel.png)
+
+![item 2 on blue noise, a coarser cell and a white palette; items 1 and 3 untouched](docs/seq-item-look-preview.png)
+
+Three cards off one capture and a ring. The middle one is on blue noise at cell
+6, gamma 1.4, its own palette and the mask polish; the other two have not moved
+a dot — the verification run hashes all three before and after and they come
+back identical.
+
+**The look is per item; the background is per sequence.** Background, dot size
+and frame size are one set for the whole strip, in **Canvas**, because a
+`.dots.gz` holds exactly one of each — the format's whole point is that colour
+and dot size are *not* baked into the positions, so a per-item dot size could
+not survive an export.
+
+#### The modes, on the dot grid
+A sequence is dot positions and nothing else, so the only question a look has to
+answer is *which cells are lit*, and every mode can answer it.
+
+**Dots** answers the way the studio's dots look does: blue noise, a target
+count, a fill ratio, stray dots in a halo around the subject. **Every other
+mode** takes the same per-cell tone field, treats it as a `gw × gh` greyscale
+image — one pixel per cell — and runs it through `web/dither.js` exactly as a
+picture, black on white, with the subject's coverage as the gate. A cell is lit
+where that comes back black.
+
+So Bayer, halftone, blue noise, white noise, error diffusion and Riemersma all
+produce clouds on the same grid; they just disagree about which dots survive.
+**Nothing is greyed out** — error diffusion and Riemersma flicker frame to frame
+on a clip exactly as they do in the studio, and the chips say so, but they
+morph. `count`, `fill`, `stray` and `halo` belong to the dots renderer alone, so
+the panel hides them for the other modes rather than pretending they do
+something.
+
+**Choosing a pixel mode drops the item to cell 1**, and choosing Dots again puts
+the cell back. That is the point of them: Bayer at cell 4 is a chunky screen,
+Bayer at cell 1 is Bayer — one dot per lit pixel, a picture rather than a swarm.
+The cell slider is still there if you want the screen.
+
+Measured on one 30-frame item, the parkour subject, each mode at the cell it
+picks for itself — which is the whole difference between a swarm and a picture:
+
+| mode | cell | dots/frame |
+|---|---|---|
+| Dots | 4 | **775** |
+| White noise | 1 | 10,658 |
+| Error diffusion | 1 | 10,668 |
+| Bayer | 1 | 10,669 |
+| Halftone | 1 | 10,671 |
+| Blue noise | 1 | 10,710 |
+| Riemersma | 1 | 12,281 |
+
+At a common cell 4 they land within 10 % of each other (700–775): the modes
+disagree about *which* cells survive, not how many.
+
+#### Particles, for the flight
+A cell-1 pixel mode is hundreds of thousands of dots a frame — the verification
+run measures **484,508** for a Bayer dither of a whole 1280×720 photograph. That
+cannot fly dot for dot, and should not: a morph is a swarm crossing the frame,
+not a photograph teleporting.
+
+So a **join thins whichever side is over a cap** — 8,000 particles, the same
+number the Dots look targets — and flies the survivors. The dots the thinning
+left behind do not fly: the outgoing item's are **shed in place over the first
+fifth** of the flight and the incoming item's **spawn in place over the last
+fifth**. The frame a transition starts on is therefore the outgoing item at full
+density and the frame it ends on is the incoming one, with the loosening only in
+between — which is the effect, not a compromise.
+
+![a Bayer dither of a photograph loosening into particles and reassembling as a tracked subject](docs/seq-particle-morph.png)
+
+Measured on that join (Bayer whole picture → parkour subject on Dots, 900 ms):
+
+| | dots |
+|---|---|
+| the Bayer item, a frame | 484,508 |
+| the transition's first frame | 484,505 — the item, three dots short of it |
+| mid-flight | **3,773** |
+| the transition's last frame | 711 — exactly the subject's first frame |
+| thinned out of the flight | 477,304 |
+
+The thinning is **density-weighted, not uniform**: the frame is bucketed into a
+coarse grid, every occupied bucket keeps at least one dot, and the rest of the
+budget is shared out in proportion to how many dots a bucket holds — a thin limb
+or an outline survives that, and taking every Nth dot in scan order does not.
+The seed comes from the join, so a sequence always flies the same particles, and
+the `.dots.gz` and the MP4 contain what the preview showed. `thinCloud` and
+`PARTICLE_CAP` are exported from the player module; `buildSequence` takes
+`cap: 0` to switch it off.
 
 ### Transitions
 Four kinds, per join, with a length in milliseconds (900 by default). Click the
@@ -878,7 +1000,16 @@ view**: four items added through the UI the way a person would — a subject
 tracked in one clip, a subject tracked in a second clip, a subject cut out of a
 photograph, and a ring — trimmed, coloured, joined by a morph, a scatter and a
 density fade, reordered by dragging, previewed, exported as `.dots.gz` and
-rendered to MP4 by the server. It also starts a second server with `DV_API_KEY` set and checks
+rendered to MP4 by the server. A second sequence run then proves the item look
+is **per item**: three cards, the middle one taken through every mode, given a
+palette, a coarser cell, a stronger gamma and the mask polish, while items 1 and
+3 hash identically before and after — in the strip, in the built document, and
+in the `.dots.gz` the server rasterises. A third proves the two things that only
+matter together: a **cell-1 Bayer** dither of a photograph (484,508 dots a frame)
+morphing into a tracked subject drawn with Dots, with the flight capped at 3,773
+mid-air and both ends at full density; and a picture brought in from the sequence
+being asked what it is — *whole image* or *select a subject…* — and coming back a
+cutout. It also starts a second server with `DV_API_KEY` set and checks
 401 / 401 / 200. It picks a browser rather than assuming one: headless Chromium
 with the WebGPU flags, then `channel:'chrome'`, then the WASM backend over a
 shorter clip with the report saying so.
@@ -908,7 +1039,9 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
 | engine parity, polish | **27/27 float-identical** (3 strengths × 9 frames); crop shortcut vs whole frame, max difference **0** |
 | `verify.mjs` | 11 flows, **0 console errors** |
-| `verify-web.mjs` | 16 flows, **188/188 assertions**, **0 console errors** |
+| `verify-web.mjs` | 18 flows, **225/225 assertions**, **0 console errors** |
+| sequence: an item's look | item 2 through all 7 modes, a palette, cell 6, gamma 1.4 and polish 70 — items 1 and 3 **hash identically** before and after (`c7b68293`, `a9e6316d`), item 2 goes `c7b68293` → `2853216c` and back again |
+| sequence: pixel modes | a cell-1 Bayer photograph is **484,508 dots a frame**; its morph flies **3,773** mid-air and lands on 711, the subject's own count |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
 | still: subject, server | one frame, **0.09 s** at 768 px, a 12,750 px mask, no propagation |
 | still: subject, browser | one frame, **0.08 s** at 768 px, a 12,654 px mask, WebGPU fp16 |
@@ -1315,10 +1448,29 @@ why the setting exists rather than a silently lowered default.
 * **No audio.** Video export is picture only.
 * **A sequence is not a timeline.** Items in order, one transition per join, one
   background and one dot size. No layers, no easing curves, no audio. Colour is
-  per item, not per dot.
-* **A sequence item is a snapshot.** It holds the dot positions as they were when
-  it was captured, at the look that was on at the time. Changing the look in the
-  studio afterwards does not reach back into it — add it again.
+  per item and per subject, not per dot.
+* **A sequence item's look is its own, but the canvas is not.** Mode, cell, dot
+  count, tone, colours and polish are per item; **background, dot size and frame
+  size are per sequence**, because a `.dots.gz` stores one of each.
+* **Changing an item's look re-derives it in the tab**, not on the server: the
+  source frames and masks come back through the engine (over HTTP from the job
+  on the local server, out of the decoded blobs in the free tier) and the dot
+  grid is recomputed here, so there is one implementation of every mode and not
+  two. Measured on a 30-frame item at 1280×720 against the local server: **~1.4 s
+  for the whole item**, and it is cached per look afterwards. Mask polish costs
+  more on its first pass, as it does in the studio.
+* **The sequence's palette preset still overrides the items.** Picking one in
+  **Canvas** sets a colour on every card, which is the point of it; the per-item
+  colours are underneath and come back with *as captured*.
+* **A pixel mode at cell 1 is expensive to carry.** 484,508 dots a frame is
+  ~1 MB of positions a frame before compression; the verification run's
+  two-picture, one-clip strip is a **6.5 MB `.dots.gz`** for 61 frames. It plays
+  and it renders, but the format's usual "smaller than the MP4" claim is off by
+  a factor of five there. Short holds.
+* **A transition flies 8,000 particles, not the picture.** That is deliberate,
+  and the missing dots are shed and respawned in place at the two ends rather
+  than popping — but the middle of a morph out of a pixel dither is a swarm, not
+  a dissolve of the image itself.
 * **Sequence items should share a frame size.** They all do when they come from
   720p clips; if they do not, the sequence uses the first item's frame and says
   so.

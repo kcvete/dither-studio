@@ -308,7 +308,7 @@
       </section>
 
       <section class="step" id="sq3" data-open="0">
-        <div class="sh"><i>3</i><span>Look</span><em id="sq3sum"></em></div>
+        <div class="sh"><i>3</i><span>Canvas</span><em id="sq3sum"></em></div>
         <div class="sb">
           <div class="lbl"><span>Dot size</span><span id="vSeqDot">3 px</span></div>
           <input type="range" id="sSeqDot" min="1" max="8" step="1" value="3">
@@ -317,9 +317,13 @@
             value="#c9d4c5"><span>bg</span></label></div>
           <div class="lbl"><span>Palette</span></div>
           <div class="chips" id="seqpals"></div>
-          <div class="note">One look for the whole strip: background, dot size
-            and, if you pick a preset, a colour per item. Until then every item
-            keeps the colour its subject had when it was captured.</div>
+          <div class="note"><b>The look is per item &middot; the background is
+            per sequence.</b> Mode, colours, the dot sliders and the mask polish
+            all live on the selected item, in <b>Selected</b> above; background,
+            dot size and frame size are one set for the whole strip, because a
+            <code>.dots.gz</code> has exactly one of each. A palette preset here
+            takes the background from the first colour and gives the items the
+            rest in order, overriding their own.</div>
         </div>
       </section>
 
