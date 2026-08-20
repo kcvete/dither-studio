@@ -2795,11 +2795,11 @@ async function addShape(kind, bitmap) {
 function stripAdd(item, opts) {
   const n = item.nFrames;
   const clip = n > 1;
-  const start = clip ? clamp(S.cur || 0, 0, Math.max(0, n - 2)) : 0;
   const inst = Object.assign({
     uid: SEQID++, lib: item.id, subject: 'all',
-    in: clip ? start : 0,
-    out: clip ? Math.min(n - 1, start + 44) : 0,
+    // default to the WHOLE clip; the item panel's in/out trims it down
+    in: 0,
+    out: clip ? n - 1 : 0,
     hold: 30, color: null,
     look: cloneLook(item.look),
     trans: { kind: 'morph', ms: 900 },
