@@ -26,6 +26,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 import dither as DI
+import dots as DT
 import edgetam_util as EU
 import render as R
 
@@ -793,6 +794,151 @@ def _render_worker(jid, d, subs, params):
         with _state_lock:
             _jobs[jid]["render"].update(state="error",
                                         error="%s: %s" % (type(e).__name__, e))
+
+
+class DotsReq(BaseModel):
+    """The dots look, exported as data instead of pixels. Same knobs as a
+    render; everything that is not a dots knob is ignored."""
+    subjects: list[dict] = []
+    cell: int = 4
+    dotpx: int = 3
+    n: int = 8000
+    fill: float = 0.7
+    stray: float = 0.02
+    band: int = 9
+    gamma: float = 1.0
+    invert: bool = False
+    seed: int = 7
+    bg: str = "#c9d4c5"
+    fps: int | None = None
+    json: bool = False          # also write the readable .dots.json variant
+
+
+@app.post("/api/jobs/{jid}/dots")
+def export_dots(jid: str, req: DotsReq):
+    """Render the dot positions for a tracked job and write out.dots.gz.
+
+    Synchronous on purpose: this is ~30 ms a frame, i.e. a few seconds for the
+    longest clip the tool accepts, and it has no encoder to feed.
+    """
+    d = job_dir(jid)
+    meta = read_meta(jid)
+    mroot = os.path.join(d, "masks")
+    subs = []
+    for i, s in enumerate(req.subjects):
+        oid = str(s.get("id"))
+        md = os.path.join(mroot, oid)
+        if not os.path.isdir(md):
+            raise HTTPException(400, "no masks for subject %s - track first" % oid)
+        subs.append({"masks": md, "palette": s.get("palette"),
+                     "dot": s.get("dot") or R.SUBJECT_COLORS[i % 6]})
+    if not subs:
+        raise HTTPException(400, "dot data needs at least one tracked subject")
+    params = req.model_dump()
+    params.pop("subjects", None)
+    params.pop("json", None)
+    if params.get("fps") is None:
+        params["fps"] = meta.get("fps", 30)
+    t0 = time.perf_counter()
+    doc = R.render_dots(os.path.join(d, "frames"), subs, params)
+    gz = DT.pack(doc)
+    out = os.path.join(d, "out.dots.gz")
+    with open(out, "wb") as f:
+        f.write(gz)
+    counts = [int(sum(len(x) for x in fr)) for fr in doc["frames"]]
+    res = {"job": jid, "frames": len(doc["frames"]), "bytes": len(gz),
+           "raw_bytes": len(DT.encode(doc)), "w": doc["w"], "h": doc["h"],
+           "fps": doc["fps"], "dotpx": doc["dotpx"], "subjects": len(doc["subjects"]),
+           "palette": doc["palette"],
+           "dots_mean": round(sum(counts) / max(1, len(counts)), 1),
+           "dots_max": max(counts), "elapsed_s": round(time.perf_counter() - t0, 2),
+           "url": "/api/jobs/%s/out.dots.gz" % jid}
+    if req.json:
+        jp = os.path.join(d, "out.dots.json")
+        with open(jp, "w") as f:
+            json.dump(DT.to_json(doc), f)
+        res["json_bytes"] = os.path.getsize(jp)
+        res["json_url"] = "/api/jobs/%s/out.dots.json" % jid
+    print("[dots] %s: %d frames, %.1f dots/frame, %d B gz in %.1fs"
+          % (jid, res["frames"], res["dots_mean"], res["bytes"], res["elapsed_s"]),
+          flush=True)
+    return res
+
+
+@app.get("/api/jobs/{jid}/out.dots.gz")
+def get_dots(jid: str):
+    p = os.path.join(job_dir(jid), "out.dots.gz")
+    if not os.path.exists(p):
+        raise HTTPException(404, "no dot data yet")
+    # not Content-Encoding: gzip -- the gzip IS the file, and a browser that
+    # transparently decoded it would hand the player the wrong bytes
+    return FileResponse(p, media_type="application/octet-stream", headers={
+        "Content-Disposition": 'inline; filename="dither-%s.dots.gz"' % jid})
+
+
+@app.get("/api/jobs/{jid}/out.dots.json")
+def get_dots_json(jid: str):
+    p = os.path.join(job_dir(jid), "out.dots.json")
+    if not os.path.exists(p):
+        raise HTTPException(404, "no dot data yet")
+    return FileResponse(p, media_type="application/json")
+
+
+@app.post("/api/sequence")
+async def sequence(file: UploadFile = File(...), format: str = Form("mp4"),
+                   gif_fps: int = Form(15)):
+    """Rasterise a .dots.gz (a sequence, a morph, anything) into a video.
+
+    This is how a morph becomes an MP4. The tween itself is built in JS --
+    web/player/dither-player.js -- and shipped here as dot positions, so there
+    is exactly one implementation of the transition and the server does the one
+    thing it is better at: feeding an encoder.
+    """
+    if format not in R.FORMATS:
+        raise HTTPException(400, "format must be one of %s" % list(R.FORMATS))
+    raw = await file.read()
+    try:
+        doc = DT.unpack(raw) if raw[:2] == b"\x1f\x8b" else DT.decode(raw)
+    except Exception as e:                                   # noqa: BLE001
+        raise HTTPException(400, "not a .dots file: %s" % e)
+    sid = "seq-" + uuid.uuid4().hex[:10]
+    d = os.path.join(JOBS, sid)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "in.dots.gz"), "wb") as f:
+        f.write(raw)
+    out = os.path.join(d, R.FORMATS[format]["file"])
+    t0 = time.perf_counter()
+    info = DT.rasterise(doc, out, format, gif_fps)
+    el = time.perf_counter() - t0
+    print("[sequence] %s: %d frames -> %s in %.1fs"
+          % (sid, info["frames"], format, el), flush=True)
+    return {"sequence": sid, "frames": info["frames"], "w": info["w"],
+            "h": info["h"], "format": format, "bytes": os.path.getsize(out),
+            "elapsed_s": round(el, 2),
+            "url": "/api/sequence/%s/output/%s" % (sid, format)}
+
+
+@app.get("/api/sequence/{sid}/dots.gz")
+def get_sequence_dots(sid: str):
+    """The dot data a sequence was rendered from — what the player plays."""
+    p = os.path.join(job_dir(sid), "in.dots.gz")
+    if not os.path.exists(p):
+        raise HTTPException(404, "no such sequence")
+    return FileResponse(p, media_type="application/octet-stream", headers={
+        "Content-Disposition": 'inline; filename="%s.dots.gz"' % sid})
+
+
+@app.get("/api/sequence/{sid}/output/{fmt}")
+def get_sequence(sid: str, fmt: str):
+    if fmt not in R.FORMATS:
+        raise HTTPException(400, "unknown format %r" % fmt)
+    f = R.FORMATS[fmt]
+    p = os.path.join(job_dir(sid), f["file"])
+    if not os.path.exists(p):
+        raise HTTPException(404, "not rendered yet")
+    return FileResponse(p, media_type=f["mime"], headers={
+        "Content-Disposition": 'inline; filename="dither-%s.%s"' % (sid, f["ext"]),
+        "Accept-Ranges": "bytes"})
 
 
 @app.get("/api/jobs/{jid}/output/{fmt}")

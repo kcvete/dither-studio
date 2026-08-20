@@ -9,6 +9,7 @@ CDN at run time.
 ```
 index.html        the page
 app.js            the flow: source -> subjects -> look -> palette -> export
+                  -> sequence
 dither.js         the dithering engine (server/dither.py mirrors it exactly)
 style.css
 engines/
@@ -16,6 +17,13 @@ engines/
   browser.js      everything in the tab: decode, track, dither, encode
   remote.js       the REST API in server/ — local or rented, same client
 track.js          EdgeTAM's tracking loop in JS over the ONNX graphs
+vendor/
+  gifenc.js       a GIF89a/LZW encoder, ~220 lines, no dependencies
+player/
+  dither-player.js  plays a .dots.gz on a canvas: the codec, the morph and the
+                    player, one file, no dependencies. Carries the format spec.
+  dither-player.mjs the same thing as ES module exports
+  demo.html         a page around it — drop a file, scrub, recolour, resize
 bluenoise.json    the server's default 64x64 threshold tile, so both engines
                   start from the same noise
 models/           the ONNX graphs                        (weights NOT committed)
@@ -38,6 +46,9 @@ git subtree push --prefix web origin gh-pages
 
 Every asset path in `index.html` is relative, so a subdirectory deployment
 (`https://you.github.io/dither-studio/`) works without configuration.
+
+`player/` is independent of the rest: `dither-player.js` is a single file with no
+imports, so a `.dots.gz` can be played on any page anywhere by dropping it in.
 
 **Except for the models.** `models/*.onnx` (~130 MB) and `ort/` (~39 MB) are
 deliberately not in git — see below. Without them the page still does stills and

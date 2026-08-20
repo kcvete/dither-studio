@@ -244,12 +244,28 @@ def _subject_palette(s, i, bg):
 
 
 # ------------------------------------------------------------ dots renderer
-def _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha=False):
-    """One dots frame. With `alpha`, the flat background is left transparent
-    and only the dots themselves are opaque -- that is the whole of what the
-    ProRes 4444 / WebM-alpha exports need. `overlay` compose has no background
-    to key out, so it stays fully opaque."""
-    H, W = rgb.shape[:2]
+def dots_fields(H, W, a, blue):
+    """The fixed per-cell fields the dots look is built on: the blue-noise
+    threshold, the jittered cell centres and the stray-dot lottery. They depend
+    only on the frame size, the cell size and the seed -- which is exactly why
+    dots hold still between frames."""
+    cell = int(a['cell'])
+    seed = int(a['seed'])
+    gh, gw = H // cell, W // cell
+    thr = np.tile(blue, (gh // 64 + 1, gw // 64 + 1))[:gh, :gw]
+    jx, jy, stray_r = cell_fields(gh, gw, seed)
+    cy = np.broadcast_to(np.arange(gh)[:, None] * cell + cell / 2.0
+                         + (jy - .5) * cell * .8, (gh, gw))
+    cx = np.broadcast_to(np.arange(gw)[None, :] * cell + cell / 2.0
+                         + (jx - .5) * cell * .8, (gh, gw))
+    return (thr, cy, cx, stray_r, gh, gw)
+
+
+def dots_on(rgb, masks, a, F):
+    """Which cells are lit, per subject, on one frame.
+
+    The single source of truth for both the painted frame and the .dots export
+    -- the dot data has to be the dots you can see, not a second opinion."""
     cell = int(a['cell'])
     thr, cy, cx, stray_r, gh, gw = F
     lum = rgb.astype(np.float32) / 255.0 @ LUM
@@ -264,6 +280,49 @@ def _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha=False):
     owner = stack.argmax(0)
     covered = stack.max(0) > 0
     any_mg = stack.max(0)
+
+    out = []
+    for k in range(K):
+        mine = covered & (owner == k)
+        wgt = np.where(mine, wgts[k], 0.0)
+        if a['n']:
+            tgt = min(int(a['n']), max(1, int(float(a['fill']) * np.count_nonzero(wgt > 0))))
+            wgt = np.minimum(wgt * gain_for_count(wgt, thr, tgt), 1.0)
+        on = wgt > thr
+        if float(a['stray']) > 0 and int(a['band']) > 0:
+            band = (dilate(mgs[k], int(a['band'])) > .15) & (any_mg <= .15)
+            nb = int(band.sum())
+            if nb:
+                on |= band & (stray_r < min(1.0, float(a['stray']) * max(on.sum(), 1) / nb))
+        out.append(on)
+    return out
+
+
+def dot_positions(on, F):
+    """Lit cells -> the integer (x, y) the renderer actually draws at, in
+    cell-scan order (row-major), which is what makes the delta coding in
+    dots.py small.
+
+    floor(v + 0.5), not np.rint: numpy rounds halves to even and JavaScript's
+    Math.round rounds them up, and a cell centre lands exactly on .5 often
+    enough to matter -- about one to three dots a frame moved by a pixel
+    between the two engines, and a .dots.gz written here then failed to replay
+    byte-identically against the browser's own render. This is the JS rule.
+    """
+    thr, cy, cx, stray_r, gh, gw = F
+    ys = np.floor(cy[on] + 0.5).astype(np.int32)
+    xs = np.floor(cx[on] + 0.5).astype(np.int32)
+    return np.stack([xs, ys], 1)
+
+
+def _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha=False):
+    """One dots frame. With `alpha`, the flat background is left transparent
+    and only the dots themselves are opaque -- that is the whole of what the
+    ProRes 4444 / WebM-alpha exports need. `overlay` compose has no background
+    to key out, so it stays fully opaque."""
+    H, W = rgb.shape[:2]
+    lum = rgb.astype(np.float32) / 255.0 @ LUM
+    ons = dots_on(rgb, masks, a, F)
 
     if a['compose'] == 'overlay':
         g = (lum * 0.55 + 0.22)[:, :, None]
@@ -281,22 +340,12 @@ def _frame_dots(rgb, masks, a, F, dots_cols, bg, alpha=False):
     oy, ox = np.meshgrid(off, off, indexing='ij')
     oy, ox = oy.ravel()[None, :], ox.ravel()[None, :]
 
-    for k in range(K):
-        mine = covered & (owner == k)
-        wgt = np.where(mine, wgts[k], 0.0)
-        if a['n']:
-            tgt = min(int(a['n']), max(1, int(float(a['fill']) * np.count_nonzero(wgt > 0))))
-            wgt = np.minimum(wgt * gain_for_count(wgt, thr, tgt), 1.0)
-        on = wgt > thr
-        if float(a['stray']) > 0 and int(a['band']) > 0:
-            band = (dilate(mgs[k], int(a['band'])) > .15) & (any_mg <= .15)
-            nb = int(band.sum())
-            if nb:
-                on |= band & (stray_r < min(1.0, float(a['stray']) * max(on.sum(), 1) / nb))
+    for k, on in enumerate(ons):
         if not on.any():
             continue
-        yy = np.clip(np.rint(cy[on])[:, None] + oy, 0, H - 1).astype(np.int32)
-        xx = np.clip(np.rint(cx[on])[:, None] + ox, 0, W - 1).astype(np.int32)
+        pos = dot_positions(on, F)
+        yy = np.clip(pos[:, 1][:, None] + oy, 0, H - 1).astype(np.int32)
+        xx = np.clip(pos[:, 0][:, None] + ox, 0, W - 1).astype(np.int32)
         canvas[yy.ravel(), xx.ravel()] = np.array(
             hexcol(dots_cols[k]) + ([255] if alpha else []), np.uint8)
     return canvas
@@ -378,17 +427,7 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
         palettes.append(_subject_palette(s, i, bg))
     dots_cols = [palettes[i + 1][-1] for i in range(len(subjects))]
 
-    F = None
-    if a['mode'] == 'dots':
-        cell = int(a['cell'])
-        gh, gw = H // cell, W // cell
-        thr = np.tile(blue, (gh // 64 + 1, gw // 64 + 1))[:gh, :gw]
-        jx, jy, stray_r = cell_fields(gh, gw, seed)
-        cy = np.broadcast_to(np.arange(gh)[:, None] * cell + cell / 2.0
-                             + (jy - .5) * cell * .8, (gh, gw))
-        cx = np.broadcast_to(np.arange(gw)[None, :] * cell + cell / 2.0
-                             + (jx - .5) * cell * .8, (gh, gw))
-        F = (thr, cy, cx, stray_r, gh, gw)
+    F = dots_fields(H, W, a, blue) if a['mode'] == 'dots' else None
 
     fmt = str(a.get('format') or 'mp4')
     if fmt not in FORMATS:
@@ -425,6 +464,44 @@ def render(frames_dir, subjects, out_path, params=None, progress=None):
         raise RuntimeError('ffmpeg failed: ' + err[-800:])
     return {'out': out_path, 'frames': total, 'w': W, 'h': H, 'format': fmt,
             'bytes': os.path.getsize(out_path)}
+
+
+# ---------------------------------------------------------- dots as data
+def render_dots(frames_dir, subjects, params=None, progress=None):
+    """The same dots, as positions instead of pixels.
+
+    Returns a dots.py document: one (N, 2) int array of dot centres per subject
+    per frame. It is the export path for .dots.gz, and it runs the same
+    `dots_on` the renderer paints with, so the data cannot drift from the video.
+    """
+    a = _params(params)
+    a['mode'] = 'dots'
+    files = _list_frames(frames_dir)
+    if not files:
+        raise RuntimeError('no frames in ' + frames_dir)
+    if not subjects:
+        raise RuntimeError('the dots look needs at least one tracked subject')
+    H, W = np.asarray(Image.open(os.path.join(frames_dir, files[0])).convert('RGB')).shape[:2]
+    bg = a['bg']
+    blue = blue_noise(64, int(a['seed'])).astype(np.float32)
+    F = dots_fields(H, W, a, blue)
+    cols = [_subject_palette(s, i, bg)[-1] for i, s in enumerate(subjects)]
+
+    last = [None] * len(subjects)
+    frames = []
+    total = len(files)
+    for i, fn in enumerate(files):
+        rgb = np.asarray(Image.open(os.path.join(frames_dir, fn)).convert('RGB'))
+        masks = []
+        for k, s in enumerate(subjects):
+            last[k] = _load_mask(s['masks'], i, H, W, last[k])
+            masks.append(last[k])
+        frames.append([dot_positions(on, F) for on in dots_on(rgb, masks, a, F)])
+        if progress:
+            progress(i + 1, total)
+    return dict(w=W, h=H, fps=int(a['fps']), dotpx=int(a['dotpx']),
+                palette=[bg] + cols, bg=bg, bg_index=0,
+                subjects=[{'color': c} for c in cols], frames=frames)
 
 
 if __name__ == '__main__':

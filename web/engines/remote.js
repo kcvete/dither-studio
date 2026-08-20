@@ -218,5 +218,35 @@ export class RemoteEngine {
     }
   }
 
+  /* --------------------------------------------------------- dot data */
+  /** The dots as positions, rendered server-side and handed back as the
+   *  .dots.gz bytes themselves — the same file the browser engine builds. */
+  async exportDots(params, onProgress) {
+    if (onProgress) onProgress({ done: 0, total: 1, text: 'rendering dot positions…' });
+    const r = await this.api(this.jobPath('/dots'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const blob = await this.blob(this.jobPath('/out.dots.gz'));
+    if (onProgress) onProgress({ done: r.frames, total: r.frames, text: 'done' });
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), stats: r };
+  }
+
+  /** A finished sequence (dot positions, morphs already tweened in JS) ->
+   *  a video. The server never re-derives the transition; it rasterises. */
+  async renderSequence(bytes, format = 'mp4') {
+    const fd = new FormData();
+    fd.append('file', new Blob([bytes], { type: 'application/octet-stream' }),
+              'sequence.dots.gz');
+    fd.append('format', format);
+    const r = await this.api('/api/sequence', { method: 'POST', body: fd,
+                                                headers: this.headers() });
+    const f = (this.supports.formats || []).find((x) => x.id === format) || {};
+    let url = this.url(r.url) + '?t=' + Date.now();
+    if (this.apiKey) url = URL.createObjectURL(await this.blob(r.url));
+    return { url, ext: f.ext || 'mp4', mime: f.mime || 'video/mp4',
+             bytes: r.bytes, frames: r.frames, elapsedS: r.elapsed_s };
+  }
+
   dispose() { this.clip = null; }
 }

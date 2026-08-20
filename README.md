@@ -298,6 +298,151 @@ few values off 255 in WebM, and clean in ProRes.
 **Compare** (in the transport bar) drags a before/after divider across the frame,
 and it keeps working while the clip plays.
 
+**Dot data** sits under the format select whenever the dots look is on a tracked
+clip: `.dots.gz` is the dots themselves — every dot's integer position on every
+frame — and `.dots.json` is the same numbers in readable form. See
+[Dot data, the player and morphs](#dot-data-the-player-and-morphs).
+
+### 6 · Sequence
+One swarm changing shape. Capture a segment from the clip you have tracked (a
+subject, a start frame, a length), add another from a *different* clip, drop in a
+static shape, and the step morphs each into the next.
+
+* **capture segment** takes the current subject from the frame the transport is
+  on. The library survives loading another clip, which is the whole point: clip
+  A's athlete can morph into clip B's tennis player.
+* **static shapes** — a built-in ring or coral, or any image you pick — are
+  rasterised into dots through the same pipeline a clip is: drawn dark on light,
+  handed to the dots renderer with a full-frame mask. A ring is dithered, not
+  plotted.
+* **morph** sets the transition length (900 ms by default).
+* **preview** plays the whole thing in the player, on the stage.
+* **.dots.gz** exports the sequence as data; **render video** turns it into a
+  file — MP4 on the server, WebM in the tab.
+
+A sequence is deliberately not a timeline: one subject track, one global palette,
+segments and shapes in order. That is enough for "the runner dissolves into the
+logo" and it keeps the format a list of dots rather than a project file.
+
+## Dot data, the player and morphs
+
+The dots look is the one part of this tool whose output is not really pixels: it
+is a few thousand positions a frame. `.dots.gz` stores exactly that, and the
+player replays it — same integer positions, same squares, any colour or dot size
+you like afterwards, because none of that is baked in.
+
+### Sizes, measured
+The 150-frame parkour render, one tracked subject, 1,185 dots a frame on average
+(the run in `docs/verify-report.json`):
+
+| file | bytes | what it is |
+|---|---|---|
+| `.dots.gz` | **69,703** | the dot positions, delta-coded and gzipped |
+| `.dots` (raw) | 362,047 | the same, ungzipped |
+| `out.mp4` | 432,303 | H.264 of the same frames |
+| `.dots.json` | 1,753,313 | the debugging variant |
+
+The dot data is **6.2× smaller than the MP4** and re-colourable, re-sizable and
+seekable to a frame without a decoder. It is not always that way round: the
+300-frame tennis render (5,977 dots a frame — a much bigger subject) is 222,722
+bytes of `.dots.gz`. Dots cost bytes; pixels cost the same whatever is in them.
+
+### The format
+`gzip(body)`, extension `.dots.gz`, everything little-endian. The full spec lives
+in the header of `web/player/dither-player.js`; in short:
+
+```
+off  size          field
+0    4             magic "DOTS"
+4    1             version = 1
+5    1             flags (0)
+6    2   uint16    width
+8    2   uint16    height
+10   2   uint16    n_frames
+12   1   uint8     fps
+13   1   uint8     dotpx           dot square, in pixels
+14   1   uint8     n_palette       1..255
+15   1   uint8     n_subjects      1..255
+16   1   uint8     bg_index        palette entry the background uses
+17   1   uint8     reserved = 0
+18   n_palette*3   palette, RGB bytes
+..   n_subjects    one uint8 palette index per subject (its dot colour)
+..   frames        per frame, per subject:
+                     varint count
+                     count x  zigzag-varint dx, zigzag-varint dy
+```
+
+`dx`/`dy` are deltas from the previous dot of the same subject in the same frame
+(the first from 0,0). Dots come out of the renderer in cell-scan order, so those
+deltas are small and repetitive, which is what makes the gzip do so well.
+
+Both engines write it, from the same decision the picture is made of: the browser
+runs `dotsOn()` in `web/app.js`, the server runs `dots_on()` in
+`server/render.py`, and the video renderer paints the very same cells. So the
+data cannot drift from the frames.
+
+### The player
+`web/player/dither-player.js` is dependency-free, no build step, and loads two
+ways:
+
+```html
+<script src="dither-player.js"></script>
+<script>
+  const p = new DitherPlayer.Player(document.querySelector('canvas'),
+                                    { loop: true });
+  await p.load('clip.dots.gz');     // .dots.gz, .dots or .dots.json
+  p.play();                          // pause() · seek(n) · set({bg, colors, dotpx})
+</script>
+```
+
+```js
+import { Player, buildMorph, buildSequence } from './dither-player.mjs';
+```
+
+`web/player/demo.html` is a page around it: drop a file (or `?src=…`), scrub,
+change the dot size, the dot colour, the background, or turn the background off
+entirely for a transparent page. Decompression is `DecompressionStream`, which is
+in the browser already.
+
+**It is a replay, not a re-dither.** The player rasterises a dot the way both
+renderers do — a `dotpx` square centred on the integer position, clamped into the
+frame rather than clipped — so the canvas comes out identical. Measured in
+`verify-web.mjs`: on the browser engine, **0 of 3,686,400 bytes differ** between
+the app's own rendered frame and the player's replay of the exported positions.
+On the server engine one to three dots a frame land differently (9 bytes each):
+the dots are decided in numpy there and painted in JS here, and a cell whose
+weight sits within a float rounding error of the blue-noise threshold can fall on
+the other side of it. That is measured rather than hidden.
+
+**Speed.** 1280×720, ~5,800 dots a frame: **1.94 ms** of CPU per frame on an M4
+Pro (worst 4.7 ms), i.e. about 500 fps of rasterisation. The demo page sustained
+**120 fps** in the verifier — twice the 60 fps the flagship check asks for.
+
+### Morphs
+`buildMorph(a, b, opts)` tweens one dot cloud into another; the image demo this
+came from is where the shape of it was worked out.
+
+* **matching** — both clouds are sorted by Hilbert-curve index and paired rank
+  for rank, so neighbours stay neighbours and the swarm flows instead of
+  scrambling.
+* **counts** — the two clouds are never the same size. The overlap is paired
+  1:1; the surplus **pops**, each dot at its own moment spread across the whole
+  flight. Dots are binary — there is no opacity to fade — so the stagger is what
+  makes it read as a dissolve rather than a cut.
+* **flight** — per-dot delay from noise plus a spatial wave, ease-in-out cubic,
+  and a perpendicular curl that peaks mid-flight.
+
+A 900 ms morph at 30 fps is 37 frames. Going from the parkour athlete (1,863
+dots) to the tennis player (6,446), the count climbs smoothly frame by frame:
+1863, 1873, 1903, 1956, 2051, … 6245, 6332, 6396, 6427, 6441, 6446.
+
+**Where the tween runs.** In JS, always — in the page for a preview or a WebM,
+and in the page for an MP4 too: the finished dot positions are POSTed to
+`/api/sequence`, and the server rasterises what it is given. Porting the tween
+into `render.py` would have meant two implementations of the same easing, two
+RNGs and a parity gate to keep them honest; shipping positions means there is one
+morph. The server's half is 127 frames of squares in **0.73 s**.
+
 ## The two engines
 
 ### One dither engine, three implementations
@@ -326,6 +471,15 @@ default seed-7 tile ships as `web/bluenoise.json` and both engines start from th
 same field; **reseed** in the browser generates a fresh tile with the same
 construction and a portable hash, which is a different realisation of the same
 spectrum.
+
+**The dots look is the honest exception.** `parity.py` gates `dither_rgb`, not
+the dots stage: that one sums a whole cell's worth of tone in numpy on one side
+and in JS on the other, and a cell whose weight lands within a float rounding
+error of the blue-noise threshold can fall either way. Measured on the parkour
+clip, that is **one to three dots a frame out of ~1,200** — visible only if you
+diff the frames, which `verify-web.mjs` does. Within one engine there is no
+ambiguity at all: the browser's `.dots.gz` replays byte-identically against the
+browser's own render, and the server's against the server's.
 
 ### One tracker, two ports
 
@@ -854,6 +1008,15 @@ why the setting exists rather than a silently lowered default.
   drag sliders.
 * **Compare is preview-only** — not baked into the export.
 * **No audio.** Video export is picture only.
+* **A sequence is not a timeline.** Segments and shapes in order, one subject
+  track, one global palette, one morph length per join. No layers, no easing
+  curves, no per-item colour.
+* **Sequence items should share a frame size.** They all do when they come from
+  720p clips; if they do not, the sequence uses the first item's frame and says
+  so.
+* **Dot data is dots.** A `.dots.gz` of a 6,000-dot subject is bigger than the
+  MP4 of it. The point is that it is re-colourable, re-sizable and seekable, not
+  that it is always smaller.
 * **Alpha is cutout-only.** `keep scene` and whole-frame dithers export fully
   opaque, because there is no flat background to key out. And a lossy codec
   rounds the alpha plane: WebM's dot edges are a few values off 255, ProRes 4444

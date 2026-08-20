@@ -1,0 +1,151 @@
+<!doctype html>
+<title>Dither Player</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#0b1512;--ink:#dfeadd;--dim:#8fa596;--line:#1e2f27;--go:#b0413e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:13px/1.5 ui-sans-serif,-apple-system,"SF Pro Text",Inter,system-ui,sans-serif}
+  header{display:flex;gap:12px;align-items:baseline;padding:14px 18px;border-bottom:1px solid var(--line)}
+  header b{font-size:14px;letter-spacing:.02em}
+  header span{color:var(--dim)}
+  main{padding:18px;display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:18px;align-items:start}
+  #wrap{background:repeating-conic-gradient(#16241e 0% 25%,#101c17 0% 50%) 50%/18px 18px;
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    max-height:calc(100vh - 110px);display:flex;align-items:center;justify-content:center}
+  canvas{display:block;width:100%;height:auto;max-height:calc(100vh - 112px);
+    object-fit:contain;image-rendering:pixelated}
+  aside{display:flex;flex-direction:column;gap:10px}
+  .row{display:flex;gap:8px;align-items:center}
+  button{background:#132019;color:var(--ink);border:1px solid var(--line);border-radius:7px;
+    padding:7px 11px;font:inherit;cursor:pointer}
+  button:hover{border-color:#31513f}
+  button.go{background:var(--go);border-color:var(--go);color:#fff}
+  input[type=range]{width:100%}
+  label{display:flex;justify-content:space-between;color:var(--dim);
+    font-size:10px;letter-spacing:.09em;text-transform:uppercase}
+  .stat{font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--dim);
+    background:#0e1a15;border:1px solid var(--line);border-radius:7px;padding:8px 10px;
+    white-space:pre-wrap}
+  a{color:var(--go)}
+  input[type=color]{width:38px;height:26px;padding:0;border:1px solid var(--line);background:none}
+  #drop{border:1px dashed var(--line);border-radius:7px;padding:10px;text-align:center;color:var(--dim)}
+</style>
+
+<header>
+  <b>Dither Player</b>
+  <span>plays a .dots.gz — the dot positions themselves, not a video</span>
+</header>
+
+<main>
+  <div id="wrap"><canvas id="cv" width="640" height="360"></canvas></div>
+  <aside>
+    <div class="row">
+      <button class="go" id="play">play</button>
+      <button id="loop" aria-pressed="true">loop: on</button>
+    </div>
+    <label><span>Frame</span><span id="fno">0 / 0</span></label>
+    <input type="range" id="seek" min="0" max="0" value="0">
+    <label><span>Dot size</span><span id="dpv">3 px</span></label>
+    <input type="range" id="dp" min="1" max="9" value="3">
+    <div class="row">
+      <input type="color" id="bg" value="#c9d4c5"><span>background</span>
+      <input type="color" id="dot" value="#b0413e"><span>dots</span>
+    </div>
+    <div class="row"><button id="clear">transparent background</button></div>
+    <div id="drop">drop a .dots.gz here, or
+      <label style="display:inline;text-transform:none;letter-spacing:0;color:var(--go);cursor:pointer">
+        pick one<input type="file" id="file" accept=".gz,.dots,.json" hidden></label>
+    </div>
+    <div class="stat" id="stat">no file loaded</div>
+  </aside>
+</main>
+
+<script src="./dither-player.js"></script>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const P = new DitherPlayer.Player($('#cv'), { loop: true, onFrame: paint });
+let name = '', bytes = 0;
+
+function paint(f) {
+  $('#fno').textContent = `${f} / ${Math.max(0, P.nFrames - 1)}`;
+  $('#seek').value = f;
+  if (f % 15 === 0) stat();
+}
+
+function stat() {
+  const d = P.doc;
+  if (!d) return;
+  let dots = 0;
+  for (const s of d.frames[P.frame]) dots += s.length >> 1;
+  const mark = (d.marks || []).filter((m) => P.frame >= m.start
+    && P.frame < m.start + m.frames).map((m) => m.kind === 'morph'
+      ? `morph ${m.ms} ms` : `segment ${m.name}`).join(' · ');
+  $('#stat').textContent =
+    `${name || 'file'}  ${(bytes / 1024).toFixed(0)} KB gz\n`
+    + `${d.w}x${d.h} · ${d.frames.length} frames · ${d.fps} fps · `
+    + `${d.subjects.length} subject${d.subjects.length > 1 ? 's' : ''}\n`
+    + `frame ${P.frame}: ${dots} dots · paint ${P.paintMs().toFixed(2)} ms`
+    + (P.playing ? ` · ${P.measuredFps().toFixed(1)} fps` : '')
+    + (mark ? `\n${mark}` : '');
+}
+
+$('#play').addEventListener('click', () => {
+  P.toggle();
+  $('#play').textContent = P.playing ? 'pause' : 'play';
+});
+$('#loop').addEventListener('click', () => {
+  P.opts.loop = !P.opts.loop;
+  $('#loop').textContent = 'loop: ' + (P.opts.loop ? 'on' : 'off');
+  $('#loop').setAttribute('aria-pressed', String(P.opts.loop));
+});
+$('#seek').addEventListener('input', (e) => {
+  P.seek(+e.target.value);
+  $('#play').textContent = 'play';
+  stat();
+});
+$('#dp').addEventListener('input', (e) => {
+  $('#dpv').textContent = e.target.value + ' px';
+  P.set({ dotpx: +e.target.value });
+});
+$('#bg').addEventListener('input', (e) => P.set({ bg: e.target.value, transparent: false }));
+$('#dot').addEventListener('input', (e) => P.set({ colors: [e.target.value] }));
+$('#clear').addEventListener('click', () => P.set({ bg: null }));
+
+async function open(src, label, size) {
+  name = label; bytes = size || 0;
+  await P.load(src);
+  $('#seek').max = P.nFrames - 1;
+  $('#dp').value = P.doc.dotpx; $('#dpv').textContent = P.doc.dotpx + ' px';
+  $('#bg').value = P.doc.bg || '#c9d4c5';
+  $('#dot').value = (P.doc.subjects[0] || {}).color || '#b0413e';
+  stat();
+  P.play(); $('#play').textContent = 'pause';
+}
+
+$('#file').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  try { await open(url, f.name, f.size); } finally { URL.revokeObjectURL(url); }
+});
+['dragover', 'drop'].forEach((t) => document.addEventListener(t, async (e) => {
+  e.preventDefault();
+  const f = t === 'drop' && e.dataTransfer.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  try { await open(url, f.name, f.size); } finally { URL.revokeObjectURL(url); }
+}));
+
+/* ?src=… loads a file straight away — that is how the verifier drives this page */
+const q = new URLSearchParams(location.search).get('src');
+if (q) {
+  fetch(q, { cache: 'no-store' }).then((r) => r.arrayBuffer()).then((b) =>
+    open(URL.createObjectURL(new Blob([b])), q.split('/').pop(), b.byteLength))
+    .catch((err) => { $('#stat').textContent = 'could not load ' + q + ': ' + err.message; });
+}
+window.DP = P;
+window.DP_open = open;
+</script>

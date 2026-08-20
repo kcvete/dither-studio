@@ -60,6 +60,9 @@ const S = {
   exportURL: null, frameURL: null,
   // export
   format: '', gifFps: 15,
+  // sequence: captured segments and static shapes, in order. Survives loading
+  // another clip on purpose — a morph from one clip to another needs both.
+  library: [], seqDoc: null,
 };
 const E = () => S.engine;
 
@@ -361,6 +364,10 @@ $('#bCamOff').addEventListener('click', camClose);
 function showSteps(kind) {
   $('#st2').hidden = kind !== 'video';
   $('#st3').hidden = $('#st4').hidden = $('#st5').hidden = kind === 'none';
+  // the sequence step outlives the clip: a morph from one clip into another
+  // needs the segment captured from the first one to still be there
+  $('#st6').hidden = kind !== 'video' && !S.library.length;
+  buildSubjectPicker();
   $('#empty').hidden = kind !== 'none';
   $$('.step .sh i').forEach((el, i) => { el.textContent = i + 1; });
   // renumber visible steps so the rail always reads 1,2,3…
@@ -926,6 +933,8 @@ async function track() {
     $('#composeui').hidden = false;
     $('#bgui').hidden = S.P.compose !== 'cutout';
     dropCache(); buildTargets(); renderModes(); openStep(3);
+    DOTS_CACHE = null;
+    buildSubjectPicker();
     await draw();
   } catch (err) {
     prog.hidden = true;
@@ -1027,7 +1036,9 @@ function gainForCount(w, thr, target, N) {
   return Math.sqrt(lo * hi);
 }
 
-function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
+/* Which cells are lit, per subject. Split out of renderDots so the .dots
+ * export and the picture cannot disagree: both go through this. */
+function dotsOn(srcData, W, H, masks, P, tile) {
   const cell = P.cell | 0;
   const F = dotFields(W, H, cell, P.seed, tile);
   const { gw, gh, N, thr, cx, cy, strayR } = F;
@@ -1059,24 +1070,7 @@ function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
     owner[q] = bv > 0 ? best : -1; anyMg[q] = bv;
   }
 
-  const out = new Uint8ClampedArray(W * H * 4), bgc = Dither.hexRGB(bg);
-  // P.alpha: leave the flat background transparent and let only the dots be
-  // opaque. `overlay` keeps the scene, so there is nothing to key out.
-  const bga = (P.alpha && P.compose !== 'overlay') ? 0 : 255;
-  if (P.compose === 'overlay') {
-    for (let p = 0, n = W * H * 4; p < n; p += 4) {
-      const lum = (0.2126 * srcData[p] + 0.7152 * srcData[p + 1] + 0.0722 * srcData[p + 2]) / 255;
-      const g = (lum * 0.55 + 0.22) * 1.15;
-      out[p] = g * bgc[0]; out[p + 1] = g * bgc[1]; out[p + 2] = g * bgc[2]; out[p + 3] = 255;
-    }
-  } else {
-    for (let p = 0, n = W * H * 4; p < n; p += 4) {
-      out[p] = bgc[0]; out[p + 1] = bgc[1]; out[p + 2] = bgc[2]; out[p + 3] = bga;
-    }
-  }
-
-  const dp = P.dotpx | 0, half = dp >> 1;
-  let lit = 0;
+  const ons = [];
   for (let k = 0; k < K; k++) {
     const w = new Float32Array(N);
     let cover = 0;
@@ -1100,6 +1094,49 @@ function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
         }
       }
     }
+    ons.push(on);
+  }
+  return { F, on: ons };
+}
+
+/** Lit cells -> the integer dot centres, in cell-scan order. This is what a
+ *  .dots.gz stores, and what the player draws. */
+function dotXY(F, on) {
+  const { N, cx, cy } = F;
+  let n = 0;
+  for (let q = 0; q < N; q++) if (on[q]) n++;
+  const xy = new Uint16Array(n * 2);
+  let i = 0;
+  for (let q = 0; q < N; q++) {
+    if (!on[q]) continue;
+    xy[i++] = Math.round(cx[q]); xy[i++] = Math.round(cy[q]);
+  }
+  return xy;
+}
+
+function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
+  const { F, on: ons } = dotsOn(srcData, W, H, masks, P, tile);
+  const { N, thr, cx, cy } = F;
+  const out = new Uint8ClampedArray(W * H * 4), bgc = Dither.hexRGB(bg);
+  // P.alpha: leave the flat background transparent and let only the dots be
+  // opaque. `overlay` keeps the scene, so there is nothing to key out.
+  const bga = (P.alpha && P.compose !== 'overlay') ? 0 : 255;
+  if (P.compose === 'overlay') {
+    for (let p = 0, n = W * H * 4; p < n; p += 4) {
+      const lum = (0.2126 * srcData[p] + 0.7152 * srcData[p + 1] + 0.0722 * srcData[p + 2]) / 255;
+      const g = (lum * 0.55 + 0.22) * 1.15;
+      out[p] = g * bgc[0]; out[p + 1] = g * bgc[1]; out[p + 2] = g * bgc[2]; out[p + 3] = 255;
+    }
+  } else {
+    for (let p = 0, n = W * H * 4; p < n; p += 4) {
+      out[p] = bgc[0]; out[p + 1] = bgc[1]; out[p + 2] = bgc[2]; out[p + 3] = bga;
+    }
+  }
+
+  const dp = P.dotpx | 0, half = dp >> 1;
+  let lit = 0;
+  for (let k = 0; k < ons.length; k++) {
+    const on = ons[k];
     const pal = palettes[k + 1] || palettes[0];
     const col = Dither.hexRGB(pal[pal.length - 1]);
     for (let q = 0; q < N; q++) {
@@ -1241,6 +1278,8 @@ async function loop() {
 /* ========================================================= step 3: look */
 function setMode(id) {
   S.P.mode = id;
+  const dotsUI = $('#dotsexp');
+  if (dotsUI) dotsUI.hidden = !(id === 'dots' && usingSubjects());
   const ed = id === 'errordiff';
   $('#edui').hidden = !ed;
   $('#mxui').hidden = !(id === 'ordered' || id === 'halftone');
@@ -1578,6 +1617,423 @@ async function exportClip() {
   btn.disabled = false;
 }
 
+/* ================================================ dot data + sequences ===
+ * Three things that are really one thing:
+ *
+ *   .dots.gz    the dots as positions, not pixels (web/player/dither-player.js
+ *               carries the format spec). Both engines emit it: the browser
+ *               computes it here from the same `dotsOn` the preview paints
+ *               with, the server renders it in render.render_dots and we decode
+ *               what comes back — same bytes either way.
+ *   player      the same file, played back on a canvas. It is a replay, not a
+ *               re-dither: identical integer positions, identical squares.
+ *   sequence    segments of clips and static shapes, morphed into each other.
+ *               The tween lives in the player module and runs HERE, in JS; a
+ *               video of it is made by shipping the finished dot positions to
+ *               the server and letting it feed ffmpeg. That way there is one
+ *               implementation of the morph rather than two that drift.
+ */
+let DP = null;                      // the player module, imported on first use
+let PLAYER = null;                  // its Player over #seqcv
+let DOTS_CACHE = null;              // { key, doc, bytes } for the current clip
+
+async function playerLib() {
+  if (DP) return DP;
+  await import('./player/dither-player.js');
+  DP = globalThis.DitherPlayer;
+  return DP;
+}
+
+const dotsReady = () => S.kind === 'video' && usingSubjects();
+
+function dotsParams() {
+  return {
+    cell: S.P.cell, dotpx: S.P.dotpx, n: S.P.n, fill: S.P.fill,
+    stray: S.P.stray, band: S.P.band, gamma: S.P.gamma, invert: S.P.invert,
+    seed: S.P.seed, bg: S.bg, fps: S.fps,
+    subjects: S.subjects.map((x) => ({ id: x.id, palette: x.palette })),
+  };
+}
+
+function download(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+/** The current clip as a dots document, cached against the look it was made
+ *  with — the sequence step asks for this repeatedly. */
+async function dotsDoc(onProgress) {
+  const P = await playerLib();
+  const params = dotsParams();
+  const key = JSON.stringify([E().id, S.job, S.nFrames, params]);
+  if (DOTS_CACHE && DOTS_CACHE.key === key) return DOTS_CACHE;
+  let bytes, doc;
+  if (E().exportDots) {
+    const r = await E().exportDots(params, onProgress);
+    bytes = r.bytes;
+    doc = await P.unpack(bytes);
+  } else {
+    const frames = [];
+    for (let i = 0; i < S.nFrames; i++) {
+      const rec = await frameAt(i);
+      const c = ctx2d(S.W, S.H, 'exp');
+      c.clearRect(0, 0, S.W, S.H);
+      c.drawImage(rec.frame, 0, 0);
+      const src = c.getImageData(0, 0, S.W, S.H).data;
+      const masks = rec.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, 'x' + k));
+      const r = dotsOn(src, S.W, S.H, masks, S.P, BLUE);
+      frames.push(r.on.map((o) => dotXY(r.F, o)));
+      if (onProgress) onProgress({ done: i + 1, total: S.nFrames,
+                                   text: `${i + 1}/${S.nFrames}` });
+      if (i % 8 === 0) await sleep(0);
+    }
+    const cols = S.subjects.map((x) => x.palette[x.palette.length - 1]);
+    doc = { w: S.W, h: S.H, fps: S.fps, dotpx: S.P.dotpx,
+            palette: [S.bg].concat(cols), bgIndex: 0, bg: S.bg,
+            subjects: cols.map((c) => ({ color: c })), frames };
+    bytes = await P.pack(doc);
+  }
+  DOTS_CACHE = { key, doc, bytes };
+  return DOTS_CACHE;
+}
+
+async function exportDots(asJSON) {
+  const btn = asJSON ? $('#bDotsJson') : $('#bDots');
+  btn.disabled = true;
+  const info = $('#rinfo'); info.hidden = false; info.classList.remove('err');
+  info.textContent = 'reading dot positions…';
+  const t0 = performance.now();
+  try {
+    const P = await playerLib();
+    const { doc, bytes } = await dotsDoc((pr) => {
+      info.textContent = `dot positions ${pr.text}`;
+    });
+    const counts = doc.frames.map((f) => f.reduce((a, x) => a + (x.length >> 1), 0));
+    const mean = counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length);
+    const name = `${S.fileName || 'dither'}.dots`;
+    let size;
+    if (asJSON) {
+      const j = new Blob([JSON.stringify(P.toJSON(doc))], { type: 'application/json' });
+      size = j.size;
+      download(j, name + '.json');
+    } else {
+      size = bytes.length;
+      download(new Blob([bytes], { type: 'application/octet-stream' }), name + '.gz');
+    }
+    info.textContent = `${doc.frames.length} frames · ${mean.toFixed(0)} dots/frame `
+      + `· ${(size / 1024).toFixed(0)} KB ${asJSON ? 'JSON' : '.dots.gz'} `
+      + `· ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+  } catch (err) {
+    info.classList.add('err');
+    info.textContent = 'dot export failed: ' + why(err);
+  }
+  btn.disabled = false;
+}
+$('#bDots').addEventListener('click', () => exportDots(false));
+$('#bDotsJson').addEventListener('click', () => exportDots(true));
+
+/* ---------------------------------------------------------- static shapes
+ * A shape becomes dots through the same pipeline a clip does: draw it dark on
+ * light, hand it to `dotsOn` with a full-frame mask, keep the positions. So a
+ * ring is dithered, not plotted. */
+function drawRing(g, W, H) {
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  const S0 = Math.min(W, H);
+  g.save(); g.translate(W / 2, H / 2);
+  const r = S0 * 0.32;
+  const grad = g.createRadialGradient(0, 0, r * 0.62, 0, 0, r * 1.06);
+  grad.addColorStop(0, '#fff'); grad.addColorStop(0.35, '#111');
+  grad.addColorStop(0.7, '#111'); grad.addColorStop(1, '#fff');
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(0, 0, r * 1.06, 0, Math.PI * 2); g.fill();
+  g.restore();
+}
+
+function drawCoral(g, W, H) {
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  const S0 = Math.min(W, H);
+  g.save(); g.translate(W / 2, H * 0.9); g.scale(S0, S0);
+  const rnd = DP.mulberry32(1337);
+  g.lineCap = 'round';
+  (function branch(x, y, ang, len, wid, depth) {
+    if (depth > 8 || len < 0.006) return;
+    const ex = x + Math.cos(ang) * len, ey = y + Math.sin(ang) * len;
+    const cx = x + Math.cos(ang - 0.25) * len * 0.55;
+    const cy = y + Math.sin(ang - 0.25) * len * 0.55;
+    g.lineWidth = wid;
+    g.strokeStyle = 'rgba(0,0,0,' + (0.30 + 0.055 * depth).toFixed(3) + ')';
+    g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(cx, cy, ex, ey); g.stroke();
+    const n = rnd() < 0.22 ? 3 : 2;
+    for (let i = 0; i < n; i++) {
+      const spread = (i - (n - 1) / 2) * (0.42 + rnd() * 0.24);
+      branch(ex, ey, ang + spread + (rnd() - 0.5) * 0.16,
+             len * (0.70 + rnd() * 0.14), wid * 0.70, depth + 1);
+    }
+  })(0, 0, -Math.PI / 2, 0.20, 0.030, 0);
+  g.restore();
+}
+
+async function addShape(kind, bitmap) {
+  await playerLib();
+  const W = seqW(), H = seqH();
+  const c = ctx2d(W, H, 'shape');
+  if (bitmap) {
+    c.fillStyle = '#fff'; c.fillRect(0, 0, W, H);
+    const k = Math.min(W / bitmap.width, H / bitmap.height) * 0.86;
+    const w = bitmap.width * k, h = bitmap.height * k;
+    c.drawImage(bitmap, (W - w) / 2, (H - h) / 2, w, h);
+  } else if (kind === 'coral') drawCoral(c, W, H);
+  else drawRing(c, W, H);
+  const src = c.getImageData(0, 0, W, H).data;
+  const mask = new Float32Array(W * H).fill(1);
+  const r = dotsOn(src, W, H, [mask], S.P, BLUE);
+  const xy = dotXY(r.F, r.on[0]);
+  if (!xy.length) { toast('that shape came out empty', true); return; }
+  const hold = Math.max(1, +$('#seqHold').value || 30);
+  S.library.push({ name: kind, kind: 'shape', color: seqColor(),
+                   frames: new Array(hold).fill(xy), w: W, h: H,
+                   dots: xy.length >> 1 });
+  renderLibrary();
+  toast(`${kind}: ${xy.length >> 1} dots`);
+}
+
+const seqW = () => (S.library[0] ? S.library[0].w : (S.W || 1280));
+const seqH = () => (S.library[0] ? S.library[0].h : (S.H || 720));
+const seqColor = () => (S.library[0] ? S.library[0].color
+  : (S.subjects[0] ? S.subjects[0].palette.slice(-1)[0] : '#b0413e'));
+
+/* ------------------------------------------------------------- the library */
+async function captureSegment() {
+  const btn = $('#bCap'); btn.disabled = true;
+  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
+  info.textContent = 'reading dot positions…';
+  try {
+    const { doc } = await dotsDoc((pr) => { info.textContent = 'dots ' + pr.text; });
+    const k = Math.max(0, +$('#seqSubj').value || 0);
+    const len = Math.max(2, +$('#seqLen').value);
+    const start = Math.min(S.cur, Math.max(0, doc.frames.length - 2));
+    const frames = [];
+    for (let i = start; i < Math.min(doc.frames.length, start + len); i++) {
+      frames.push(doc.frames[i][k] || new Uint16Array(0));
+    }
+    const dots = frames.reduce((a, f) => a + (f.length >> 1), 0) / frames.length;
+    S.library.push({
+      name: `${S.fileName || 'clip'} #${(S.subjects[k] || {}).id || k + 1} `
+        + `${start}–${start + frames.length - 1}`,
+      kind: 'segment', color: doc.subjects[k].color, frames,
+      w: doc.w, h: doc.h, dots: Math.round(dots),
+    });
+    renderLibrary();
+    info.textContent = `captured ${frames.length} frames from ${start}, `
+      + `${Math.round(dots)} dots a frame`;
+  } catch (err) {
+    info.classList.add('err');
+    info.textContent = 'capture failed: ' + why(err);
+  }
+  btn.disabled = false;
+}
+
+function renderLibrary() {
+  const wrap = $('#seqlist'); wrap.textContent = '';
+  S.library.forEach((it, i) => {
+    const b = document.createElement('span');
+    b.className = 'chip seqit';
+    const sw = document.createElement('span');
+    sw.className = 'sw'; sw.style.background = it.color;
+    const nm = document.createElement('span');
+    nm.textContent = `${i + 1}. ${it.name} · ${it.frames.length}f · ${it.dots} dots`;
+    b.append(sw, nm);
+    const mk = (label, fn, title) => {
+      const x = document.createElement('button');
+      x.className = 'lnk'; x.textContent = label; x.title = title;
+      x.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
+      b.append(x);
+    };
+    if (i > 0) mk('↑', () => { const t = S.library[i - 1]; S.library[i - 1] = it;
+                               S.library[i] = t; renderLibrary(); }, 'move earlier');
+    mk('✕', () => { S.library.splice(i, 1); renderLibrary(); }, 'remove');
+    wrap.append(b);
+  });
+  const n = S.library.length;
+  $('#vSeq').textContent = n ? `${n} item${n > 1 ? 's' : ''}` : 'nothing captured yet';
+  $('#s6sum').textContent = n ? `${n} · ${(n - 1)} morph${n === 2 ? '' : 's'}` : '';
+  const mixed = S.library.some((x) => x.w !== seqW() || x.h !== seqH());
+  $('#seqwarn').hidden = !mixed;
+  ['#bSeqPrev', '#bSeqDots', '#bSeqVideo'].forEach((id) => { $(id).disabled = n < 1; });
+}
+
+function buildSubjectPicker() {
+  const sel = $('#seqSubj'); sel.textContent = '';
+  S.subjects.forEach((x, i) => {
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = '#' + x.id;
+    sel.append(o);
+  });
+  $('#bCap').disabled = !dotsReady();
+  $('#capnote').textContent = dotsReady()
+    ? 'Captures from the frame the transport is on, in the current look.'
+    : 'Track a subject and pick the dots look to capture from this clip. '
+      + 'Static shapes work without one.';
+}
+
+/* ------------------------------------------------------------ the sequence */
+async function buildSeq() {
+  const P = await playerLib();
+  if (!S.library.length) throw new Error('nothing in the sequence yet');
+  const doc = P.buildSequence(S.library.map((x) => ({
+    name: x.name, frames: x.frames, color: x.color,
+  })), {
+    w: seqW(), h: seqH(), fps: S.fps || 30, dotpx: S.P.dotpx, bg: S.bg,
+    color: seqColor(), durationMs: +$('#seqDur').value, seed: S.P.seed,
+  });
+  S.seqDoc = doc;
+  return doc;
+}
+
+async function seqPreview() {
+  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
+  try {
+    const P = await playerLib();
+    const doc = await buildSeq();
+    $('#seqwrap').hidden = false;
+    $('#pwrap').hidden = true; $('#vwrap').hidden = true; $('#camwrap').hidden = true;
+    $('#empty').hidden = true;
+    if (!PLAYER) {
+      PLAYER = new P.Player($('#seqcv'), { loop: true, onFrame: (f) => {
+        $('#seqframe').textContent = `${f} / ${doc.frames.length - 1}`;
+      } });
+    }
+    PLAYER.setDoc(doc);
+    PLAYER.play();
+    $('#bSeqPlay').textContent = 'pause';
+    const morphs = doc.marks.filter((m) => m.kind === 'morph');
+    info.textContent = `${doc.frames.length} frames · ${doc.fps} fps · `
+      + `${(doc.frames.length / doc.fps).toFixed(1)} s · ${morphs.length} morph`
+      + `${morphs.length === 1 ? '' : 's'} of `
+      + `${morphs.map((m) => m.frames).join('/')} frames`;
+  } catch (err) {
+    info.classList.add('err');
+    info.textContent = 'preview failed: ' + why(err);
+  }
+}
+
+async function seqExportDots() {
+  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
+  try {
+    const P = await playerLib();
+    const doc = await buildSeq();
+    const bytes = await P.pack(doc);
+    download(new Blob([bytes], { type: 'application/octet-stream' }),
+             'sequence.dots.gz');
+    info.textContent = `${doc.frames.length} frames · `
+      + `${(bytes.length / 1024).toFixed(0)} KB .dots.gz`;
+  } catch (err) {
+    info.classList.add('err');
+    info.textContent = 'export failed: ' + why(err);
+  }
+}
+
+/** A sequence as a video. The server rasterises the dot positions it is given
+ *  (one implementation of the morph, in JS); without one, MediaRecorder does
+ *  the same job in the tab and gives WebM. */
+async function seqExportVideo() {
+  const info = $('#seqinfo'); info.hidden = false; info.classList.remove('err');
+  const btn = $('#bSeqVideo'); btn.disabled = true;
+  try {
+    const P = await playerLib();
+    const doc = await buildSeq();
+    const bytes = await P.pack(doc);
+    let r;
+    if (E().renderSequence) {
+      info.textContent = 'rendering on the server…';
+      r = await E().renderSequence(bytes, currentFormat().id);
+    } else {
+      info.textContent = 'recording in the tab…';
+      r = await recordSequence(doc, (pr) => {
+        info.textContent = `recording ${pr.done}/${pr.total}`;
+      });
+    }
+    const a = $('#seqdl');
+    a.href = r.url; a.download = 'sequence.' + r.ext; a.hidden = false;
+    const v = $('#seqvid');
+    if (r.ext !== 'gif' && r.ext !== 'mov') { v.src = r.url; v.hidden = false; }
+    info.textContent = `${r.frames} frames · ${r.ext.toUpperCase()} · `
+      + `${(r.bytes / 1e6).toFixed(2)} MB`
+      + (r.elapsedS ? ` · ${r.elapsedS.toFixed(1)} s` : '');
+  } catch (err) {
+    info.classList.add('err');
+    info.textContent = 'render failed: ' + why(err);
+  }
+  btn.disabled = false;
+}
+
+/** MediaRecorder over the player's own rasteriser — the browser engine's
+ *  answer to "render this sequence". */
+async function recordSequence(doc, onProgress) {
+  const P = await playerLib();
+  const cv = document.createElement('canvas');
+  cv.width = doc.w; cv.height = doc.h;
+  const g = cv.getContext('2d');
+  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const mime = types.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!mime) throw new Error('this browser has no MediaRecorder WebM encoder');
+  const img = g.createImageData(doc.w, doc.h);
+  const stream = cv.captureStream(0);
+  const vtrack = stream.getVideoTracks()[0];
+  const chunks = [];
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12e6 });
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise((ok) => { rec.onstop = ok; });
+  const t0 = performance.now();
+  rec.start();
+  const dt = 1000 / doc.fps;
+  for (let i = 0; i < doc.frames.length; i++) {
+    const fs = performance.now();
+    P.paintFrame(img.data, doc.w, doc.h, doc, doc.frames[i], { bg: doc.bg });
+    g.putImageData(img, 0, 0);
+    vtrack.requestFrame();
+    if (onProgress) onProgress({ done: i + 1, total: doc.frames.length });
+    await sleep(Math.max(0, dt - (performance.now() - fs)));
+  }
+  await sleep(dt * 2);
+  rec.stop(); await stopped; vtrack.stop();
+  const blob = new Blob(chunks, { type: mime });
+  return { url: URL.createObjectURL(blob), ext: 'webm', bytes: blob.size,
+           frames: doc.frames.length,
+           elapsedS: (performance.now() - t0) / 1000 };
+}
+
+$('#bCap').addEventListener('click', captureSegment);
+$('#seqLen').addEventListener('input', (e) => { $('#vSeqLen').textContent = e.target.value + ' frames'; });
+$('#seqHold').addEventListener('input', (e) => { $('#vSeqHold').textContent = e.target.value + ' frames'; });
+$('#seqDur').addEventListener('input', (e) => { $('#vSeqDur').textContent = e.target.value + ' ms'; });
+$$('#shapes [data-shape]').forEach((b) => b.addEventListener('click', () => addShape(b.dataset.shape)));
+$('#bShapeImg').addEventListener('click', () => $('#shapeFile').click());
+$('#shapeFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try { await addShape(f.name.replace(/\.[^.]+$/, ''), await createImageBitmap(f)); }
+  catch (err) { toast('could not read that image: ' + err.message, true); }
+});
+$('#bSeqClear').addEventListener('click', () => { S.library = []; renderLibrary(); });
+$('#bSeqPrev').addEventListener('click', seqPreview);
+$('#bSeqDots').addEventListener('click', seqExportDots);
+$('#bSeqVideo').addEventListener('click', seqExportVideo);
+$('#bSeqPlay').addEventListener('click', () => {
+  if (!PLAYER) return;
+  PLAYER.toggle();
+  $('#bSeqPlay').textContent = PLAYER.playing ? 'pause' : 'play';
+});
+$('#bSeqBack').addEventListener('click', () => {
+  $('#seqwrap').hidden = true;
+  if (PLAYER) PLAYER.pause();
+  $('#empty').hidden = S.kind !== 'none';
+  $('#vwrap').hidden = S.kind === 'none';
+});
+
 /* ======================================================== the engine chip */
 function paintEngine() {
   const e = E();
@@ -1759,6 +2215,10 @@ async function checkModels() {
     S.trim = { start, end }; paintTrim();
     return { start, end, duration: S.srcDuration };
   };
+  window.DV_dots = { doc: dotsDoc, params: dotsParams, lib: playerLib,
+                     library: () => S.library, build: buildSeq,
+                     capture: captureSegment, shape: addShape,
+                     preview: seqPreview, player: () => PLAYER };
   window.DV_setFormat = (id) => {
     S.format = id; $('#sFmt').value = id; paintFormat();
     return currentFormat();

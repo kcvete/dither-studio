@@ -232,11 +232,69 @@
           <div class="note" id="fmtnote"></div>
         </div>
         <div class="row"><button class="btn go" id="bExport">Export</button></div>
+        <div id="dotsexp" hidden>
+          <div class="lbl"><span>Dot data</span></div>
+          <div class="row">
+            <button class="btn" id="bDots">.dots.gz</button>
+            <button class="btn" id="bDotsJson">.dots.json</button>
+          </div>
+          <div class="note">The dots as positions instead of pixels — replayed by
+            <b>web/player/</b> at any colour, size or background. The JSON variant
+            is the same numbers, readable, about 8&times; the bytes.</div>
+        </div>
         <div id="rprog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
         <div id="rinfo" class="stat" hidden></div>
         <a id="dl" class="btn dl" hidden download>download</a>
         <video id="outvid" hidden controls loop playsinline></video>
         <img id="outimg" hidden alt="exported GIF">
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------------------- step 6 -->
+    <section class="step" id="st6" data-open="0" hidden>
+      <div class="sh"><i>6</i><span>Sequence</span><em id="s6sum"></em></div>
+      <div class="sb">
+        <div class="note">A sequence is one swarm changing shape: segments of
+          tracked clips and static shapes, morphed into each other. It keeps what
+          you capture, so a clip can morph into a subject from another clip.</div>
+
+        <div class="lbl"><span>Capture from this clip</span></div>
+        <div class="row">
+          <select id="seqSubj"></select>
+          <button class="btn" id="bCap">capture segment</button>
+        </div>
+        <div class="mini"><span>length</span>
+          <input type="range" id="seqLen" min="4" max="150" step="1" value="45">
+          <b id="vSeqLen">45 frames</b></div>
+        <div class="note" id="capnote"></div>
+
+        <div class="lbl"><span>Static shapes</span></div>
+        <div class="chips" id="shapes">
+          <button class="chip" data-shape="ring">ring</button>
+          <button class="chip" data-shape="coral">coral</button>
+          <button class="chip" id="bShapeImg">from image…</button>
+        </div>
+        <input type="file" id="shapeFile" accept="image/*" hidden>
+        <div class="mini"><span>hold</span>
+          <input type="range" id="seqHold" min="1" max="120" step="1" value="30">
+          <b id="vSeqHold">30 frames</b></div>
+
+        <div class="lbl"><span>Sequence</span><span id="vSeq"></span></div>
+        <div class="chips" id="seqlist"></div>
+        <div class="note warn" id="seqwarn" hidden>These items are different sizes —
+          the sequence uses the first one's frame, so the rest will sit off centre.</div>
+        <div class="mini"><span>morph</span>
+          <input type="range" id="seqDur" min="200" max="2500" step="50" value="900">
+          <b id="vSeqDur">900 ms</b></div>
+        <div class="row">
+          <button class="btn go" id="bSeqPrev">preview</button>
+          <button class="btn" id="bSeqDots">.dots.gz</button>
+          <button class="btn" id="bSeqVideo">render video</button>
+          <button class="btn" id="bSeqClear">clear</button>
+        </div>
+        <div id="seqinfo" class="stat" hidden></div>
+        <a id="seqdl" class="btn dl" hidden download>download</a>
+        <video id="seqvid" hidden controls loop playsinline></video>
       </div>
     </section>
   </aside>
@@ -262,6 +320,15 @@
     <div id="pwrap" hidden>
       <div id="pstage"><img id="pimg" alt="prompt frame"><canvas id="pov"></canvas></div>
       <div class="hint" id="phint">click what you want &middot; shift-click what you don't &middot; drag a box</div>
+    </div>
+
+    <div id="seqwrap" hidden>
+      <div id="seqstage"><canvas id="seqcv"></canvas></div>
+      <div id="transport">
+        <button class="chip" id="bSeqPlay" aria-pressed="false">pause</button>
+        <span class="mono" id="seqframe">0 / 0</span>
+        <button class="chip" id="bSeqBack">back to the clip</button>
+      </div>
     </div>
 
     <div id="vwrap" hidden>

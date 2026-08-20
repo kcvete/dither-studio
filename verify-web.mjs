@@ -34,6 +34,11 @@ const BASE = process.argv[2] || 'http://127.0.0.1:8765';
 const CLIP = process.argv[3] || path.join(HERE, 'sample.mp4');
 const ENTRY = process.argv[4] || path.join(HERE, 'docs', 'entry-clip.mp4');
 const STILL = process.argv[5] || CLIP.replace(/\.\w+$/, '.jpg');
+/* A second clip, for the morph that goes from a subject in one clip to a
+ * subject in another. Defaults to the tennis job's source; if it is not there
+ * the sequence run still does clip -> static shape. */
+const CLIP2 = process.argv[6]
+  || path.join(HERE, 'jobs', '0e22cc3753bc', 'source.mp4');
 const DOCS = path.join(HERE, 'docs');
 fs.mkdirSync(DOCS, { recursive: true });
 
@@ -46,6 +51,9 @@ const SUBJECT_A = { box: [435, 95, 625, 360], point: [545, 205] };
 const TREE = { box: [150, 1, 206, 430], point: [178, 220], frame: 0 };
 const JOGGER = { box: [10, 256, 98, 452], point: [52, 318], frame: 48 };
 const JOGGER_ENTERS = 38;
+/* the tennis player, in the frame of jobs/0e22cc3753bc/source.mp4 — the box is
+ * the one that job's own meta.json recorded */
+const TENNIS = { box: [406, 152, 831, 719], point: [600, 400], frame: 0 };
 
 const R = {
   base: BASE, clip: CLIP, entryClip: ENTRY, still: STILL,
@@ -664,7 +672,7 @@ async function runCamera(engineId, deep) {
     r.photoExport = await waitText(page, '#rinfo', /PNG|failed/, 60000);
     check(`${engineId} · the photo exports a PNG`, !/failed/.test(r.photoExport),
           r.photoExport);
-    const png = path.join(DOCS, `w-camera-photo-${engineId}.export.png`);
+    const png = path.join(DOCS, `w-camera-photo-${engineId}-export.png`);
     r.photoBytes = await saveDownload(page, png);
     r.photoProbe = probe(png);
     check(`${engineId} · the exported PNG is the camera's own resolution`,
@@ -762,6 +770,234 @@ async function runCamera(engineId, deep) {
   return r;
 }
 
+/* ===== W7: the dots, as data — and the replay that has to match the render ===
+ * The claim a .dots.gz makes is strong: it is not a compression of the picture,
+ * it IS the picture's dots, and playing it back must land on the same pixels.
+ * So this compares the app's own rendered frame with the player's replay of the
+ * exported positions, byte for byte, on the same frames.
+ */
+async function runDots(engineId) {
+  const r = { engine: engineId };
+  const pref = engineId === 'browser' ? browserPref() : { mode: 'local', url: '', key: '' };
+  const { ctx, page } = await newPage(pref);
+  await loadClip(page, CLIP, BR.seconds);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+  await promptBoxPoint(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.trackText = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check(`${engineId} · dots run tracks`, !/failed/.test(r.trackText), r.trackText);
+  await setMode(page, 'dots');
+
+  const t0 = Date.now();
+  r.stats = await page.evaluate(async () => {
+    const { doc, bytes } = await window.DV_dots.doc();
+    const counts = doc.frames.map((f) => f.reduce((a, x) => a + (x.length >> 1), 0));
+    return { frames: doc.frames.length, w: doc.w, h: doc.h, fps: doc.fps,
+             dotpx: doc.dotpx, palette: doc.palette, bytes: bytes.length,
+             dotsMean: Math.round(counts.reduce((a, b) => a + b, 0) / counts.length),
+             dotsMax: Math.max(...counts) };
+  });
+  r.seconds = +((Date.now() - t0) / 1000).toFixed(1);
+  check(`${engineId} · the dot data covers every frame`,
+        r.stats.frames === r.nFrames, `${r.stats.frames} vs ${r.nFrames}`);
+  check(`${engineId} · there are dots in it`, r.stats.dotsMean > 100,
+        JSON.stringify(r.stats));
+
+  // The replay test: the app's own rendered frame against the player's replay
+  // of the exported positions, byte for byte.
+  //
+  // On the browser engine both sides are the same JS, so the answer has to be
+  // zero. On the server engine the dots are decided in numpy and the preview
+  // paints them in JS, and a cell whose weight sits within a float rounding
+  // error of the blue-noise threshold can land on the other side of it: a
+  // couple of dots a frame, 9 bytes each (a 3x3 square). That is a real
+  // difference and it is measured rather than hidden — it is also why the
+  // export always comes from the same engine that rendered the preview.
+  r.replay = await page.evaluate(async (frames) => {
+    const P = await window.DV_dots.lib();
+    const { doc } = await window.DV_dots.doc();
+    const out = [];
+    for (const i of frames) {
+      const img = await window.DV_composeAt(i);
+      const buf = new Uint8ClampedArray(doc.w * doc.h * 4);
+      P.paintFrame(buf, doc.w, doc.h, doc, doc.frames[i], { bg: doc.bg });
+      let bad = 0;
+      for (let q = 0; q < buf.length; q++) if (buf[q] !== img.data[q]) bad++;
+      out.push({ frame: i, bytes: buf.length, differing: bad });
+    }
+    return out;
+  }, [0, 12, Math.min(40, r.nFrames - 1)]);
+  for (const f of r.replay) {
+    if (engineId === 'browser') {
+      check(`${engineId} · frame ${f.frame} replays byte-identical`,
+            f.differing === 0, `${f.differing} of ${f.bytes} bytes differ`);
+    } else {
+      check(`${engineId} · frame ${f.frame} replays within a dot or two`,
+            f.differing / f.bytes < 5e-5,
+            `${f.differing} of ${f.bytes} bytes differ `
+            + `(${(f.differing / 9).toFixed(1)} dots)`);
+    }
+  }
+  r.replayWorstDots = Math.max(...r.replay.map((f) => f.differing)) / 9;
+
+  // and the JSON variant is the same numbers
+  r.json = await page.evaluate(async () => {
+    const P = await window.DV_dots.lib();
+    const { doc } = await window.DV_dots.doc();
+    const back = P.fromJSON(JSON.parse(JSON.stringify(P.toJSON(doc))));
+    let same = back.frames.length === doc.frames.length;
+    for (let i = 0; same && i < doc.frames.length; i++) {
+      for (let k = 0; k < doc.frames[i].length; k++) {
+        const a = doc.frames[i][k], b = back.frames[i][k];
+        if (a.length !== b.length) { same = false; break; }
+        for (let q = 0; q < a.length; q++) if (a[q] !== b[q]) { same = false; break; }
+      }
+    }
+    return { identical: same, bytes: JSON.stringify(P.toJSON(doc)).length };
+  });
+  check(`${engineId} · the JSON variant round-trips`, r.json.identical);
+  r.jsonBytes = r.json.bytes;
+  await page.screenshot({ path: path.join(DOCS, `w-dots-data-${engineId}.png`) });
+  await ctx.close();
+  return r;
+}
+
+/* ============ W8: the flagship — subject to subject, and subject to shape ====
+ * Clip A's subject morphs into clip B's subject, then into a ring rasterised
+ * through the same dither pipeline. Preview in the player, export the dot data,
+ * render the whole thing to MP4 on the server, and measure the player's own
+ * frame rate on the finished sequence.
+ */
+async function runSequence() {
+  const r = { twoClips: fs.existsSync(CLIP2) };
+  const { ctx, page } = await newPage({ mode: 'local', url: '', key: '' });
+
+  const trackAndCapture = async (file, box, at, len, seconds) => {
+    await loadClip(page, file, seconds);
+    await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+    await promptBoxPoint(page, box);
+    await page.click('#bTrack');
+    const t = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+    check('sequence · ' + path.basename(file) + ' tracks', !/failed/.test(t), t);
+    await setMode(page, 'dots');
+    await page.evaluate((i) => window.DV_draw(i), at); await sleep(500);
+    await openStep(page, 'st6');
+    await page.$eval('#seqLen', (el, v) => {
+      el.value = String(v); el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, len);
+    await page.click('#bCap');
+    return waitText(page, '#seqinfo', /captured|failed/, 300000);
+  };
+
+  r.captureA = await trackAndCapture(CLIP, SUBJECT_A, 100, 45, BR.seconds);
+  check('sequence · segment A captured', /captured/.test(r.captureA), r.captureA);
+  if (r.twoClips) {
+    // the tennis player, prompted with the box the job's own meta.json records
+    r.captureB = await trackAndCapture(CLIP2, TENNIS, 0, 45, 3);
+    check('sequence · segment B captured from the second clip',
+          /captured/.test(r.captureB), r.captureB);
+    r.libraryKept = await page.evaluate(() => window.DV_dots.library().length);
+    check('sequence · the library survived loading another clip',
+          r.libraryKept === 2, String(r.libraryKept));
+  }
+  await openStep(page, 'st6');
+  await page.click('#shapes .chip[data-shape="ring"]');
+  await sleep(2000);
+  r.library = await page.evaluate(() => window.DV_dots.library()
+    .map((x) => ({ name: x.name, kind: x.kind, frames: x.frames.length, dots: x.dots })));
+  check('sequence · the ring rasterised into dots',
+        (r.library[r.library.length - 1] || {}).dots > 500, JSON.stringify(r.library));
+
+  await page.click('#bSeqPrev');
+  r.preview = await waitText(page, '#seqinfo', /frames|failed/, 180000);
+  check('sequence · previews in the player', !/failed/.test(r.preview), r.preview);
+  r.doc = await page.evaluate(() => {
+    const d = window.DV.seqDoc;
+    const counts = d.frames.map((f) => f[0].length >> 1);
+    return { frames: d.frames.length, fps: d.fps, marks: d.marks,
+             counts: { min: Math.min(...counts), max: Math.max(...counts) } };
+  });
+  const morphs = r.doc.marks.filter((m) => m.kind === 'morph');
+  check('sequence · one morph per join',
+        morphs.length === r.library.length - 1,
+        `${morphs.length} morphs for ${r.library.length} items`);
+  check('sequence · a 900 ms morph is ~37 frames at 30 fps',
+        morphs.every((m) => Math.abs(m.frames - 37) <= 2),
+        JSON.stringify(morphs));
+  await sleep(1200);
+  await page.screenshot({ path: path.join(DOCS, 'w-sequence.png') });
+
+  // the dot data for the whole sequence
+  const dots = path.join(DOCS, 'w-sequence-export.dots.gz');
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 60000 }),
+    page.click('#bSeqDots'),
+  ]);
+  await dl.saveAs(dots);
+  r.dotsBytes = fs.statSync(dots).size;
+  const gz = fs.readFileSync(dots);
+  check('sequence · the export really is gzip', gz[0] === 0x1f && gz[1] === 0x8b);
+
+  // hand that same file to the server: dots in, MP4 out
+  const up = await page.request.post(`${BASE}/api/sequence`, {
+    multipart: { file: { name: 'sequence.dots.gz', mimeType: 'application/octet-stream',
+                         buffer: gz },
+                 format: 'mp4' },
+    timeout: 180000,
+  });
+  check('sequence · the server rasterises the dot data', up.ok(), String(up.status()));
+  r.server = await up.json();
+  const mp4 = path.join(DOCS, 'w-sequence-export.mp4');
+  const vid = await page.request.get(`${BASE}${r.server.url}`);
+  fs.writeFileSync(mp4, await vid.body());
+  r.mp4 = { bytes: fs.statSync(mp4).size, probe: probe(mp4) };
+  check('sequence · the MP4 has every frame of the sequence',
+        +r.mp4.probe.nb_read_frames === r.doc.frames,
+        `${r.mp4.probe.nb_read_frames} vs ${r.doc.frames}`);
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', mp4,
+    '-vf', `select='not(mod(n\,${Math.max(1, Math.floor(r.doc.frames / 15))}))',`
+      + 'scale=320:-1,tile=5x3', '-frames:v', '1', '-update', '1',
+    path.join(DOCS, 'seq-morph-sheet.png')]);
+
+  // and the player's own frame rate on the finished sequence
+  const demo = await ctx.newPage();
+  demo.on('console', (m) => { if (m.type() === 'error') R.consoleErrors.push('demo: ' + m.text()); });
+  demo.on('pageerror', (e) => R.pageErrors.push('demo: ' + String(e)));
+  await demo.goto(`${BASE}/player/demo.html?src=/api/sequence/${r.server.sequence}/dots.gz`);
+  await demo.waitForFunction(() => window.DP && window.DP.doc, null, { timeout: 60000 });
+  r.player = await demo.evaluate(async () => {
+    const P = window.DP;
+    P.pause();
+    let n = 0, worst = 0, sum = 0;
+    const t0 = performance.now();
+    await new Promise((ok) => {
+      const step = () => {
+        const a = performance.now();
+        P.draw(n % P.nFrames);
+        const dt = performance.now() - a;
+        sum += dt; if (dt > worst) worst = dt;
+        n++;
+        if (performance.now() - t0 > 3000) return ok();
+        requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+    const el = (performance.now() - t0) / 1000;
+    return { frames: P.nFrames, painted: n, seconds: +el.toFixed(2),
+             fps: +(n / el).toFixed(1), meanPaintMs: +(sum / n).toFixed(2),
+             worstPaintMs: +worst.toFixed(2) };
+  });
+  check('sequence · the player holds 60 fps', r.player.fps >= 60,
+        JSON.stringify(r.player));
+  check('sequence · a frame costs well under a 60 fps budget',
+        r.player.meanPaintMs < 16.6, JSON.stringify(r.player));
+  await demo.screenshot({ path: path.join(DOCS, 'w-player-demo.png') });
+  await demo.close();
+  await ctx.close();
+  return r;
+}
+
 /* ================================== K: the optional bearer-token gate ======== */
 async function runApiKey() {
   const r = {};
@@ -837,6 +1073,9 @@ try {
   R.runs.lasso = await runLasso();
   R.runs.cameraRemote = await runCamera('remote', true);
   R.runs.cameraBrowser = await runCamera('browser', false);
+  R.runs.dotsRemote = await runDots('remote');
+  R.runs.dotsBrowser = await runDots('browser');
+  R.runs.sequence = await runSequence();
   R.runs.entryBrowser = await runEntry('browser');
   R.runs.entryRemote = await runEntry('remote');
   R.runs.apiKey = await runApiKey();

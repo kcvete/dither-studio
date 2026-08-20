@@ -608,6 +608,77 @@ async function runTrim(page) {
   return r;
 }
 
+/* ---------- G: dot data and sequences, server side ------------------------
+ * The dots as positions rather than pixels, the .dots.gz they pack into, and
+ * the route that turns a finished sequence back into a video. The identity
+ * that matters is the last one: replaying a document has to land on exactly
+ * the pixels the renderer painted.
+ */
+async function runDotsServer(page) {
+  const r = {};
+  const job = await page.evaluate(() => window.DV.job);
+  r.job = job;
+  const res = await page.request.post(`${BASE}/api/jobs/${job}/dots`, {
+    data: { subjects: [{ id: 1, palette: ['#c9d4c5', '#b0413e'] }], json: true },
+    timeout: 300000,
+  });
+  if (!res.ok()) throw new Error('/dots failed: ' + res.status() + ' ' + await res.text());
+  r.stats = await res.json();
+  const gz = path.join(HERE, 'jobs', job, 'out.dots.gz');
+  const bytes = fs.readFileSync(gz);
+  if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) throw new Error('.dots.gz is not gzip');
+  r.mp4Bytes = fs.existsSync(path.join(HERE, 'jobs', job, 'out.mp4'))
+    ? fs.statSync(path.join(HERE, 'jobs', job, 'out.mp4')).size : null;
+  r.sizes = { gz: bytes.length, raw: r.stats.raw_bytes, json: r.stats.json_bytes,
+              mp4: r.mp4Bytes };
+  if (r.stats.frames < 10) throw new Error('dot data has ' + r.stats.frames + ' frames');
+  if (r.stats.dots_mean < 50) throw new Error('dot data is nearly empty: '
+    + JSON.stringify(r.stats));
+
+  // replaying the document must paint exactly what the renderer painted
+  const py = path.join(HERE, 'env', 'venv', 'bin', 'python');
+  const code = `
+import sys, json, numpy as np
+sys.path.insert(0, ${JSON.stringify(path.join(HERE, 'server'))})
+import render as R, dots as D
+from PIL import Image
+job = ${JSON.stringify(path.join(HERE, 'jobs', job))}
+doc = D.unpack(open(job + '/out.dots.gz','rb').read())
+a = R._params(dict(mode='dots', fps=doc['fps'], dotpx=doc['dotpx']))
+blue = R.blue_noise(64, int(a['seed'])).astype(np.float32)
+rgb = np.asarray(Image.open(job + '/frames/0010.jpg').convert('RGB'))
+H, W = rgb.shape[:2]
+F = R.dots_fields(H, W, a, blue)
+m = np.asarray(Image.open(job + '/masks/1/0010.png').convert('L'), np.float32) / 255.0
+painted = R._frame_dots(rgb, [m], a, F, [doc['subjects'][0]['color']], doc['bg'])
+replay = D.paint(doc, 10)
+print(json.dumps({'identical': bool(np.array_equal(painted, replay)),
+                  'differing_px': int((painted != replay).any(-1).sum()),
+                  'shape': list(painted.shape)}))
+`;
+  r.replay = JSON.parse(execFileSync(py, ['-c', code], { encoding: 'utf8' }).trim());
+  if (!r.replay.identical) {
+    throw new Error('replaying the dot data does not match the render: '
+      + JSON.stringify(r.replay));
+  }
+
+  // and the sequence route: dot positions in, video out
+  const up = await page.request.post(`${BASE}/api/sequence`, {
+    multipart: { file: { name: 'seq.dots.gz', mimeType: 'application/octet-stream',
+                         buffer: bytes }, format: 'mp4' },
+    timeout: 300000,
+  });
+  if (!up.ok()) throw new Error('/api/sequence failed: ' + up.status());
+  r.sequence = await up.json();
+  const out = path.join(HERE, 'jobs', r.sequence.sequence, 'out.mp4');
+  r.sequenceProbe = ffprobe(out);
+  if (+r.sequenceProbe.nb_read_frames !== r.stats.frames) {
+    throw new Error(`sequence mp4 has ${r.sequenceProbe.nb_read_frames} frames, `
+      + `dot data has ${r.stats.frames}`);
+  }
+  return r;
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -628,6 +699,7 @@ try {
   R.runs.trackedFast = await runTrackedFast(page);
   R.runs.formats = await runFormats(page);
   R.runs.trim = await runTrim(page);
+  R.runs.dots = await runDotsServer(page);
   R.runs.lasso = await runLasso(page);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);

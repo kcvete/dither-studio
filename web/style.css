@@ -99,10 +99,15 @@ body.dragging #drop b{opacity:1}
 .hero p{font-size:12.5px;line-height:1.65;opacity:.5;margin:0 0 18px}
 .hero p b{opacity:.85;font-weight:600}
 .hero .btn{display:inline-block;flex:none;padding:9px 22px}
-#pwrap,#vwrap,#camwrap{display:flex;flex-direction:column;align-items:center;gap:12px;
+#pwrap,#vwrap,#camwrap,#seqwrap{display:flex;flex-direction:column;align-items:center;gap:12px;
   width:100%;height:100%;min-height:0;justify-content:center}
-#pstage,#vstage,#camstage{position:relative;line-height:0;border:1px solid var(--line);border-radius:6px;
-  overflow:hidden;box-shadow:0 14px 60px #000a;background:#0a1310;max-width:100%;max-height:100%}
+#pstage,#vstage,#camstage,#seqstage{position:relative;line-height:0;border:1px solid var(--line);
+  border-radius:6px;overflow:hidden;box-shadow:0 14px 60px #000a;background:#0a1310;
+  max-width:100%;max-height:100%}
+#seqcv{display:block;max-width:100%;max-height:78vh;image-rendering:pixelated}
+.chip.seqit{cursor:default}
+.chip.seqit .lnk{margin-left:7px;opacity:.6}
+#seqvid{width:100%;margin-top:9px;border-radius:8px;display:block;background:#000}
 #camvid{display:block;max-width:100%;max-height:70vh}
 /* the recording light and the running clock, over the feed */
 #camstage b{position:absolute;left:12px;top:12px;width:11px;height:11px;border-radius:50%;
