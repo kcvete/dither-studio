@@ -11,3 +11,8 @@ node_modules/
 !bench/*.mp4
 bench/_res/
 .claude/
+
+# track-web: regenerable binaries (onnxexport/export_onnx.py, npm i onnxruntime-web)
+static/track-web/models/*.onnx
+static/track-web/ort/*.wasm
+static/track-web/ort/*.mjs

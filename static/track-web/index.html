@@ -1,0 +1,257 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Dither Studio — client-side tracking probe</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 20px; background:#111; color:#ddd }
+  canvas { border:1px solid #333; max-width:100%; image-rendering:auto }
+  button { font:inherit; padding:6px 12px; background:#222; color:#ddd; border:1px solid #444; cursor:pointer }
+  button:disabled { opacity:.4; cursor:default }
+  #log { white-space:pre-wrap; background:#000; padding:10px; border:1px solid #333; max-height:50vh; overflow:auto }
+  label { margin-right:14px }
+</style>
+
+<h2>EdgeTAM video tracking + dither, no server</h2>
+<div>
+  <label><input type="checkbox" id="fp16" checked> fp16</label>
+  <label><input type="checkbox" id="chain" checked> keep features on GPU</label>
+  <label>EP <select id="ep"><option>webgpu</option><option>wasm</option></select></label>
+  <label>frames <input id="n" value="150" size="4"></label>
+</div>
+<p>
+  <button id="run">run tracking</button>
+  <button id="stages">bench stages</button>
+  <button id="dith">bench dither.js</button>
+  <button id="iou">score vs masks_edgetam</button>
+</p>
+<canvas id="cv" width="640" height="360"></canvas>
+<div id="log"></div>
+
+<script type="module">
+import * as ort from './ort/ort.all.bundle.min.mjs';
+import { WebTracker } from './track.js';
+
+const L = document.getElementById('log');
+const log = (s) => { L.textContent += s + '\n'; L.scrollTop = 1e9; console.log(s); };
+const $ = (id) => document.getElementById(id);
+
+ort.env.wasm.wasmPaths = new URL('./ort/', import.meta.url).href;
+ort.env.wasm.numThreads = Math.min(8, navigator.hardwareConcurrency || 4);
+ort.env.logLevel = 'error';
+
+const CLIP = '../parkour/';
+const NF = 150;
+let tracker = null, results = null, W = 0, H = 0;
+
+async function frameRGBA(i, size) {
+  const im = new Image();
+  im.src = `${CLIP}frames/${String(i + 1).padStart(4, '0')}.jpg`;
+  await im.decode();
+  W = im.naturalWidth; H = im.naturalHeight;
+  const c = new OffscreenCanvas(size, size);
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(im, 0, 0, size, size);
+  return { rgba: g.getImageData(0, 0, size, size).data, img: im };
+}
+
+function draw(img, low, P) {
+  const cv = $('cv'), g = cv.getContext('2d');
+  cv.width = 640; cv.height = Math.round(640 * H / W);
+  g.drawImage(img, 0, 0, cv.width, cv.height);
+  const m = new OffscreenCanvas(P, P), mg = m.getContext('2d');
+  const id = mg.createImageData(P, P);
+  for (let i = 0; i < P * P; i++) {
+    const a = 1 / (1 + Math.exp(-low[i]));
+    id.data[i * 4] = 255; id.data[i * 4 + 1] = 40; id.data[i * 4 + 2] = 120;
+    id.data[i * 4 + 3] = a * 150;
+  }
+  mg.putImageData(id, 0, 0);
+  g.drawImage(m, 0, 0, cv.width, cv.height);
+}
+
+const guard = (fn) => async () => {
+  document.body.dataset.busy = '1';
+  try { await fn(); } catch (e) { log('ERROR ' + (e.stack || e)); }
+  finally { delete document.body.dataset.busy; }
+};
+
+async function ensure() {
+  const ep = $('ep').value, fp16 = $('fp16').checked, chain = $('chain').checked;
+  const key = `${ep}/${fp16}/${chain}`;
+  if (tracker && tracker.key === key) return tracker;
+  log(`\n== loading (${key}) ==`);
+  const t = new WebTracker(ort, { ep, fp16, chain });
+  await t.load(log);
+  t.key = key;
+  log(`total ${(t.bytes / 1e6).toFixed(1)} MB, load+compile ${t.loadMs.toFixed(0)} ms`);
+  if (performance.memory)
+    log(`JS heap ${(performance.memory.usedJSHeapSize / 1e6).toFixed(0)} MB`);
+  tracker = t;
+  return t;
+}
+
+$('run').onclick = guard(async () => {
+  const t = await ensure();
+  const n = Math.min(parseInt($('n').value, 10) || NF, NF);
+  const pr = await (await fetch(CLIP + 'prompt.json')).json();
+  t.reset();
+  const S = t.man.image_size;
+  const timing = {};
+  results = [];
+  // warm the graphs so the first frame is not paying JIT
+  const f0 = await frameRGBA(0, S);
+  const sx = S / W, sy = S / H, b = pr.box;
+  const pts = {
+    coords: new Float32Array([b[0] * sx, b[1] * sy, b[2] * sx, b[3] * sy,
+      pr.point[0] * sx, pr.point[1] * sy]),
+    labels: new Float32Array([2, 3, 1]),
+  };
+
+  const t0 = performance.now();
+  let io = 0;
+  for (let i = 0; i < n; i++) {
+    const ti = performance.now();
+    const fr = i === 0 ? f0 : await frameRGBA(i, S);
+    io += performance.now() - ti;
+    const r = await t.step(fr.rgba, i === 0 ? pts : null, timing);
+    results.push(r.low);
+    if (i % 10 === 0 || i === n - 1) draw(fr.img, r.low, r.size);
+  }
+  const ms = performance.now() - t0;
+  log(`\n${n} frames in ${(ms / 1000).toFixed(2)} s = ` +
+    `${(1000 * n / ms).toFixed(2)} fps end-to-end (incl. ${(io / n).toFixed(1)} ms/frame jpeg decode)`);
+  const net = ms - io;
+  log(`  excluding frame I/O: ${(1000 * n / net).toFixed(2)} fps (${(net / n).toFixed(1)} ms/frame)`);
+  for (const k of ['pre', 'enc', 'mat', 'hds', 'mec'])
+    log(`  ${k}  ${(timing[k] / n).toFixed(1)} ms/frame (wall-clock split, async)`);
+  if (performance.memory)
+    log(`JS heap ${(performance.memory.usedJSHeapSize / 1e6).toFixed(0)} MB`);
+});
+
+$('stages').onclick = guard(async () => {
+  // fresh sessions with CPU outputs: a gpu-buffer output returns before the GPU
+  // is done, so only a readback gives an honest per-stage number
+  const ep = $('ep').value, fp16 = $('fp16').checked;
+  const sfx = fp16 ? '.fp16' : '';
+  const dt = fp16 ? 'float16' : 'float32';
+  const T = (d, dims) => new ort.Tensor(dt, fp16
+    ? new Uint16Array(new Float16Array(d).buffer) : d, dims);
+  const m = await (await fetch('./models/manifest.json')).json();
+  const G = m.grid, S = m.image_size, D = m.mem_dim;
+  const mk = async (f) => ort.InferenceSession.create(
+    await (await fetch('./models/' + f)).arrayBuffer(),
+    { executionProviders: [ep], graphOptimizationLevel: 'all' });
+  const bench = async (s, feeds, n = 20) => {
+    for (let i = 0; i < 3; i++) await s.run(feeds);
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) await s.run(feeds);
+    return (performance.now() - t0) / n;
+  };
+  log(`\n== per-stage, ${ep}, ${fp16 ? 'fp16' : 'fp32'}, CPU readback ==`);
+  const enc = await mk(`encoder${sfx}.onnx`);
+  log(`  encoder  ${(await bench(enc, { image: T(new Float32Array(3 * S * S), [1, 3, S, S]) })).toFixed(1)} ms`);
+  const mat = await mk(`memattn${sfx}.onnx`);
+  log(`  memattn  ${(await bench(mat, {
+    feat: T(new Float32Array(m.hidden * G * G), [1, m.hidden, G, G]),
+    memory: T(new Float32Array(m.memlen * D), [m.memlen, 1, D]),
+    memory_pos: T(new Float32Array(m.memlen * D), [m.memlen, 1, D]),
+    mem_mask: T(new Float32Array(m.memlen), [1, 1, 1, m.memlen]),
+  })).toFixed(1)} ms`);
+  const hds = await mk(`heads${sfx}.onnx`);
+  log(`  heads    ${(await bench(hds, {
+    pix_feat: T(new Float32Array(m.hidden * G * G), [1, m.hidden, G, G]),
+    f0: T(new Float32Array(32 * G * 4 * G * 4), [1, 32, G * 4, G * 4]),
+    f1: T(new Float32Array(64 * G * 2 * G * 2), [1, 64, G * 2, G * 2]),
+    point_coords: T(new Float32Array(2), [1, 1, 2]),
+    point_labels: T(new Float32Array([-1]), [1, 1]),
+  })).toFixed(1)} ms`);
+  const mec = await mk('memenc.onnx');
+  log(`  memenc   ${(await bench(mec, {
+    pix_feat: new ort.Tensor('float32', new Float32Array(m.hidden * G * G), [1, m.hidden, G, G]),
+    low_res_mask: new ort.Tensor('float32', new Float32Array(G * 4 * G * 4), [1, 1, G * 4, G * 4]),
+  })).toFixed(1)} ms  (always fp32)`);
+});
+
+$('iou').onclick = guard(async () => {
+  if (!results) { log('run tracking first'); return; }
+  const P = 192;
+  const a = new OffscreenCanvas(W, H), ag = a.getContext('2d', { willReadFrequently: true });
+  const b = new OffscreenCanvas(P, P), bg = b.getContext('2d');
+  let sum = 0, min = 1;
+  for (let i = 0; i < results.length; i++) {
+    const im = new Image();
+    im.src = `${CLIP}masks_edgetam/${String(i).padStart(4, '0')}.png`;
+    await im.decode();
+    ag.drawImage(im, 0, 0, W, H);
+    const ref = ag.getImageData(0, 0, W, H).data;
+    const id = bg.createImageData(P, P);
+    for (let j = 0; j < P * P; j++) {
+      // upscale the soft mask, then threshold — the same order the server
+      // uses (interpolate logits, then sigmoid), so the comparison is not
+      // measuring a nearest-neighbour staircase
+      const v = 255 / (1 + Math.exp(-results[i][j]));
+      id.data[j * 4] = v; id.data[j * 4 + 3] = 255;
+    }
+    bg.putImageData(id, 0, 0);
+    ag.clearRect(0, 0, W, H);
+    ag.drawImage(b, 0, 0, W, H);
+    const got = ag.getImageData(0, 0, W, H).data;
+    let inter = 0, uni = 0;
+    for (let j = 0; j < W * H; j++) {
+      const g = got[j * 4] > 127, r = ref[j * 4] > 127;
+      if (g && r) inter++;
+      if (g || r) uni++;
+    }
+    const iou = uni ? inter / uni : 1;
+    sum += iou; if (iou < min) min = iou;
+  }
+  log(`\nIoU vs server masks: mean=${(sum / results.length).toFixed(4)} min=${min.toFixed(4)} over ${results.length} frames`);
+});
+
+/* Does the dither engine keep up with the tracker? Same call the app makes:
+   Dither.composeFrame(rgba, W, H, masks, params, palettes, bg). */
+$('dith').onclick = guard(async () => {
+  // dither.js is a classic script whose top-level `const Dither` lands in the
+  // global lexical scope, not on `window` — so load it as a script tag and
+  // reach it through an indirect eval rather than importing it as a module
+  if (!window.__dither) {
+    await new Promise((ok, no) => {
+      const s = document.createElement('script');
+      s.src = '../dither.js'; s.onload = ok; s.onerror = no;
+      document.head.appendChild(s);
+    });
+    window.__dither = (0, eval)('Dither');
+  }
+  const D = window.__dither;
+  D.setBlueNoise(new Float32Array(4096).map((_, i) => D.hash01(i >> 6, i & 63, 5, 7)));
+  const im = new Image();
+  im.src = `${CLIP}frames/0001.jpg`;
+  await im.decode();
+  const P = {
+    mode: 'bluenoise', algo: 'floyd-steinberg', matrix: 4, serpentine: false,
+    strength: 1, brightness: 0, contrast: 1, gamma: 1, invert: false, pixel: 1,
+    compose: 'cutout', seed: 7, n: 8000, cell: 4, dotpx: 3, fill: 0.7,
+    stray: 0.02, band: 9,
+  };
+  log('\n== dither.js (composeFrame) ==');
+  for (const [w, h, label] of [[960, 540, 'preview 960x540'],
+    [1280, 720, 'source 1280x720'], [1920, 1080, '1080p']]) {
+    const c = new OffscreenCanvas(w, h);
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(im, 0, 0, w, h);
+    const src = g.getImageData(0, 0, w, h).data;
+    // one subject mask, sized as the tracker delivers it
+    const mask = new Uint8ClampedArray(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++)
+        mask[y * w + x] = (x > w * 0.35 && x < w * 0.55 && y > h * 0.1 && y < h * 0.6) ? 255 : 0;
+    const pals = [['#000000', '#ffffff'], ['#1a1a2e', '#e94560']];
+    for (const [masks, tag] of [[[], 'whole frame'], [[mask], '1 subject']]) {
+      for (let i = 0; i < 3; i++) D.composeFrame(src, w, h, masks, P, pals, '#c9d4c5');
+      const t0 = performance.now(), N = 20;
+      for (let i = 0; i < N; i++) D.composeFrame(src, w, h, masks, P, pals, '#c9d4c5');
+      const ms = (performance.now() - t0) / N;
+      log(`  ${label.padEnd(18)} ${tag.padEnd(11)} ${ms.toFixed(1)} ms = ${(1000 / ms).toFixed(0)} fps`);
+    }
+  }
+});
+</script>
