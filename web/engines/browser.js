@@ -275,6 +275,10 @@ export class BrowserEngine {
       extractProgress: true,        // decode reports frame by frame
       uncapped: true,               // whole clip, however long it is
       original: true,               // the matched cut, straight off the decoded frames
+      // one subject at a time. The loop below was always one memory bank per
+      // subject, so "track only #2" is the same loop with a shorter list --
+      // #1's logits are simply never written over.
+      incrementalTrack: true,
       // what this browser could decode with, before any file is opened;
       // `decode` is filled in per clip by open() with what actually ran
       decodePaths: decodeSupport(),
@@ -866,14 +870,19 @@ export class BrowserEngine {
    * dies from there on. This loop never had that bug and the server no longer
    * does; batching subjects together here would reintroduce it.
    */
-  async track({ objects, imageSize }, onProgress) {
+  async track({ objects, imageSize, only }, onProgress) {
     const t = await this.loadTracker((s) => onProgress
       && onProgress({ done: 0, total: 1, text: s }), imageSize);
     const S = t.man.image_size;
     const N = this.clip.nFrames;
     const t0 = performance.now();
     const plans = [];
-    for (const o of objects) {
+    // INCREMENTAL: `only` narrows the run to a subset of the cast. Nothing
+    // else has to change -- each subject's logits live under its own key in
+    // this.masks and a subject that is not walked is not written, so the ones
+    // tracked in an earlier run stay exactly as they were.
+    const run = only ? objects.filter((o) => only.includes(o.id)) : objects;
+    for (const o of run) {
       const fp = Math.max(0, Math.min(N - 1, o.frameIdx | 0));
       plans.push({ o, fp, back: fp > 0, steps: N });
     }
@@ -932,10 +941,21 @@ export class BrowserEngine {
       device: this.ep.toUpperCase(), backend: this.fp16 ? 'fp16' : 'fp32',
       backendLine: this.backendLine(),
       imageSize: S, steps: total,
-      note: [objects.length > 1 ? `${objects.length} subjects, one pass each` : '',
+      tracked: [...this.masks.keys()], ran: run.map((o) => String(o.id)),
+      note: [run.length > 1 ? `${run.length} subjects, one pass each` : '',
              this.decodeNote(), this.tierNote || '', this.epNote || '',
              notes.join(' · ')].filter(Boolean).join(' · '),
     };
+  }
+
+  /** Forget one subject: its logits and its prompt frame. The tab is the
+   *  storage here, so this IS the delete -- there is nothing else to free. */
+  async forget(objId) {
+    const id = String(objId);
+    const had = this.masks.has(id);
+    this.masks.delete(id);
+    this.promptFrames.delete(id);
+    return { removed: id, existed: had, tracked: [...this.masks.keys()] };
   }
 
   /* ------------------------------------------------------------- export

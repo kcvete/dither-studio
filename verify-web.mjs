@@ -26,6 +26,10 @@
  *       with the mask polish on for the export and off again afterwards
  *   W4  browser · a polygon mask prompt (the heads_mask graph) -> tracked
  *   W5  browser · two subjects prompted on DIFFERENT frames, mask-area census
+ *   W11 browser · PER-SUBJECT INCREMENTAL TRACKING: #1 tracked alone, #2 added
+ *       and tracked on its own with #1's logits hashed across the run, #2's
+ *       prompt edited so it goes stale, #2 re-tracked alone, #1 hidden and
+ *       then removed — all of it in the tab, with no server anywhere near it
  *   WX  browser · the CANVAS: a tracked clip at 9:16 out of a 16:9 source —
  *       the crop path built in the tab from the mask logits, the dots
  *       re-measured at 1080x1920, the matched original cut on the same path,
@@ -73,11 +77,16 @@ const STILL = process.argv[5] || CLIP.replace(/\.\w+$/, '.jpg');
 const CLIP2 = process.argv[6] || ENTRY;
 const DOCS = path.join(HERE, 'docs');
 fs.mkdirSync(DOCS, { recursive: true });
+const AFTER = path.join(DOCS, 'ux-after');
+fs.mkdirSync(AFTER, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* the parkour athlete, in the reference clip's own 1280x720 pixels */
 const SUBJECT_A = { box: [435, 95, 625, 360], point: [545, 205] };
+/* the tree on the right edge of the same clip: large, static, and nothing
+ * to do with the athlete, which is what a second subject has to be */
+const SUBJECT_B = { box: [1005, 5, 1279, 470], point: [1150, 160] };
 /* docs/entry-clip.mp4 (Mixkit): a static park shot a jogger runs into.
  * The tree is there from frame 0; she is not in the shot until frame 38. */
 const TREE = { box: [150, 1, 206, 430], point: [178, 220], frame: 0 };
@@ -3115,6 +3124,185 @@ if (BR.ep === 'wasm') {
 }
 console.error('[verify-web] ' + BR.how + ' · EP ' + BR.ep);
 
+/* ---- W11: per-subject incremental tracking, in the tab -------------------
+ *
+ * The browser engine's tracking loop was already one memory bank per subject,
+ * so this is the same loop with a shorter list. What has to be proved is that
+ * the list really is shorter and that the subjects left out of it keep the
+ * logits they had: a hash over every stored logit array, before and after.
+ */
+const logitHashes = (page) => page.evaluate(() => {
+  const out = {};
+  for (const [id, seq] of window.DV.engine.masks) {
+    let h = 2166136261, filled = 0;
+    for (const a of seq) {
+      if (!a) { h ^= 0xfe; h = Math.imul(h, 16777619); continue; }
+      filled++;
+      // every 13th value: enough to catch a different track, cheap enough to
+      // run over 150 frames x 36864 logits without stalling the page
+      for (let q = 0; q < a.length; q += 13) {
+        h ^= Math.round((a[q] + 20) * 6) & 255; h = Math.imul(h, 16777619);
+      }
+    }
+    out[id] = { frames: filled, hash: (h >>> 0).toString(16) };
+  }
+  return out;
+});
+
+async function runSubjectsBrowser() {
+  const r = {};
+  const { ctx, page } = await newPage(browserPref());
+  await loadClip(page, CLIP, BR.seconds);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+
+  /* --- 1. one subject on its own ------------------------------------- */
+  await promptBoxPoint(page, SUBJECT_A);
+  r.ctaFirst = (await page.textContent('#bTrack')).trim();
+  let t0 = Date.now();
+  await page.click('#bTrack');
+  r.trackOne = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('browser · one subject tracks on its own', !/failed/.test(r.trackOne), r.trackOne);
+  r.secondsOne = +((Date.now() - t0) / 1000).toFixed(1);
+  r.masksOne = await logitHashes(page);
+  check('browser · only subject #1 has logits',
+        JSON.stringify(Object.keys(r.masksOne)) === '["1"]',
+        JSON.stringify(Object.keys(r.masksOne)));
+  r.stateOne = await page.evaluate(() => window.DV_subjects.list());
+  await page.screenshot({ path: path.join(AFTER, 'subjects-w1-tracked.png') });
+
+  /* --- 2. a second subject, tracked without touching the first -------- */
+  await openStep(page, 'st2');
+  await page.click('#bAdd'); await sleep(400);
+  await promptBoxPoint(page, SUBJECT_B);
+  r.plan = await page.evaluate(() => window.DV_subjects.plan());
+  check('browser · the button offers the new subject only',
+        JSON.stringify(r.plan.ids) === '[2]' && /1 new subject/.test(r.plan.cta),
+        JSON.stringify(r.plan));
+  r.chips = await page.$$eval('#subs .chip', (n) => n.map((e) => ({
+    text: e.textContent.replace(/\s+/g, ' ').trim(), state: e.dataset.state })));
+  check('browser · the chips say which subject is tracked and which is new',
+        r.chips[0].state === 'tracked' && r.chips[1].state === 'untracked',
+        JSON.stringify(r.chips));
+  await page.screenshot({ path: path.join(AFTER, 'subjects-w2-new.png') });
+
+  t0 = Date.now();
+  await page.click('#bTrack');
+  r.trackTwo = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('browser · the new subject tracks', !/failed/.test(r.trackTwo), r.trackTwo);
+  r.secondsTwo = +((Date.now() - t0) / 1000).toFixed(1);
+  r.masksTwo = await logitHashes(page);
+  check("browser · #1's logits survived the run byte for byte",
+        r.masksTwo['1'].hash === r.masksOne['1'].hash,
+        `${r.masksOne['1'].hash} -> ${r.masksTwo['1'].hash}`);
+  check('browser · #2 now has a full set of its own',
+        r.masksTwo['2'] && r.masksTwo['2'].frames === r.nFrames,
+        JSON.stringify(r.masksTwo['2']));
+  check('browser · and the run says what it kept',
+        /kept from an earlier run/.test(r.trackTwo), r.trackTwo);
+  await page.screenshot({ path: path.join(AFTER, 'subjects-w3-both.png') });
+
+  /* --- 3. a prompt edit makes exactly one subject stale --------------- */
+  await openStep(page, 'st2');
+  await page.evaluate(() => { window.DV_subjects.prompt(); window.DV.active = 1; });
+  await sleep(400);
+  const [ex, ey] = await stageXY(page, SUBJECT_B.point[0] - 40, SUBJECT_B.point[1] + 150);
+  await page.mouse.click(ex, ey);
+  await sleep(400);
+  r.stateStale = await page.evaluate(() => window.DV_subjects.list());
+  check('browser · editing #2 leaves #1 alone',
+        r.stateStale.find((x) => x.id === 2).state === 'stale'
+        && r.stateStale.find((x) => x.id === 1).state === 'tracked',
+        JSON.stringify(r.stateStale.map((x) => [x.id, x.state])));
+  r.planStale = await page.evaluate(() => window.DV_subjects.plan());
+  check('browser · and the button offers to re-track just it',
+        /Re-track #2/.test(r.planStale.cta), r.planStale.cta);
+  r.menu = await page.evaluate(() => window.DV_subjects.menu(1));
+  await page.screenshot({ path: path.join(AFTER, 'subjects-w4-menu.png') });
+  await page.evaluate(() => window.DV_subjects.closeMenu());
+
+  t0 = Date.now();
+  await page.evaluate(() => window.DV_subjects.track([2]));
+  r.trackAgain = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('browser · re-tracking one subject works', !/failed/.test(r.trackAgain),
+        r.trackAgain);
+  r.secondsAgain = +((Date.now() - t0) / 1000).toFixed(1);
+  r.masksAgain = await logitHashes(page);
+  check("browser · #1 did not move on a #2-only re-track",
+        r.masksAgain['1'].hash === r.masksOne['1'].hash,
+        `${r.masksOne['1'].hash} -> ${r.masksAgain['1'].hash}`);
+  check('browser · #2 did move',
+        r.masksAgain['2'].hash !== r.masksTwo['2'].hash,
+        `${r.masksTwo['2'].hash} -> ${r.masksAgain['2'].hash}`);
+
+  /* --- 4. hide, then remove ------------------------------------------ */
+  await page.evaluate(() => window.DV_draw(5)); await sleep(600);
+  r.activeBoth = await page.evaluate(() => window.DV_subjects.active());
+  await page.evaluate(() => window.DV_subjects.hide(1, true));
+  await sleep(400);
+  await page.evaluate(() => window.DV_draw(5)); await sleep(600);
+  r.activeHidden = await page.evaluate(() => window.DV_subjects.active());
+  r.masksHidden = await logitHashes(page);
+  check('browser · hiding a subject drops it from the render and keeps its masks',
+        JSON.stringify(r.activeHidden) === '[2]'
+        && r.masksHidden['1'].hash === r.masksOne['1'].hash,
+        JSON.stringify(r.activeHidden));
+  await page.screenshot({ path: path.join(AFTER, 'subjects-w5-hidden.png') });
+  await page.evaluate(() => window.DV_subjects.hide(1, false)); await sleep(400);
+
+  await page.evaluate(() => window.DV_subjects.remove(1));
+  await sleep(900);
+  r.masksLeft = await logitHashes(page);
+  check('browser · removing a subject forgets its logits',
+        !r.masksLeft['1'] && !!r.masksLeft['2'],
+        JSON.stringify(Object.keys(r.masksLeft)));
+  r.activeLeft = await page.evaluate(() => window.DV_subjects.active());
+  await page.evaluate(() => window.DV_draw(5)); await sleep(700);
+  r.censusLeft = await census(page);
+  await page.screenshot({ path: path.join(AFTER, 'subjects-w6-removed.png') });
+
+  /* --- 5. and the tab still exports what is left ---------------------- */
+  await openStep(page, 'st5');
+  await page.click('#bExport');
+  r.export = await waitText(page, '#rinfo', /rendered|failed/, 900000);
+  check('browser · what is left exports', !/failed/.test(r.export), r.export);
+  const out = path.join(DOCS, 'w-subjects.webm');
+  r.bytes = await saveDownload(page, out);
+  r.probe = r.bytes ? probe(out) : null;
+  check('browser · the export carries every frame',
+        r.probe && +r.probe.nb_read_frames === r.nFrames,
+        JSON.stringify(r.probe));
+  /* --- 6. and what splitting a run costs in the tab ------------------- *
+   * The browser engine walks one subject at a time whatever it is asked for,
+   * so two in one run should cost about what two separate runs cost. Measured
+   * rather than asserted: a joint run on the same clip at the same quality. */
+  await openStep(page, 'st2');
+  await page.evaluate(() => { window.DV_subjects.prompt(); });
+  await sleep(300);
+  await page.click('#bAdd'); await sleep(400);
+  await promptBoxPoint(page, SUBJECT_A);
+  t0 = Date.now();
+  await page.evaluate(() => window.DV_subjects.track(
+    window.DV.subjects.map((x) => x.id)));
+  r.trackBoth = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('browser · two subjects still track in one run', !/failed/.test(r.trackBoth),
+        r.trackBoth);
+  r.secondsBoth = +((Date.now() - t0) / 1000).toFixed(1);
+  r.runs = await page.evaluate(() => window.DV_subjects.runs());
+  r.cost = {
+    separately: +(r.runs.filter((x) => x.n === 1)
+      .slice(-2).reduce((a, x) => a + x.seconds, 0)).toFixed(2),
+    together: (r.runs.find((x) => x.n === 2) || {}).seconds,
+  };
+  check('browser · one run of two costs about what two runs of one cost',
+        r.cost.together > 0
+        && Math.abs(r.cost.together - r.cost.separately) / r.cost.separately < 0.4,
+        JSON.stringify(r.cost));
+  r.costNote = (await page.textContent('#tracknote') || '').replace(/\s+/g, ' ').trim();
+  await ctx.close();
+  return r;
+}
+
 /* DV_ONLY=tracked,sequence runs a subset. Unset runs all of it, which is what
  * the README's numbers were measured with. */
 const ONLY = (process.env.DV_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -3135,6 +3323,7 @@ try {
   await run('original', runOriginalBrowser);
   await run('range', runRangeBrowser);
   await run('tracked', runTracked);
+  await run('subjects', runSubjectsBrowser);
   await run('lasso', runLasso);
   await run('cameraRemote', runCamera, 'remote', true);
   await run('cameraBrowser', runCamera, 'browser', false);

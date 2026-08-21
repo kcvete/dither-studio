@@ -1,5 +1,5 @@
 {
- "base": "http://127.0.0.1:8765",
+ "base": "http://127.0.0.1:8931",
  "clip": "sample.mp4",
  "entryClip": "docs/entry-clip.mp4",
  "still": "sample.jpg",
@@ -11,27 +11,27 @@
     "sample.mp4": {
      "fast": {
       "path": "webcodecs-worker",
-      "ms": 1010,
+      "ms": 984,
       "note": "mp4 · avc1.64001f · hardware",
       "split": {
-       "readMs": 1,
+       "readMs": 2,
        "bootMs": 6,
        "demuxMs": 1,
-       "coreMs": 999,
-       "drawMs": 14,
-       "jpegMs": 5229,
-       "firstFrameMs": 49
+       "coreMs": 974,
+       "drawMs": 16,
+       "jpegMs": 5055,
+       "firstFrameMs": 42
       },
       "frames": 150,
       "bytes": 16178278
      },
      "slow": {
       "path": "video-seek",
-      "ms": 4654,
+      "ms": 4428,
       "frames": 150,
       "bytes": 16178278
      },
-     "speedup": 4.61,
+     "speedup": 4.5,
      "firstMeanAbs": 0,
      "lastMeanAbs": 0,
      "identical": true,
@@ -45,27 +45,27 @@
     "entry-clip.mp4": {
      "fast": {
       "path": "webcodecs-worker",
-      "ms": 1248,
+      "ms": 1222,
       "note": "mp4 · avc1.64001f · hardware",
       "split": {
-       "readMs": 2,
+       "readMs": 1,
        "bootMs": 7,
        "demuxMs": 1,
-       "coreMs": 1237,
-       "drawMs": 16,
-       "jpegMs": 6713,
-       "firstFrameMs": 8
+       "coreMs": 1210,
+       "drawMs": 18,
+       "jpegMs": 6371,
+       "firstFrameMs": 9
       },
       "frames": 149,
       "bytes": 50517072
      },
      "slow": {
       "path": "video-seek",
-      "ms": 5550,
+      "ms": 5344,
       "frames": 149,
       "bytes": 50517072
      },
-     "speedup": 4.45,
+     "speedup": 4.37,
      "firstMeanAbs": 0,
      "lastMeanAbs": 0,
      "identical": true,
@@ -79,27 +79,27 @@
     "cue-less WebM": {
      "fast": {
       "path": "webcodecs-worker",
-      "ms": 1295,
+      "ms": 1280,
       "note": "webm · vp8 · software",
       "split": {
        "readMs": 1,
        "bootMs": 6,
        "demuxMs": 1,
-       "coreMs": 1285,
-       "drawMs": 20,
-       "jpegMs": 895,
-       "firstFrameMs": 25
+       "coreMs": 1270,
+       "drawMs": 16,
+       "jpegMs": 879,
+       "firstFrameMs": 23
       },
       "frames": 149,
       "bytes": 14921709
      },
      "slow": {
       "path": "video-seek",
-      "ms": 15327,
+      "ms": 15308,
       "frames": 149,
       "bytes": 14921709
      },
-     "speedup": 11.84,
+     "speedup": 11.96,
      "firstMeanAbs": 0,
      "lastMeanAbs": 0,
      "identical": true,
@@ -113,30 +113,20 @@
     "90 s clip": {
      "fast": {
       "path": "webcodecs-worker",
-      "ms": 16727,
+      "ms": 17680,
       "note": "mp4 · avc1.64001f · hardware",
       "split": {
-       "readMs": 14,
-       "bootMs": 7,
+       "readMs": 13,
+       "bootMs": 8,
        "demuxMs": 2,
-       "coreMs": 16701,
-       "drawMs": 227,
-       "jpegMs": 91925,
+       "coreMs": 17654,
+       "drawMs": 273,
+       "jpegMs": 97216,
        "firstFrameMs": 8
       },
       "frames": 2700,
       "bytes": 291209004
      },
-     "slow": {
-      "path": "video-seek",
-      "ms": 82790,
-      "frames": 2700,
-      "bytes": 291209004
-     },
-     "speedup": 4.95,
-     "firstMeanAbs": 0,
-     "lastMeanAbs": 0,
-     "identical": true,
      "support": {
       "webcodecs": true,
       "offscreen": true,
@@ -168,6 +158,7 @@
      "exportPlayable": true,
      "stillSubjects": true,
      "reextract": true,
+     "incrementalTrack": true,
      "extractProgress": true,
      "uncapped": true,
      "original": true,
@@ -247,6 +238,7 @@
      "extractProgress": true,
      "uncapped": true,
      "original": true,
+     "incrementalTrack": true,
      "decodePaths": {
       "webcodecs": true,
       "offscreen": true,
@@ -311,8 +303,8 @@
     ]
    },
    "browserChip": "Browser · free",
-   "deadPort": 55715,
-   "badCustom": "could not reach http://127.0.0.1:55715 — running in the browser instead",
+   "deadPort": 60177,
+   "badCustom": "could not reach http://127.0.0.1:60177 — running in the browser instead",
    "afterBadCustom": {
     "id": "browser",
     "label": "Browser",
@@ -330,6 +322,7 @@
      "extractProgress": true,
      "uncapped": true,
      "original": true,
+     "incrementalTrack": true,
      "decodePaths": {
       "webcodecs": true,
       "offscreen": true,
@@ -451,7 +444,7 @@
    "slowHref": "https://github.com/kcvete/dither-studio#readme"
   },
   "stillDots": {
-   "fps": "1280×720 · 34 ms · 31500 dots",
+   "fps": "1280×720 · 32 ms · 31500 dots",
    "dots": 31500,
    "census": {
     "w": 1280,
@@ -474,9 +467,9 @@
     "select subjects"
    ],
    "button": "Use this selection",
-   "info": "1 subject in 0.08 s (768 px) · #1 12850 px",
+   "info": "1 subject in 0.06 s (768 px) · #1 12850 px",
    "firstSeconds": 1.7,
-   "segmentSeconds": 0.08,
+   "segmentSeconds": 0.06,
    "areas": {
     "1": 12654
    },
@@ -497,7 +490,7 @@
     "h": 720,
     "distinctColours": 4
    },
-   "dotsFps": "1280×720 · 38 ms · 709 dots",
+   "dotsFps": "1280×720 · 29 ms · 709 dots",
    "subjectDots": 709,
    "export": "1280×720 PNG · 27 KB · 709 dots · 1 subject, cutout · transparent background",
    "bytes": 27347,
@@ -522,9 +515,9 @@
     "select subjects"
    ],
    "button": "Use this selection",
-   "info": "1 subject in 0.07 s (768 px) · #1 12750 px",
+   "info": "1 subject in 0.11 s (768 px) · #1 12750 px",
    "firstSeconds": 0.6,
-   "segmentSeconds": 0.07,
+   "segmentSeconds": 0.11,
    "areas": {
     "1": 12750
    },
@@ -545,7 +538,7 @@
     "h": 720,
     "distinctColours": 4
    },
-   "dotsFps": "1280×720 · 37 ms · 707 dots",
+   "dotsFps": "1280×720 · 29 ms · 707 dots",
    "subjectDots": 707,
    "export": "1280×720 PNG · 27 KB · 707 dots · 1 subject, cutout · transparent background",
    "bytes": 27332,
@@ -565,7 +558,7 @@
   },
   "whole": {
    "decodeSeconds": 1.5,
-   "source": "150 frames · 1280×720 · 30 fps · 5.0 s · stays in this tab",
+   "source": "150 frames · 1280×720 · 30 fps · 5.0 s · WebCodecs · worker · stays in this tab",
    "nFrames": 150,
    "preview": {
     "w": 1280,
@@ -577,15 +570,15 @@
     "h": 720,
     "distinctColours": 4
    },
-   "render": "rendered 150 frames in 5.2 s (29.1 fps) · 3.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+   "render": "rendered 150 frames in 5.1 s (29.3 fps) · 3.2 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
    "renderSeconds": 5.6,
-   "bytes": 3303523,
+   "bytes": 3218124,
    "probe": {
     "codec_name": "vp9",
     "width": 1280,
     "height": 720,
     "pix_fmt": "yuv420p",
-    "r_frame_rate": "89/3",
+    "r_frame_rate": "179/6",
     "nb_read_frames": "150",
     "tags": {
      "alpha_mode": "1"
@@ -596,11 +589,11 @@
    "nFrames": 150,
    "checkboxOffered": true,
    "note": "A second file beside the render — same trim, same frames, same size, same rate, no dither — so the two lay on top of each other in an edit.",
-   "info": "rendered 150 frames in 5.2 s (29.0 fps) · 3.4 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 150 frames, WEBM, 2.1 MB",
-   "seconds": 10.7,
-   "ditheredBytes": 3446434,
+   "info": "rendered 150 frames in 5.1 s (29.2 fps) · 3.4 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 150 frames, WEBM, 2.1 MB",
+   "seconds": 10.6,
+   "ditheredBytes": 3418451,
    "originalName": "sample-ordered.original.webm",
-   "originalBytes": 2094883,
+   "originalBytes": 2080090,
    "dithered": {
     "codec_name": "vp9",
     "width": 1280,
@@ -617,7 +610,7 @@
     "width": 1280,
     "height": 720,
     "pix_fmt": "yuv420p",
-    "r_frame_rate": "353/12",
+    "r_frame_rate": "355/12",
     "nb_read_frames": "150",
     "tags": {
      "alpha_mode": "1"
@@ -625,19 +618,19 @@
    },
    "rates": [
     29.583,
-    29.417
+    29.583
    ],
-   "rateDriftPct": 0.56,
+   "rateDriftPct": 0,
    "frameMeanAbsDiff": {
     "0": 3.087,
-    "75": 2.243,
-    "149": 2.258
+    "75": 2.245,
+    "149": 2.255
    },
    "hiddenInSequence": true
   },
   "range": {
    "nFrames": 60,
-   "track": "tracked 60 frames in 5.6 s (10.7 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+   "track": "tracked 60 frames in 5.4 s (11.0 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
    "range": {
     "in": 15,
     "out": 44,
@@ -649,14 +642,14 @@
    },
    "label": "frames 15–44 of 60",
    "apiCalls": [],
-   "export": "rendered 30 frames in 1.1 s (27.5 fps) · frames 15–44 of 60 · 0.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 30 frames, WEBM, 0.4 MB",
-   "ditheredBytes": 125638,
+   "export": "rendered 30 frames in 1.1 s (27.6 fps) · frames 15–44 of 60 · 0.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 30 frames, WEBM, 0.4 MB",
+   "ditheredBytes": 125687,
    "dithered": {
     "codec_name": "vp9",
     "width": 1280,
     "height": 720,
     "pix_fmt": "yuv420p",
-    "r_frame_rate": "119/4",
+    "r_frame_rate": "89/3",
     "nb_read_frames": "30",
     "tags": {
      "alpha_mode": "1"
@@ -667,7 +660,7 @@
     "width": 1280,
     "height": 720,
     "pix_fmt": "yuv420p",
-    "r_frame_rate": "80/3",
+    "r_frame_rate": "325/12",
     "nb_read_frames": "30",
     "tags": {
      "alpha_mode": "1"
@@ -675,7 +668,7 @@
    },
    "frameMeanAbsDiff": {
     "0 vs tab 15": 3.035,
-    "29 vs tab 44": 2.303
+    "29 vs tab 44": 2.3
    },
    "controlMeanAbsDiff": 20.521,
    "dotsFrames": 30,
@@ -759,7 +752,7 @@
     ],
     "total": 120
    },
-   "extendTrack": "tracked 120 frames in 10.4 s (11.5 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+   "extendTrack": "tracked 120 frames in 10.8 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
    "afterExtend": {
     "nFrames": 120,
     "tracked": true,
@@ -792,17 +785,17 @@
     "picked": 768,
     "offered": 768
    },
-   "previewText": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12825 px",
-   "previewSeconds": 1.59,
-   "trackText": "tracked 150 frames in 13.0 s (11.6 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
-   "trackSeconds": 13.4,
-   "trackFps": 11.6,
+   "previewText": "frame 0 · 1 subject in 0.05 s (768 px) · #1 12825 px",
+   "previewSeconds": 1.53,
+   "trackText": "tracked 150 frames in 13.6 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+   "trackSeconds": 13.7,
+   "trackFps": 11.1,
    "dots": {
     "w": 1280,
     "h": 720,
     "distinctColours": 2
    },
-   "dotsFps": "90.1 fps · 774 dots",
+   "dotsFps": "86.2 fps · 774 dots",
    "polish": {
     "params": {
      "u": 0.7,
@@ -812,7 +805,7 @@
      "alpha": 0.35
     },
     "before": {
-     "fps": "90.1 fps · 774 dots",
+     "fps": "86.2 fps · 774 dots",
      "hash": 2826338162
     },
     "state": [
@@ -822,14 +815,14 @@
      }
     ],
     "after": {
-     "fps": "55.6 fps · 918 dots",
+     "fps": "54.3 fps · 918 dots",
      "hash": 1808330858
     },
     "exportSeconds": 8
    },
-   "render": "rendered 150 frames in 7.6 s (19.8 fps) · 1.3 MB · rendered slower than real time (7.6 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server",
+   "render": "rendered 150 frames in 7.7 s (19.4 fps) · 1.3 MB · rendered slower than real time (7.7 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server",
    "renderSeconds": 8,
-   "bytes": 1299629,
+   "bytes": 1299049,
    "probe": {
     "codec_name": "vp9",
     "width": 1280,
@@ -904,11 +897,11 @@
       "r_frame_rate": "100/7",
       "nb_read_frames": "75"
      },
-     "info": "rendered 75 frames in 3.3 s (22.4 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
+     "info": "rendered 75 frames in 3.3 s (22.5 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
     },
     "webm-alpha": {
      "seconds": 5.6,
-     "bytes": 1961328,
+     "bytes": 1877295,
      "probe": {
       "codec_name": "vp8",
       "width": 1280,
@@ -920,7 +913,7 @@
        "alpha_mode": "1"
       }
      },
-     "info": "rendered 150 frames in 5.2 s (29.1 fps) · 2.0 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too",
+     "info": "rendered 150 frames in 5.2 s (28.9 fps) · 1.9 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too",
      "alphaTag": "1",
      "census": {
       "pixels": 921600,
@@ -930,14 +923,191 @@
     }
    }
   },
+  "subjects": {
+   "nFrames": 150,
+   "ctaFirst": "Track subject — ≈ 17s",
+   "trackOne": "tracked 150 frames in 13.4 s (11.2 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+   "secondsOne": 15.3,
+   "masksOne": {
+    "1": {
+     "frames": 150,
+     "hash": "ad477aa9"
+    }
+   },
+   "stateOne": [
+    {
+     "id": 1,
+     "state": "tracked",
+     "hidden": false,
+     "prompted": true,
+     "frame": 0,
+     "renders": true,
+     "track": {
+      "frame": 0,
+      "size": 768,
+      "frames": 150
+     }
+    }
+   ],
+   "plan": {
+    "ids": [
+     2
+    ],
+    "label": "Track 1 new subject",
+    "cta": "Track 1 new subject — ≈ 17s"
+   },
+   "chips": [
+    {
+     "text": "#1 · 1pt+box @ 0⋯",
+     "state": "tracked"
+    },
+    {
+     "text": "#2 · 1pt+box @ 0 new✕",
+     "state": "untracked"
+    }
+   ],
+   "trackTwo": "tracked 150 frames in 12.5 s (12.0 fps) on WEBGPU fp16 · 1 subject · 1 kept from an earlier run (#1) · frames via WebCodecs (hardware)",
+   "secondsTwo": 12.7,
+   "masksTwo": {
+    "1": {
+     "frames": 150,
+     "hash": "ad477aa9"
+    },
+    "2": {
+     "frames": 150,
+     "hash": "54e383d4"
+    }
+   },
+   "stateStale": [
+    {
+     "id": 1,
+     "state": "tracked",
+     "hidden": false,
+     "prompted": true,
+     "frame": 0,
+     "renders": true,
+     "track": {
+      "frame": 0,
+      "size": 768,
+      "frames": 150
+     }
+    },
+    {
+     "id": 2,
+     "state": "stale",
+     "hidden": false,
+     "prompted": true,
+     "frame": 0,
+     "renders": true,
+     "track": {
+      "frame": 0,
+      "size": 768,
+      "frames": 150
+     }
+    }
+   ],
+   "planStale": {
+    "ids": [
+     2
+    ],
+    "label": "Re-track #2",
+    "cta": "Re-track #2 — ≈ 17s"
+   },
+   "menu": [
+    "re-track this one",
+    "hide from the render",
+    "remove it"
+   ],
+   "trackAgain": "tracked 150 frames in 12.5 s (12.0 fps) on WEBGPU fp16 · 1 subject · 1 kept from an earlier run (#1) · frames via WebCodecs (hardware)",
+   "secondsAgain": 12.8,
+   "masksAgain": {
+    "1": {
+     "frames": 150,
+     "hash": "ad477aa9"
+    },
+    "2": {
+     "frames": 150,
+     "hash": "1607c628"
+    }
+   },
+   "activeBoth": [
+    1,
+    2
+   ],
+   "activeHidden": [
+    2
+   ],
+   "masksHidden": {
+    "1": {
+     "frames": 150,
+     "hash": "ad477aa9"
+    },
+    "2": {
+     "frames": 150,
+     "hash": "1607c628"
+    }
+   },
+   "masksLeft": {
+    "2": {
+     "frames": 150,
+     "hash": "1607c628"
+    }
+   },
+   "activeLeft": [
+    2
+   ],
+   "censusLeft": {
+    "w": 1280,
+    "h": 720,
+    "distinctColours": 2
+   },
+   "export": "rendered 150 frames in 5.1 s (29.4 fps) · 0.7 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+   "bytes": 657954,
+   "probe": {
+    "codec_name": "vp9",
+    "width": 1280,
+    "height": 720,
+    "pix_fmt": "yuv420p",
+    "r_frame_rate": "179/6",
+    "nb_read_frames": "150",
+    "tags": {
+     "alpha_mode": "1"
+    }
+   },
+   "trackBoth": "tracked 150 frames in 26.6 s (11.3 fps) on WEBGPU fp16 · 2 subjects · 2 subjects, one pass each · frames via WebCodecs (hardware)",
+   "secondsBoth": 27,
+   "runs": [
+    {
+     "n": 1,
+     "seconds": 13.41
+    },
+    {
+     "n": 1,
+     "seconds": 12.52
+    },
+    {
+     "n": 1,
+     "seconds": 12.52
+    },
+    {
+     "n": 2,
+     "seconds": 26.56
+    }
+   ],
+   "cost": {
+    "separately": 25.04,
+    "together": 26.56
+   },
+   "costNote": "In this tab subjects are tracked one after another however you ask for them — one pass each — so tracking them separately costs nothing extra; a pass is ≈ 17s here. So far: 1× in 13s · 1× in 13s · 1× in 13s · 2× in 27s — 1m 5s of tracking, 2 subjects tracked now."
+  },
   "lasso": {
    "shapes": [
     27
    ],
-   "previewText": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12125 px",
-   "previewSeconds": 1.63,
-   "trackText": "tracked 150 frames in 13.5 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
-   "trackSeconds": 13.7,
+   "previewText": "frame 0 · 1 subject in 0.08 s (768 px) · #1 12125 px",
+   "previewSeconds": 2.23,
+   "trackText": "tracked 150 frames in 24.2 s (6.2 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+   "trackSeconds": 24.5,
    "areas": [
     12063,
     12809,
@@ -1097,9 +1267,9 @@
    "engineId": "remote",
    "cameraTrack": {
     "aspectRatio": 1.7777777777777777,
-    "deviceId": "a10a90ef4a8eb07cf8ad83760bed6bfaa71832f65e5bdd62c8d663c4be237b8e",
+    "deviceId": "f3eb94137bef67b8094db0d926b04c484b888ccfaeff9536dc440a772bfbd895",
     "frameRate": 30,
-    "groupId": "5b7abe42f8da6e0cf516689a60760c969647d298c293ea47dc6e67a66c97f219",
+    "groupId": "b716ef200d288420534422a9a96998ea581802e19ccc8bd793de8480c991a7ec",
     "height": 720,
     "resizeMode": "none",
     "width": 1280
@@ -1108,11 +1278,11 @@
     "photo": {
      "w": 1280,
      "h": 720,
-     "bytes": 1381524
+     "bytes": 1163108
     },
     "natW": 1280,
     "natH": 720,
-    "source": "1280 × 720 · 1349 KB · stays in this tab"
+    "source": "1280 × 720 · 1136 KB · stays in this tab"
    },
    "photoCensus": {
     "w": 1280,
@@ -1120,12 +1290,12 @@
     "distinctColours": 2
    },
    "photoSpread": {
-    "lo": 4,
-    "hi": 250,
-    "spread": 246
+    "lo": 3,
+    "hi": 234,
+    "spread": 231
    },
-   "photoExport": "1280×720 PNG · 438 KB",
-   "photoBytes": 448534,
+   "photoExport": "1280×720 PNG · 453 KB",
+   "photoBytes": 463517,
    "photoProbe": {
     "codec_name": "png",
     "width": 1280,
@@ -1134,26 +1304,26 @@
     "r_frame_rate": "25/1",
     "nb_read_frames": "1"
    },
-   "recordedS": 3.74,
+   "recordedS": 3.77,
    "wholeFrames": 113,
-   "srcDuration": 3.717,
+   "srcDuration": 3.733,
    "strip": {
-    "colours": 48657,
+    "colours": 56622,
     "w": 1896,
     "h": 140
    },
    "range": {
-    "start": 0.8585,
-    "end": 2.8585000000000003,
-    "duration": 3.717
+    "start": 0.8665,
+    "end": 2.8665000000000003,
+    "duration": 3.733
    },
    "trimmedFrames": 60,
    "upstat": "60 frames · 1280×720 · 30 fps · 2.0 s · trimmed 0.9–2.9 s · re-cut, nothing re-uploaded",
-   "trackText": "tracked 60 frames in 3.8 s (15.8 fps) on MPS coreml · 1 subject",
-   "trackSeconds": 4.5,
-   "dots": "84.7 fps · 6093 dots",
-   "render": "rendered 60 frames in 1.4 s (42.5 fps) · 0.3 MB",
-   "bytes": 287847,
+   "trackText": "tracked 60 frames in 4.0 s (15.1 fps) on MPS coreml · 1 subject",
+   "trackSeconds": 5,
+   "dots": "87.0 fps · 6326 dots",
+   "render": "rendered 60 frames in 1.4 s (43.3 fps) · 0.3 MB",
+   "bytes": 259932,
    "probe": {
     "codec_name": "h264",
     "width": 1280,
@@ -1169,9 +1339,9 @@
    "engineId": "browser",
    "cameraTrack": {
     "aspectRatio": 1.7777777777777777,
-    "deviceId": "7a5f26d65524c3aeacb8b6af34445f924e60c6b0b5c49872cf3f02c36997f2b4",
+    "deviceId": "2c901f585f14b6a23165b5dea18661d0d4c1f69a0a4910bc0cfc76dec8c6849d",
     "frameRate": 30,
-    "groupId": "dcb6c44bbb256dff6a163bee3b95518528aedb2cd3b883eee6b84ec46c8cf89e",
+    "groupId": "e52094631ca6fea5ba61dc46f86cc791711d77022b3258b469c769b31d665063",
     "height": 720,
     "resizeMode": "none",
     "width": 1280
@@ -1180,11 +1350,11 @@
     "photo": {
      "w": 1280,
      "h": 720,
-     "bytes": 1378061
+     "bytes": 1139536
     },
     "natW": 1280,
     "natH": 720,
-    "source": "1280 × 720 · 1346 KB · stays in this tab"
+    "source": "1280 × 720 · 1113 KB · stays in this tab"
    },
    "photoCensus": {
     "w": 1280,
@@ -1193,11 +1363,11 @@
    },
    "photoSpread": {
     "lo": 2,
-    "hi": 250,
-    "spread": 248
+    "hi": 237,
+    "spread": 235
    },
-   "photoExport": "1280×720 PNG · 438 KB",
-   "photoBytes": 448162,
+   "photoExport": "1280×720 PNG · 453 KB",
+   "photoBytes": 464158,
    "photoProbe": {
     "codec_name": "png",
     "width": 1280,
@@ -1206,37 +1376,37 @@
     "r_frame_rate": "25/1",
     "nb_read_frames": "1"
    },
-   "recordedS": 3.74,
-   "wholeFrames": 110,
-   "srcDuration": 3.685,
+   "recordedS": 3.75,
+   "wholeFrames": 111,
+   "srcDuration": 3.71,
    "strip": {
-    "colours": 48390,
+    "colours": 53817,
     "w": 1896,
     "h": 140
    },
    "range": {
-    "start": 0.8425,
-    "end": 2.8425000000000002,
-    "duration": 3.685
+    "start": 0.855,
+    "end": 2.855,
+    "duration": 3.71
    },
    "trimmedFrames": 60,
-   "upstat": "60 frames · 1280×720 · 30 fps · 2.0 s · trimmed 0.8–2.8 s · re-cut, nothing re-uploaded · stays in this tab",
+   "upstat": "60 frames · 1280×720 · 30 fps · 2.0 s · trimmed 0.9–2.9 s · WebCodecs · worker · re-cut, nothing re-uploaded · stays in this tab",
    "decode": {
     "path": "webcodecs-worker",
     "label": "WebCodecs · worker",
-    "ms": 432,
+    "ms": 365,
     "frames": 60,
     "split": {
-     "readMs": 2,
+     "readMs": 1,
      "bootMs": 3,
      "demuxMs": 1,
-     "coreMs": 425,
-     "drawMs": 5,
-     "jpegMs": 2125,
-     "firstFrameMs": 6
+     "coreMs": 358,
+     "drawMs": 6,
+     "jpegMs": 1822,
+     "firstFrameMs": 7
     },
     "accel": "hardware",
-    "fps": 139,
+    "fps": 164.3,
     "note": "webm · vp09.00.10.08 · hardware",
     "fellBack": [],
     "support": {
@@ -1245,13 +1415,13 @@
      "worker": true,
      "best": "webcodecs-worker"
     },
-    "line": "decoded 60 frames in 0.43 s · WebCodecs · worker · webm · vp09.00.10.08 · hardware"
+    "line": "decoded 60 frames in 0.37 s · WebCodecs · worker · webm · vp09.00.10.08 · hardware"
    }
   },
   "dotsRemote": {
    "engine": "remote",
    "nFrames": 150,
-   "trackText": "tracked 150 frames in 8.9 s (16.8 fps) on MPS coreml · 1 subject",
+   "trackText": "tracked 150 frames in 8.5 s (17.6 fps) on MPS coreml · 1 subject",
    "stats": {
     "frames": 150,
     "w": 1280,
@@ -1294,7 +1464,7 @@
   "dotsBrowser": {
    "engine": "browser",
    "nFrames": 150,
-   "trackText": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+   "trackText": "tracked 150 frames in 13.5 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
    "stats": {
     "frames": 150,
     "w": 1280,
@@ -1309,7 +1479,7 @@
     "dotsMean": 1162,
     "dotsMax": 2340
    },
-   "seconds": 7.3,
+   "seconds": 7.2,
    "replay": [
     {
      "frame": 0,
@@ -1336,7 +1506,7 @@
   },
   "canvasBrowser": {
    "nFrames": 150,
-   "trackInfo": "tracked 150 frames in 13.7 s (10.9 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+   "trackInfo": "tracked 150 frames in 24.0 s (6.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
    "presets": [
     {
      "id": "source",
@@ -1392,7 +1562,7 @@
     "label": "1080×1920 · 9:16",
     "slug": "9x16"
    },
-   "pathSeconds": 3.4,
+   "pathSeconds": 5.6,
    "path": {
     "n": 150,
     "mode": "follow",
@@ -1411,7 +1581,7 @@
     1080,
     1920
    ],
-   "info": "rendered 150 frames in 11.9 s (12.6 fps) · 1080×1920 · 4.0 MB · rendered slower than real time (11.9 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server · original cut: 150 frames, WEBM, 5.2 MB",
+   "info": "rendered 150 frames in 12.4 s (12.1 fps) · 1080×1920 · 4.0 MB · rendered slower than real time (12.4 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server · original cut: 150 frames, WEBM, 5.2 MB",
    "ditheredBytes": 4015035,
    "originalName": "sample-dots-9x16.original.webm",
    "dithered": {
@@ -1419,7 +1589,7 @@
     "width": 1080,
     "height": 1920,
     "pix_fmt": "yuv420p",
-    "r_frame_rate": "25/2",
+    "r_frame_rate": "1000/1",
     "nb_read_frames": "150",
     "tags": {
      "alpha_mode": "1"
@@ -1430,7 +1600,7 @@
     "width": 1080,
     "height": 1920,
     "pix_fmt": "yuv420p",
-    "r_frame_rate": "149/12",
+    "r_frame_rate": "12/1",
     "nb_read_frames": "150",
     "tags": {
      "alpha_mode": "1"
@@ -1478,7 +1648,7 @@
    "twoClips": true,
    "addA": "added sample · 1 track · 150 frames · 2.2 s",
    "view": "sequence",
-   "addB": "added entry-clip · 1 track · 90 frames · 1.6 s",
+   "addB": "added entry-clip · 1 track · 90 frames · 1.7 s",
    "libraryKept": 2,
    "stillInfo": "frame 0 · 1 subject in 0.07 s (768 px) · #1 24269 px",
    "strip": [
@@ -2018,14 +2188,14 @@
    },
    "dotsBytes": 213870,
    "server": {
-    "sequence": "seq-907dd4bd3b",
+    "sequence": "seq-f7dd9d1d93",
     "frames": 288,
     "w": 1280,
     "h": 720,
     "format": "mp4",
     "bytes": 1168777,
-    "elapsed_s": 1.39,
-    "url": "/api/sequence/seq-907dd4bd3b/output/mp4"
+    "elapsed_s": 2.24,
+    "url": "/api/sequence/seq-f7dd9d1d93/output/mp4"
    },
    "mp4": {
     "bytes": 1168777,
@@ -2042,10 +2212,10 @@
    "player": {
     "frames": 288,
     "painted": 361,
-    "seconds": 3,
-    "fps": 120.2,
-    "meanPaintMs": 1.78,
-    "worstPaintMs": 5.2,
+    "seconds": 3.01,
+    "fps": 120.1,
+    "meanPaintMs": 1.47,
+    "worstPaintMs": 3.6,
     "subjects": 4,
     "palette": [
      "#c9d4c5",
@@ -2057,8 +2227,8 @@
    },
    "afterSwitch": 4,
    "browser": {
-    "webm": "63 frames · WEBM · 0.85 MB · 2.2 s · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
-    "gif": "32 frames · GIF · 0.21 MB · 0.6 s · 32 frames at 15 fps · 5 colours · loops forever",
+    "webm": "63 frames · WEBM · 0.82 MB · 2.2 s · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+    "gif": "32 frames · GIF · 0.21 MB · 0.7 s · 32 frames at 15 fps · 5 colours · loops forever",
     "webm-alpha": "63 frames · WEBM · 1.20 MB · 2.3 s · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
    }
   },
@@ -2279,14 +2449,14 @@
     "subjects": 2
    },
    "server": {
-    "sequence": "seq-8888ae1df3",
+    "sequence": "seq-83adae0b97",
     "frames": 154,
     "w": 1280,
     "h": 720,
     "format": "mp4",
     "bytes": 506775,
-    "elapsed_s": 0.8,
-    "url": "/api/sequence/seq-8888ae1df3/output/mp4"
+    "elapsed_s": 0.9,
+    "url": "/api/sequence/seq-83adae0b97/output/mp4"
    },
    "mp4": {
     "bytes": 506775,
@@ -2363,14 +2533,14 @@
    },
    "dotsBytes": 6508461,
    "server": {
-    "sequence": "seq-3b82ecddd2",
+    "sequence": "seq-7bd14ae8dd",
     "frames": 61,
     "w": 1280,
     "h": 720,
     "format": "mp4",
     "bytes": 1172770,
-    "elapsed_s": 1.31,
-    "url": "/api/sequence/seq-3b82ecddd2/output/mp4"
+    "elapsed_s": 1.33,
+    "url": "/api/sequence/seq-7bd14ae8dd/output/mp4"
    },
    "mp4": {
     "bytes": 1172770,
@@ -2560,9 +2730,9 @@
    ],
    "offFrameHint": "#1 prompted @ 0 — jump",
    "subject1MarksHidden": true,
-   "previewText": "frame 48 · 1 subject in 0.04 s (768 px) · #2 7600 px",
-   "trackText": "tracked 149 frames in 30.4 s (9.8 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each · frames via WebCodecs (hardware)",
-   "trackSeconds": 30.9,
+   "previewText": "frame 48 · 1 subject in 0.13 s (768 px) · #2 7600 px",
+   "trackText": "tracked 149 frames in 31.3 s (9.5 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each · frames via WebCodecs (hardware)",
+   "trackSeconds": 31.7,
    "tree": {
     "firstOn": 0,
     "empty": 0,
@@ -2594,8 +2764,8 @@
      8347
     ]
    },
-   "dotsBefore": "57.1 fps · 2085 dots",
-   "dotsAfter": "48.8 fps · 2610 dots",
+   "dotsBefore": "49.5 fps · 2085 dots",
+   "dotsAfter": "29.2 fps · 2610 dots",
    "dotsBeforeN": 2085,
    "dotsAfterN": 2610
   },
@@ -2610,8 +2780,8 @@
    "offFrameHint": "#1 prompted @ 0 — jump",
    "subject1MarksHidden": true,
    "previewText": "frame 48 · 1 subject in 0.07 s (768 px) · #2 6959 px",
-   "trackText": "tracked 149 frames in 14.8 s (10.1 fps) on MPS coreml · 2 subjects prompted on 2 different frames",
-   "trackSeconds": 15.1,
+   "trackText": "tracked 149 frames in 17.1 s (8.7 fps) on MPS coreml · 2 subjects prompted on 2 different frames",
+   "trackSeconds": 17.6,
    "tree": {
     "firstOn": 0,
     "empty": 0,
@@ -2643,8 +2813,8 @@
      8358
     ]
    },
-   "dotsBefore": "58.8 fps · 1253 dots",
-   "dotsAfter": "55.6 fps · 1759 dots",
+   "dotsBefore": "63.7 fps · 1253 dots",
+   "dotsAfter": "45.2 fps · 1759 dots",
    "dotsBeforeN": 1253,
    "dotsAfterN": 1759
   },
@@ -2654,8 +2824,8 @@
      "size": 512,
      "nFrames": 60,
      "picked": 512,
-     "preview": "frame 0 · 1 subject in 0.05 s (512 px) · #1 13331 px",
-     "track": "tracked 60 frames in 3.0 s (19.7 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+     "preview": "frame 0 · 1 subject in 0.04 s (512 px) · #1 13331 px",
+     "track": "tracked 60 frames in 2.6 s (22.8 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
      "seconds": 3.1,
      "state": {
       "loaded": 512,
@@ -2673,9 +2843,9 @@
      "size": 768,
      "nFrames": 60,
      "picked": 768,
-     "preview": "frame 0 · 1 subject in 0.05 s (768 px) · #1 12825 px",
-     "track": "tracked 60 frames in 6.8 s (8.8 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
-     "seconds": 7.3,
+     "preview": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12825 px",
+     "track": "tracked 60 frames in 5.3 s (11.4 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+     "seconds": 5.7,
      "state": {
       "loaded": 768,
       "frames": 60,
@@ -2693,8 +2863,8 @@
      "nFrames": 60,
      "picked": 1024,
      "preview": "frame 0 · 1 subject in 0.09 s (1024 px) · #1 12769 px",
-     "track": "tracked 60 frames in 9.7 s (6.2 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
-     "seconds": 10.2,
+     "track": "tracked 60 frames in 8.9 s (6.7 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+     "seconds": 9.2,
      "state": {
       "loaded": 1024,
       "frames": 60,
@@ -2740,7 +2910,75 @@
      0.9449
     ]
    },
-   "faster": 3.29
+   "faster": 2.97
+  },
+  "deployMirror": {
+   "squares": {
+    "512": {
+     "size": 512,
+     "nFrames": 60,
+     "picked": 512,
+     "track": "tracked 60 frames in 2.9 s (20.9 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+     "state": {
+      "loaded": 512,
+      "backend": "WebGPU fp16 · 512 px",
+      "tierNote": "",
+      "epNote": ""
+     }
+    },
+    "1024": {
+     "size": 1024,
+     "nFrames": 60,
+     "picked": 1024,
+     "track": "tracked 60 frames in 9.5 s (6.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+     "state": {
+      "loaded": 1024,
+      "backend": "WebGPU fp16 · 1024 px",
+      "tierNote": "",
+      "epNote": ""
+     }
+    }
+   },
+   "mirror": {
+    "models": [
+     "1024",
+     "512",
+     "consts.bin",
+     "encoder.fp16.onnx",
+     "heads.fp16.onnx",
+     "heads_mask.fp16.onnx",
+     "heads_prompt.fp16.onnx",
+     "manifest.json",
+     "memattn.fp16.onnx",
+     "memenc.f16in.onnx",
+     "memenc.onnx"
+    ]
+   },
+   "base": "http://127.0.0.1:60512",
+   "noF16": {
+    "adapter": {
+     "gpu": true,
+     "adapter": true,
+     "f16": false
+    },
+    "preview": "1 subject in 1.18 s (768 px) · #1 5300 px · this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle",
+    "state": {
+     "ep": "wasm",
+     "fp16": true,
+     "line": "WASM fp16 · 768 px · 1 thread · slow",
+     "note": "this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle"
+    }
+   },
+   "broken512_404": {
+    "line": "tracked 30 frames in 3.8 s (8.0 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead",
+    "loaded": 768,
+    "tierNote": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+   },
+   "broken512_a 200 that is HTML": {
+    "line": "tracked 30 frames in 3.0 s (9.9 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead",
+    "loaded": 768,
+    "tierNote": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
+   }
   },
   "otherBrowsers": {
    "firefox": {
@@ -2767,19 +3005,19 @@
     "decode": {
      "path": "webcodecs-worker",
      "label": "WebCodecs · worker",
-     "ms": 147,
+     "ms": 151,
      "frames": 60,
      "split": {
       "readMs": 2,
-      "bootMs": 16,
+      "bootMs": 17,
       "demuxMs": 1,
-      "coreMs": 127,
-      "drawMs": 59,
-      "jpegMs": 488,
-      "firstFrameMs": 16
+      "coreMs": 130,
+      "drawMs": 66,
+      "jpegMs": 498,
+      "firstFrameMs": 15
      },
      "accel": "hardware",
-     "fps": 408.2,
+     "fps": 397.4,
      "note": "mp4 · avc1.64001f · hardware",
      "fellBack": [],
      "support": {
@@ -2792,13 +3030,13 @@
     },
     "nFrames": 60,
     "render": "rendered 60 frames in 2.4 s (24.7 fps) · 2.1 MB · 58 of 60 frames reached the file — this browser hands the recorder frames asynchronously, so the cut is approximate. Use Chrome or Safari, or the local server, for an exact one",
-    "bytes": 2074453,
+    "bytes": 2056101,
     "probe": {
      "codec_name": "vp8",
      "width": 1280,
      "height": 720,
      "pix_fmt": "yuv420p",
-     "r_frame_rate": "120/1",
+     "r_frame_rate": "117/4",
      "nb_read_frames": "58",
      "tags": {}
     }
@@ -2827,19 +3065,19 @@
     "decode": {
      "path": "webcodecs-worker",
      "label": "WebCodecs · worker",
-     "ms": 611,
+     "ms": 647,
      "frames": 60,
      "split": {
       "readMs": 1,
       "bootMs": 12,
-      "demuxMs": 2,
-      "coreMs": 595,
+      "demuxMs": 1,
+      "coreMs": 631,
       "drawMs": 1,
-      "jpegMs": 550,
-      "firstFrameMs": 27
+      "jpegMs": 587,
+      "firstFrameMs": 29
      },
      "accel": "hardware",
-     "fps": 98.2,
+     "fps": 92.7,
      "note": "mp4 · avc1.64001f · hardware",
      "fellBack": [],
      "support": {
@@ -2848,10 +3086,10 @@
       "worker": true,
       "best": "webcodecs-worker"
      },
-     "line": "decoded 60 frames in 0.61 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
+     "line": "decoded 60 frames in 0.65 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
     },
     "nFrames": 60,
-    "render": "rendered 60 frames in 2.1 s (28.1 fps) · 2.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+    "render": "rendered 60 frames in 2.2 s (27.7 fps) · 2.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
     "bytes": 2339146,
     "probe": {
      "codec_name": "vp9",
@@ -2866,14 +3104,14 @@
    "noRequestFrame": {
     "gone": true,
     "nFrames": 60,
-    "render": "rendered 60 frames in 2.4 s (25.3 fps) · 1.6 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
-    "bytes": 1634014,
+    "render": "rendered 60 frames in 2.4 s (25.4 fps) · 1.6 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+    "bytes": 1636247,
     "probe": {
      "codec_name": "vp9",
      "width": 1280,
      "height": 720,
      "pix_fmt": "yuv420p",
-     "r_frame_rate": "353/12",
+     "r_frame_rate": "88/3",
      "nb_read_frames": "60",
      "tags": {
       "alpha_mode": "1"
@@ -2896,16 +3134,16 @@
     "h": 720,
     "distinctColours": 2
    },
-   "preview": "1 subject in 1.12 s (768 px) · #1 5300 px · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower",
+   "preview": "1 subject in 1.13 s (768 px) · #1 5300 px · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower",
    "backend": {
     "line": "WASM fp16 · 768 px · 1 thread · slow",
     "threads": 1
    },
    "nFrames": 15,
-   "track": "tracked 15 frames in 33.8 s (0.4 fps) on WASM fp16 · 1 subject · frames via WebCodecs (hardware) · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
+   "track": "tracked 15 frames in 33.3 s (0.5 fps) on WASM fp16 · 1 subject · frames via WebCodecs (hardware) · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
   },
   "apiKey": {
-   "port": 56568,
+   "port": 60807,
    "withoutKey": 401,
    "wrongKey": 401,
    "withKey": 200,
@@ -2924,6 +3162,7 @@
     ],
     "default_track_size": 768,
     "per_object_prompt_frames": true,
+    "incremental_track": true,
     "segment_image": true,
     "uncapped": true,
     "reextract": true,
@@ -2945,7 +3184,7 @@
    "engine": {
     "id": "remote",
     "label": "Remote server",
-    "baseUrl": "http://127.0.0.1:56568",
+    "baseUrl": "http://127.0.0.1:60807",
     "supports": {
      "maskPrompt": true,
      "perObjectPromptFrames": true,
@@ -2956,6 +3195,7 @@
      "exportPlayable": true,
      "stillSubjects": true,
      "reextract": true,
+     "incrementalTrack": true,
      "extractProgress": true,
      "uncapped": true,
      "original": true,
@@ -3012,7 +3252,7 @@
     "modelsMissing": null,
     "tried": [
      {
-      "url": "http://127.0.0.1:56568",
+      "url": "http://127.0.0.1:60807",
       "ok": true
      }
     ]
@@ -3024,12 +3264,12 @@
   {
    "name": "decode · sample.mp4 · the worker path reports itself",
    "ok": true,
-   "detail": "\"decoded 150 frames in 1.01 s · WebCodecs · worker · mp4 · avc1.64001f · hardware\""
+   "detail": "\"decoded 150 frames in 0.98 s · WebCodecs · worker · mp4 · avc1.64001f · hardware\""
   },
   {
    "name": "decode · sample.mp4 · the stats line names the container and codec",
    "ok": true,
-   "detail": "decoded 150 frames in 1.01 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
+   "detail": "decoded 150 frames in 0.98 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
   },
   {
    "name": "decode · sample.mp4 · it says whether the decoder was hardware",
@@ -3064,7 +3304,7 @@
   {
    "name": "decode · sample.mp4 · the worker path is the faster one",
    "ok": true,
-   "detail": "1010 ms vs 4654 ms"
+   "detail": "984 ms vs 4428 ms"
   },
   {
    "name": "decode · this browser advertises the worker path",
@@ -3079,12 +3319,12 @@
   {
    "name": "decode · entry-clip.mp4 · the worker path reports itself",
    "ok": true,
-   "detail": "\"decoded 149 frames in 1.25 s · WebCodecs · worker · mp4 · avc1.64001f · hardware\""
+   "detail": "\"decoded 149 frames in 1.22 s · WebCodecs · worker · mp4 · avc1.64001f · hardware\""
   },
   {
    "name": "decode · entry-clip.mp4 · the stats line names the container and codec",
    "ok": true,
-   "detail": "decoded 149 frames in 1.25 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
+   "detail": "decoded 149 frames in 1.22 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
   },
   {
    "name": "decode · entry-clip.mp4 · it says whether the decoder was hardware",
@@ -3119,17 +3359,17 @@
   {
    "name": "decode · entry-clip.mp4 · the worker path is the faster one",
    "ok": true,
-   "detail": "1248 ms vs 5550 ms"
+   "detail": "1222 ms vs 5344 ms"
   },
   {
    "name": "decode · cue-less WebM · the worker path reports itself",
    "ok": true,
-   "detail": "\"decoded 149 frames in 1.29 s · WebCodecs · worker · webm · vp8 · software\""
+   "detail": "\"decoded 149 frames in 1.28 s · WebCodecs · worker · webm · vp8 · software\""
   },
   {
    "name": "decode · cue-less WebM · the stats line names the container and codec",
    "ok": true,
-   "detail": "decoded 149 frames in 1.29 s · WebCodecs · worker · webm · vp8 · software"
+   "detail": "decoded 149 frames in 1.28 s · WebCodecs · worker · webm · vp8 · software"
   },
   {
    "name": "decode · cue-less WebM · it says whether the decoder was hardware",
@@ -3164,52 +3404,22 @@
   {
    "name": "decode · cue-less WebM · the worker path is the faster one",
    "ok": true,
-   "detail": "1295 ms vs 15327 ms"
+   "detail": "1280 ms vs 15308 ms"
   },
   {
    "name": "decode · 90 s clip · the worker path reports itself",
    "ok": true,
-   "detail": "\"decoded 2700 frames in 16.73 s · WebCodecs · worker · mp4 · avc1.64001f · hardware\""
+   "detail": "\"decoded 2700 frames in 17.68 s · WebCodecs · worker · mp4 · avc1.64001f · hardware\""
   },
   {
    "name": "decode · 90 s clip · the stats line names the container and codec",
    "ok": true,
-   "detail": "decoded 2700 frames in 16.73 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
+   "detail": "decoded 2700 frames in 17.68 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
   },
   {
    "name": "decode · 90 s clip · it says whether the decoder was hardware",
    "ok": true,
    "detail": "hardware"
-  },
-  {
-   "name": "decode · 90 s clip · both paths decode the same number of frames",
-   "ok": true,
-   "detail": "2700 vs 2700"
-  },
-  {
-   "name": "decode · 90 s clip · the same decode size",
-   "ok": true,
-   "detail": "1280x720 vs 1280x720"
-  },
-  {
-   "name": "decode · 90 s clip · frame 0 is the same picture",
-   "ok": true,
-   "detail": "0"
-  },
-  {
-   "name": "decode · 90 s clip · the last frame is the same picture",
-   "ok": true,
-   "detail": "0"
-  },
-  {
-   "name": "decode · 90 s clip · and in fact byte-identical",
-   "ok": true,
-   "detail": "12a19d2/12a19d2 4982c22b/4982c22b 291209004/291209004"
-  },
-  {
-   "name": "decode · 90 s clip · the worker path is the faster one",
-   "ok": true,
-   "detail": "16727 ms vs 82790 ms"
   },
   {
    "name": "decode · a 90 s clip is 2,700 frames",
@@ -3219,7 +3429,7 @@
   {
    "name": "decode · and it decodes in under a minute",
    "ok": true,
-   "detail": "16727 ms"
+   "detail": "17680 ms"
   },
   {
    "name": "auto probe finds the local server",
@@ -3319,7 +3529,7 @@
   {
    "name": "still · whole-image dots are drawn",
    "ok": true,
-   "detail": "1280×720 · 34 ms · 31500 dots"
+   "detail": "1280×720 · 32 ms · 31500 dots"
   },
   {
    "name": "still · dots are two colours",
@@ -3369,7 +3579,7 @@
   {
    "name": "browser · the subject segments",
    "ok": true,
-   "detail": "1 subject in 0.08 s (768 px) · #1 12850 px"
+   "detail": "1 subject in 0.06 s (768 px) · #1 12850 px"
   },
   {
    "name": "browser · the mask is a person-sized region",
@@ -3399,7 +3609,7 @@
   {
    "name": "browser · the subject alone becomes dots",
    "ok": true,
-   "detail": "1280×720 · 38 ms · 709 dots"
+   "detail": "1280×720 · 29 ms · 709 dots"
   },
   {
    "name": "browser · the transparent-background switch is offered",
@@ -3446,7 +3656,7 @@
   {
    "name": "remote · the subject segments",
    "ok": true,
-   "detail": "1 subject in 0.07 s (768 px) · #1 12750 px"
+   "detail": "1 subject in 0.11 s (768 px) · #1 12750 px"
   },
   {
    "name": "remote · the mask is a person-sized region",
@@ -3476,7 +3686,7 @@
   {
    "name": "remote · the subject alone becomes dots",
    "ok": true,
-   "detail": "1280×720 · 37 ms · 707 dots"
+   "detail": "1280×720 · 29 ms · 707 dots"
   },
   {
    "name": "remote · the transparent-background switch is offered",
@@ -3510,7 +3720,7 @@
   {
    "name": "whole-frame clip exports",
    "ok": true,
-   "detail": "rendered 150 frames in 5.2 s (29.1 fps) · 3.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+   "detail": "rendered 150 frames in 5.1 s (29.3 fps) · 3.2 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
   },
   {
    "name": "the WebM has every frame",
@@ -3528,7 +3738,7 @@
   {
    "name": "the pair exports in the tab",
    "ok": true,
-   "detail": "rendered 150 frames in 5.2 s (29.0 fps) · 3.4 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 150 frames, WEBM, 2.1 MB"
+   "detail": "rendered 150 frames in 5.1 s (29.2 fps) · 3.4 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 150 frames, WEBM, 2.1 MB"
   },
   {
    "name": "the second file is named for the pair",
@@ -3553,7 +3763,7 @@
   {
    "name": "the pair shares a frame rate",
    "ok": true,
-   "detail": "355/12 vs 353/12 (0.56% apart)"
+   "detail": "355/12 vs 355/12 (0% apart)"
   },
   {
    "name": "the original cut has every frame",
@@ -3568,12 +3778,12 @@
   {
    "name": "original frame 75 is the tab's frame 75",
    "ok": true,
-   "detail": "mean abs diff 2.243"
+   "detail": "mean abs diff 2.245"
   },
   {
    "name": "original frame 149 is the tab's frame 149",
    "ok": true,
-   "detail": "mean abs diff 2.258"
+   "detail": "mean abs diff 2.255"
   },
   {
    "name": "the sequence view does not offer a matched cut",
@@ -3587,7 +3797,7 @@
   {
    "name": "range · the clip tracks in the tab",
    "ok": true,
-   "detail": "tracked 60 frames in 5.6 s (10.7 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 60 frames in 5.4 s (11.0 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "range · 0.5–1.5 s of a 30 fps clip is frames 15–44",
@@ -3615,12 +3825,12 @@
   {
    "name": "range · a trimmed clip exports as a pair",
    "ok": true,
-   "detail": "rendered 30 frames in 1.1 s (27.5 fps) · frames 15–44 of 60 · 0.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 30 frames, WEBM, 0.4 MB"
+   "detail": "rendered 30 frames in 1.1 s (27.6 fps) · frames 15–44 of 60 · 0.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 30 frames, WEBM, 0.4 MB"
   },
   {
    "name": "range · the render says which frames it used",
    "ok": true,
-   "detail": "rendered 30 frames in 1.1 s (27.5 fps) · frames 15–44 of 60 · 0.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 30 frames, WEBM, 0.4 MB"
+   "detail": "rendered 30 frames in 1.1 s (27.6 fps) · frames 15–44 of 60 · 0.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4 · original cut: 30 frames, WEBM, 0.4 MB"
   },
   {
    "name": "range · the render is the window, not the clip",
@@ -3640,7 +3850,7 @@
   {
    "name": "range · cut frame 29 is the tab's frame 44",
    "ok": true,
-   "detail": "mean abs diff 2.303"
+   "detail": "mean abs diff 2.3"
   },
   {
    "name": "range · and it is NOT the tab's frame 0",
@@ -3689,7 +3899,7 @@
   {
    "name": "range · taking the offer tracks the wider range",
    "ok": true,
-   "detail": "tracked 120 frames in 10.4 s (11.5 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 120 frames in 10.8 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "range · the wider clip is 120 frames and tracked",
@@ -3723,17 +3933,17 @@
   {
    "name": "frame-0 preview runs in the tab",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12825 px"
+   "detail": "frame 0 · 1 subject in 0.05 s (768 px) · #1 12825 px"
   },
   {
    "name": "the clip tracks in the tab",
    "ok": true,
-   "detail": "tracked 150 frames in 13.0 s (11.6 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 150 frames in 13.6 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "the dots look draws dots",
    "ok": true,
-   "detail": "90.1 fps · 774 dots"
+   "detail": "86.2 fps · 774 dots"
   },
   {
    "name": "browser · polish is off until it is asked for",
@@ -3747,12 +3957,12 @@
   {
    "name": "browser · polishing the mask changes the picture",
    "ok": true,
-   "detail": "{\"params\":{\"u\":0.7,\"radius\":2,\"morph\":1,\"blur\":1,\"alpha\":0.35},\"before\":{\"fps\":\"90.1 fps · 774 dots\",\"hash\":2826338162},\"state\":[{\"id\":1,\"polish\":70}],\"after\":{\"fps\":\"55.6 fps · 918 dots\",\"hash\":1808330858}}"
+   "detail": "{\"params\":{\"u\":0.7,\"radius\":2,\"morph\":1,\"blur\":1,\"alpha\":0.35},\"before\":{\"fps\":\"86.2 fps · 774 dots\",\"hash\":2826338162},\"state\":[{\"id\":1,\"polish\":70}],\"after\":{\"fps\":\"54.3 fps · 918 dots\",\"hash\":1808330858}}"
   },
   {
    "name": "the tracked clip exports",
    "ok": true,
-   "detail": "rendered 150 frames in 7.6 s (19.8 fps) · 1.3 MB · rendered slower than real time (7.6 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server"
+   "detail": "rendered 150 frames in 7.7 s (19.4 fps) · 1.3 MB · rendered slower than real time (7.7 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server"
   },
   {
    "name": "browser · the toggle turns polish back off",
@@ -3771,12 +3981,12 @@
   {
    "name": "browser · gif exports",
    "ok": true,
-   "detail": "rendered 75 frames in 3.3 s (22.4 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
+   "detail": "rendered 75 frames in 3.3 s (22.5 fps) · 0.3 MB · 75 frames at 15 fps · 4 colours · loops forever"
   },
   {
    "name": "browser · webm-alpha exports",
    "ok": true,
-   "detail": "rendered 150 frames in 5.2 s (29.1 fps) · 2.0 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
+   "detail": "rendered 150 frames in 5.2 s (28.9 fps) · 1.9 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too"
   },
   {
    "name": "browser · the GIF is a GIF and loops",
@@ -3798,6 +4008,101 @@
    "detail": "{\"pixels\":921600,\"transparentPct\":99.1,\"opaquePct\":0.7}"
   },
   {
+   "name": "browser · one subject tracks on its own",
+   "ok": true,
+   "detail": "tracked 150 frames in 13.4 s (11.2 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "browser · only subject #1 has logits",
+   "ok": true,
+   "detail": "[\"1\"]"
+  },
+  {
+   "name": "browser · the button offers the new subject only",
+   "ok": true,
+   "detail": "{\"ids\":[2],\"label\":\"Track 1 new subject\",\"cta\":\"Track 1 new subject — ≈ 17s\"}"
+  },
+  {
+   "name": "browser · the chips say which subject is tracked and which is new",
+   "ok": true,
+   "detail": "[{\"text\":\"#1 · 1pt+box @ 0⋯\",\"state\":\"tracked\"},{\"text\":\"#2 · 1pt+box @ 0 new✕\",\"state\":\"untracked\"}]"
+  },
+  {
+   "name": "browser · the new subject tracks",
+   "ok": true,
+   "detail": "tracked 150 frames in 12.5 s (12.0 fps) on WEBGPU fp16 · 1 subject · 1 kept from an earlier run (#1) · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "browser · #1's logits survived the run byte for byte",
+   "ok": true,
+   "detail": "ad477aa9 -> ad477aa9"
+  },
+  {
+   "name": "browser · #2 now has a full set of its own",
+   "ok": true,
+   "detail": "{\"frames\":150,\"hash\":\"54e383d4\"}"
+  },
+  {
+   "name": "browser · and the run says what it kept",
+   "ok": true,
+   "detail": "tracked 150 frames in 12.5 s (12.0 fps) on WEBGPU fp16 · 1 subject · 1 kept from an earlier run (#1) · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "browser · editing #2 leaves #1 alone",
+   "ok": true,
+   "detail": "[[1,\"tracked\"],[2,\"stale\"]]"
+  },
+  {
+   "name": "browser · and the button offers to re-track just it",
+   "ok": true,
+   "detail": "Re-track #2 — ≈ 17s"
+  },
+  {
+   "name": "browser · re-tracking one subject works",
+   "ok": true,
+   "detail": "tracked 150 frames in 12.5 s (12.0 fps) on WEBGPU fp16 · 1 subject · 1 kept from an earlier run (#1) · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "browser · #1 did not move on a #2-only re-track",
+   "ok": true,
+   "detail": "ad477aa9 -> ad477aa9"
+  },
+  {
+   "name": "browser · #2 did move",
+   "ok": true,
+   "detail": "54e383d4 -> 1607c628"
+  },
+  {
+   "name": "browser · hiding a subject drops it from the render and keeps its masks",
+   "ok": true,
+   "detail": "[2]"
+  },
+  {
+   "name": "browser · removing a subject forgets its logits",
+   "ok": true,
+   "detail": "[\"2\"]"
+  },
+  {
+   "name": "browser · what is left exports",
+   "ok": true,
+   "detail": "rendered 150 frames in 5.1 s (29.4 fps) · 0.7 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+  },
+  {
+   "name": "browser · the export carries every frame",
+   "ok": true,
+   "detail": "{\"codec_name\":\"vp9\",\"width\":1280,\"height\":720,\"pix_fmt\":\"yuv420p\",\"r_frame_rate\":\"179/6\",\"nb_read_frames\":\"150\",\"tags\":{\"alpha_mode\":\"1\"}}"
+  },
+  {
+   "name": "browser · two subjects still track in one run",
+   "ok": true,
+   "detail": "tracked 150 frames in 26.6 s (11.3 fps) on WEBGPU fp16 · 2 subjects · 2 subjects, one pass each · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "browser · one run of two costs about what two runs of one cost",
+   "ok": true,
+   "detail": "{\"separately\":25.04,\"together\":26.56}"
+  },
+  {
    "name": "the polygon was captured",
    "ok": true,
    "detail": "[27]"
@@ -3805,17 +4110,17 @@
   {
    "name": "a mask prompt previews in the tab",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12125 px"
+   "detail": "frame 0 · 1 subject in 0.08 s (768 px) · #1 12125 px"
   },
   {
    "name": "the mask prompt was NOT downgraded to a box",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12125 px"
+   "detail": "frame 0 · 1 subject in 0.08 s (768 px) · #1 12125 px"
   },
   {
    "name": "a mask prompt tracks the clip",
    "ok": true,
-   "detail": "tracked 150 frames in 13.5 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 150 frames in 24.2 s (6.2 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "the mask-prompted subject survives the clip",
@@ -3830,12 +4135,12 @@
   {
    "name": "remote · the camera is live at the resolution it asked for",
    "ok": true,
-   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"a10a90ef4a8eb07cf8ad83760bed6bfaa71832f65e5bdd62c8d663c4be237b8e\",\"frameRate\":30,\"groupId\":\"5b7abe42f8da6e0cf516689a60760c969647d298c293ea47dc6e67a66c97f219\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
+   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"f3eb94137bef67b8094db0d926b04c484b888ccfaeff9536dc440a772bfbd895\",\"frameRate\":30,\"groupId\":\"b716ef200d288420534422a9a96998ea581802e19ccc8bd793de8480c991a7ec\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
   },
   {
    "name": "remote · a photo comes back at the camera's resolution",
    "ok": true,
-   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":1381524},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 1349 KB · stays in this tab\"}"
+   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":1163108},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 1136 KB · stays in this tab\"}"
   },
   {
    "name": "remote · the photo closed the camera",
@@ -3844,12 +4149,12 @@
   {
    "name": "remote · the photo dithers",
    "ok": true,
-   "detail": "{\"census\":{\"w\":1280,\"h\":720,\"distinctColours\":2},\"spread\":{\"lo\":4,\"hi\":250,\"spread\":246}}"
+   "detail": "{\"census\":{\"w\":1280,\"h\":720,\"distinctColours\":2},\"spread\":{\"lo\":3,\"hi\":234,\"spread\":231}}"
   },
   {
    "name": "remote · the photo exports a PNG",
    "ok": true,
-   "detail": "1280×720 PNG · 438 KB"
+   "detail": "1280×720 PNG · 453 KB"
   },
   {
    "name": "remote · the exported PNG is the camera's own resolution",
@@ -3859,7 +4164,7 @@
   {
    "name": "remote · about three seconds were recorded",
    "ok": true,
-   "detail": "3.74"
+   "detail": "3.77"
   },
   {
    "name": "remote · the recording became a clip",
@@ -3869,7 +4174,7 @@
   {
    "name": "remote · the filmstrip has thumbnails on it",
    "ok": true,
-   "detail": "{\"strip\":{\"colours\":48657,\"w\":1896,\"h\":140},\"spread\":{\"lo\":4,\"hi\":250,\"spread\":246}}"
+   "detail": "{\"strip\":{\"colours\":56622,\"w\":1896,\"h\":140},\"spread\":{\"lo\":3,\"hi\":234,\"spread\":231}}"
   },
   {
    "name": "remote · the trim really shortened the clip",
@@ -3884,12 +4189,12 @@
   {
    "name": "remote · a camera clip tracks",
    "ok": true,
-   "detail": "tracked 60 frames in 3.8 s (15.8 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 60 frames in 4.0 s (15.1 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "remote · a camera clip renders",
    "ok": true,
-   "detail": "rendered 60 frames in 1.4 s (42.5 fps) · 0.3 MB"
+   "detail": "rendered 60 frames in 1.4 s (43.3 fps) · 0.3 MB"
   },
   {
    "name": "remote · the render has the trimmed frame count",
@@ -3904,12 +4209,12 @@
   {
    "name": "browser · the camera is live at the resolution it asked for",
    "ok": true,
-   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"7a5f26d65524c3aeacb8b6af34445f924e60c6b0b5c49872cf3f02c36997f2b4\",\"frameRate\":30,\"groupId\":\"dcb6c44bbb256dff6a163bee3b95518528aedb2cd3b883eee6b84ec46c8cf89e\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
+   "detail": "{\"aspectRatio\":1.7777777777777777,\"deviceId\":\"2c901f585f14b6a23165b5dea18661d0d4c1f69a0a4910bc0cfc76dec8c6849d\",\"frameRate\":30,\"groupId\":\"e52094631ca6fea5ba61dc46f86cc791711d77022b3258b469c769b31d665063\",\"height\":720,\"resizeMode\":\"none\",\"width\":1280}"
   },
   {
    "name": "browser · a photo comes back at the camera's resolution",
    "ok": true,
-   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":1378061},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 1346 KB · stays in this tab\"}"
+   "detail": "{\"photo\":{\"w\":1280,\"h\":720,\"bytes\":1139536},\"natW\":1280,\"natH\":720,\"source\":\"1280 × 720 · 1113 KB · stays in this tab\"}"
   },
   {
    "name": "browser · the photo closed the camera",
@@ -3918,12 +4223,12 @@
   {
    "name": "browser · the photo dithers",
    "ok": true,
-   "detail": "{\"census\":{\"w\":1280,\"h\":720,\"distinctColours\":2},\"spread\":{\"lo\":2,\"hi\":250,\"spread\":248}}"
+   "detail": "{\"census\":{\"w\":1280,\"h\":720,\"distinctColours\":2},\"spread\":{\"lo\":2,\"hi\":237,\"spread\":235}}"
   },
   {
    "name": "browser · the photo exports a PNG",
    "ok": true,
-   "detail": "1280×720 PNG · 438 KB"
+   "detail": "1280×720 PNG · 453 KB"
   },
   {
    "name": "browser · the exported PNG is the camera's own resolution",
@@ -3933,22 +4238,22 @@
   {
    "name": "browser · about three seconds were recorded",
    "ok": true,
-   "detail": "3.74"
+   "detail": "3.75"
   },
   {
    "name": "browser · the recording became a clip",
    "ok": true,
-   "detail": "110"
+   "detail": "111"
   },
   {
    "name": "browser · the filmstrip has thumbnails on it",
    "ok": true,
-   "detail": "{\"strip\":{\"colours\":48390,\"w\":1896,\"h\":140},\"spread\":{\"lo\":2,\"hi\":250,\"spread\":248}}"
+   "detail": "{\"strip\":{\"colours\":53817,\"w\":1896,\"h\":140},\"spread\":{\"lo\":2,\"hi\":237,\"spread\":235}}"
   },
   {
    "name": "browser · the camera recording decodes through WebCodecs",
    "ok": true,
-   "detail": "\"decoded 60 frames in 0.43 s · WebCodecs · worker · webm · vp09.00.10.08 · hardware\""
+   "detail": "\"decoded 60 frames in 0.37 s · WebCodecs · worker · webm · vp09.00.10.08 · hardware\""
   },
   {
    "name": "browser · and it is recognised as WebM",
@@ -3958,17 +4263,17 @@
   {
    "name": "browser · the trim really shortened the clip",
    "ok": true,
-   "detail": "60 frames for a 2 s range (whole clip was 110)"
+   "detail": "60 frames for a 2 s range (whole clip was 111)"
   },
   {
    "name": "browser · the trim is stated in the source line",
    "ok": true,
-   "detail": "60 frames · 1280×720 · 30 fps · 2.0 s · trimmed 0.8–2.8 s · re-cut, nothing re-uploaded · stays in this tab"
+   "detail": "60 frames · 1280×720 · 30 fps · 2.0 s · trimmed 0.9–2.9 s · WebCodecs · worker · re-cut, nothing re-uploaded · stays in this tab"
   },
   {
    "name": "remote · dots run tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 8.9 s (16.8 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 150 frames in 8.5 s (17.6 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "remote · the dot data covers every frame",
@@ -4002,7 +4307,7 @@
   {
    "name": "browser · dots run tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 13.3 s (11.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 150 frames in 13.5 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "browser · the dot data covers every frame",
@@ -4036,7 +4341,7 @@
   {
    "name": "the clip tracks in the tab",
    "ok": true,
-   "detail": "tracked 150 frames in 13.7 s (10.9 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 150 frames in 24.0 s (6.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "the tab offers 9:16 at 1080×1920",
@@ -4063,7 +4368,7 @@
   {
    "name": "the 9:16 pair exports in the tab",
    "ok": true,
-   "detail": "rendered 150 frames in 11.9 s (12.6 fps) · 1080×1920 · 4.0 MB · rendered slower than real time (11.9 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server · original cut: 150 frames, WEBM, 5.2 MB"
+   "detail": "rendered 150 frames in 12.4 s (12.1 fps) · 1080×1920 · 4.0 MB · rendered slower than real time (12.4 s of work for a 5.0 s clip) — the WebM is paced to wall clock, so it plays slow; pick a lighter look or use the local server · original cut: 150 frames, WEBM, 5.2 MB"
   },
   {
    "name": "the file is named for its shape",
@@ -4131,7 +4436,7 @@
   {
    "name": "sequence · sample.mp4 tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 8.7 s (17.3 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 150 frames in 8.7 s (17.2 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "sequence · the clip went in as an item",
@@ -4150,12 +4455,12 @@
   {
    "name": "sequence · entry-clip.mp4 tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 8.7 s (17.3 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 150 frames in 8.7 s (17.2 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "sequence · the second clip went in",
    "ok": true,
-   "detail": "added entry-clip · 1 track · 90 frames · 1.6 s"
+   "detail": "added entry-clip · 1 track · 90 frames · 1.7 s"
   },
   {
    "name": "sequence · the library survived loading another clip",
@@ -4245,7 +4550,7 @@
   {
    "name": "sequence · the preview plays",
    "ok": true,
-   "detail": "14 -> 50"
+   "detail": "15 -> 51"
   },
   {
    "name": "sequence · a cut costs no frames at all",
@@ -4274,17 +4579,17 @@
   {
    "name": "sequence · the .dots.gz replays with all four colours",
    "ok": true,
-   "detail": "{\"frames\":288,\"painted\":361,\"seconds\":3,\"fps\":120.2,\"meanPaintMs\":1.78,\"worstPaintMs\":5.2,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
+   "detail": "{\"frames\":288,\"painted\":361,\"seconds\":3.01,\"fps\":120.1,\"meanPaintMs\":1.47,\"worstPaintMs\":3.6,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
   },
   {
    "name": "sequence · the player holds 60 fps",
    "ok": true,
-   "detail": "{\"frames\":288,\"painted\":361,\"seconds\":3,\"fps\":120.2,\"meanPaintMs\":1.78,\"worstPaintMs\":5.2,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
+   "detail": "{\"frames\":288,\"painted\":361,\"seconds\":3.01,\"fps\":120.1,\"meanPaintMs\":1.47,\"worstPaintMs\":3.6,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
   },
   {
    "name": "sequence · a frame costs well under a 60 fps budget",
    "ok": true,
-   "detail": "{\"frames\":288,\"painted\":361,\"seconds\":3,\"fps\":120.2,\"meanPaintMs\":1.78,\"worstPaintMs\":5.2,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
+   "detail": "{\"frames\":288,\"painted\":361,\"seconds\":3.01,\"fps\":120.1,\"meanPaintMs\":1.47,\"worstPaintMs\":3.6,\"subjects\":4,\"palette\":[\"#c9d4c5\",\"#b0413e\",\"#2f4f4a\",\"#7a6a4f\",\"#3c5a7a\"]}"
   },
   {
    "name": "sequence · the strip survives an engine switch",
@@ -4294,12 +4599,12 @@
   {
    "name": "sequence · the tab writes the sequence as webm",
    "ok": true,
-   "detail": "63 frames · WEBM · 0.85 MB · 2.2 s · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+   "detail": "63 frames · WEBM · 0.82 MB · 2.2 s · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
   },
   {
    "name": "sequence · the tab writes the sequence as gif",
    "ok": true,
-   "detail": "32 frames · GIF · 0.21 MB · 0.6 s · 32 frames at 15 fps · 5 colours · loops forever"
+   "detail": "32 frames · GIF · 0.21 MB · 0.7 s · 32 frames at 15 fps · 5 colours · loops forever"
   },
   {
    "name": "sequence · the tab writes the sequence as webm-alpha",
@@ -4309,7 +4614,7 @@
   {
    "name": "sequence · the tab's sequence GIF carries a palette and loops",
    "ok": true,
-   "detail": "32 frames · GIF · 0.21 MB · 0.6 s · 32 frames at 15 fps · 5 colours · loops forever"
+   "detail": "32 frames · GIF · 0.21 MB · 0.7 s · 32 frames at 15 fps · 5 colours · loops forever"
   },
   {
    "name": "sequence · the tab's alpha sequence really has an alpha channel",
@@ -4319,7 +4624,7 @@
   {
    "name": "item look · the clip tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 9.2 s (16.3 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 150 frames in 13.7 s (11.0 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "item look · three items, all with dots on them",
@@ -4444,7 +4749,7 @@
   {
    "name": "pixel · the clip tracks",
    "ok": true,
-   "detail": "tracked 150 frames in 8.6 s (17.5 fps) on MPS coreml · 1 subject"
+   "detail": "tracked 150 frames in 8.5 s (17.7 fps) on MPS coreml · 1 subject"
   },
   {
    "name": "pixel · a pixel-mode item previews next to a dots one",
@@ -4522,17 +4827,17 @@
   {
    "name": "browser · preview covers only this frame's subject",
    "ok": true,
-   "detail": "frame 48 · 1 subject in 0.04 s (768 px) · #2 7600 px"
+   "detail": "frame 48 · 1 subject in 0.13 s (768 px) · #2 7600 px"
   },
   {
    "name": "browser · both subjects track",
    "ok": true,
-   "detail": "tracked 149 frames in 30.4 s (9.8 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each · frames via WebCodecs (hardware)"
+   "detail": "tracked 149 frames in 31.3 s (9.5 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each · frames via WebCodecs (hardware)"
   },
   {
    "name": "browser · the two prompt frames are reported",
    "ok": true,
-   "detail": "tracked 149 frames in 30.4 s (9.8 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each · frames via WebCodecs (hardware)"
+   "detail": "tracked 149 frames in 31.3 s (9.5 fps) on WEBGPU fp16 · 2 subjects prompted on 2 different frames · 2 subjects, one pass each · frames via WebCodecs (hardware)"
   },
   {
    "name": "browser · the subject present from the start is never empty",
@@ -4580,12 +4885,12 @@
   {
    "name": "remote · both subjects track",
    "ok": true,
-   "detail": "tracked 149 frames in 14.8 s (10.1 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
+   "detail": "tracked 149 frames in 17.1 s (8.7 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
   },
   {
    "name": "remote · the two prompt frames are reported",
    "ok": true,
-   "detail": "tracked 149 frames in 14.8 s (10.1 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
+   "detail": "tracked 149 frames in 17.1 s (8.7 fps) on MPS coreml · 2 subjects prompted on 2 different frames"
   },
   {
    "name": "remote · the subject present from the start is never empty",
@@ -4615,17 +4920,17 @@
   {
    "name": "tiers · 512 px previews",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.05 s (512 px) · #1 13331 px"
+   "detail": "frame 0 · 1 subject in 0.04 s (512 px) · #1 13331 px"
   },
   {
    "name": "tiers · the preview says which square it used",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.05 s (512 px) · #1 13331 px"
+   "detail": "frame 0 · 1 subject in 0.04 s (512 px) · #1 13331 px"
   },
   {
    "name": "tiers · 512 px tracks",
    "ok": true,
-   "detail": "tracked 60 frames in 3.0 s (19.7 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 60 frames in 2.6 s (22.8 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "tiers · 512 px loaded its own graph set",
@@ -4660,17 +4965,17 @@
   {
    "name": "tiers · 768 px previews",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.05 s (768 px) · #1 12825 px"
+   "detail": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12825 px"
   },
   {
    "name": "tiers · the preview says which square it used",
    "ok": true,
-   "detail": "frame 0 · 1 subject in 0.05 s (768 px) · #1 12825 px"
+   "detail": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12825 px"
   },
   {
    "name": "tiers · 768 px tracks",
    "ok": true,
-   "detail": "tracked 60 frames in 6.8 s (8.8 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 60 frames in 5.3 s (11.4 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "tiers · 768 px loaded its own graph set",
@@ -4715,7 +5020,7 @@
   {
    "name": "tiers · 1024 px tracks",
    "ok": true,
-   "detail": "tracked 60 frames in 9.7 s (6.2 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+   "detail": "tracked 60 frames in 8.9 s (6.7 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
   },
   {
    "name": "tiers · 1024 px loaded its own graph set",
@@ -4770,7 +5075,112 @@
   {
    "name": "tiers · a smaller square really is faster",
    "ok": true,
-   "detail": "{\"512\":3.1,\"768\":7.3,\"1024\":10.2}"
+   "detail": "{\"512\":3.1,\"768\":5.7,\"1024\":9.2}"
+  },
+  {
+   "name": "mirror · the tree carries no fp32 graph at any square",
+   "ok": true,
+   "detail": "[\"1024\",\"512\",\"consts.bin\",\"encoder.fp16.onnx\",\"heads.fp16.onnx\",\"heads_mask.fp16.onnx\",\"heads_prompt.fp16.onnx\",\"manifest.json\",\"memattn.fp16.onnx\",\"memenc.f16in.onnx\",\"memenc.onnx\"]"
+  },
+  {
+   "name": "mirror · 512 px is offered and selects",
+   "ok": true,
+   "detail": "512"
+  },
+  {
+   "name": "mirror · 512 px tracks with no fp32 in the deployment",
+   "ok": true,
+   "detail": "tracked 60 frames in 2.9 s (20.9 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "mirror · 512 px really loaded its own square",
+   "ok": true,
+   "detail": "{\"loaded\":512,\"backend\":\"WebGPU fp16 · 512 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · 512 px needed no fallback and says nothing about one",
+   "ok": true,
+   "detail": "{\"loaded\":512,\"backend\":\"WebGPU fp16 · 512 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · 1024 px is offered and selects",
+   "ok": true,
+   "detail": "1024"
+  },
+  {
+   "name": "mirror · 1024 px tracks with no fp32 in the deployment",
+   "ok": true,
+   "detail": "tracked 60 frames in 9.5 s (6.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "mirror · 1024 px really loaded its own square",
+   "ok": true,
+   "detail": "{\"loaded\":1024,\"backend\":\"WebGPU fp16 · 1024 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · 1024 px needed no fallback and says nothing about one",
+   "ok": true,
+   "detail": "{\"loaded\":1024,\"backend\":\"WebGPU fp16 · 1024 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · the GPU is there and reports no shader-f16",
+   "ok": true,
+   "detail": "{\"gpu\":true,\"adapter\":true,\"f16\":false}"
+  },
+  {
+   "name": "mirror · no shader-f16 still segments, on fp16 over WASM",
+   "ok": true,
+   "detail": "1 subject in 1.18 s (768 px) · #1 5300 px · this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle"
+  },
+  {
+   "name": "mirror · it went to WASM fp16, not to a missing fp32 graph",
+   "ok": true,
+   "detail": "{\"ep\":\"wasm\",\"fp16\":true,\"line\":\"WASM fp16 · 768 px · 1 thread · slow\",\"note\":\"this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle\"}"
+  },
+  {
+   "name": "mirror · and the note says why, and where the fp32 bundle is",
+   "ok": true,
+   "detail": "this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle"
+  },
+  {
+   "name": "mirror · 404 on a tier graph does not kill the track",
+   "ok": true,
+   "detail": "tracked 30 frames in 3.8 s (8.0 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · 404 falls back to the default square",
+   "ok": true,
+   "detail": "{\"loaded\":768,\"tierNote\":\"the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead\"}"
+  },
+  {
+   "name": "mirror · 404 names the file it could not load",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · 404 never reaches \"protobuf parsing failed\"",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead | tracked 30 frames in 3.8 s (8.0 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · a 200 that is HTML on a tier graph does not kill the track",
+   "ok": true,
+   "detail": "tracked 30 frames in 3.0 s (9.9 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · a 200 that is HTML falls back to the default square",
+   "ok": true,
+   "detail": "{\"loaded\":768,\"tierNote\":\"the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead\"}"
+  },
+  {
+   "name": "mirror · a 200 that is HTML names the file it could not load",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · a 200 that is HTML never reaches \"protobuf parsing failed\"",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead | tracked 30 frames in 3.0 s (9.9 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
   },
   {
    "name": "firefox · the page comes up on the browser engine",
@@ -4843,12 +5253,12 @@
   {
    "name": "webkit · through WebCodecs, and it says so",
    "ok": true,
-   "detail": "decoded 60 frames in 0.61 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
+   "detail": "decoded 60 frames in 0.65 s · WebCodecs · worker · mp4 · avc1.64001f · hardware"
   },
   {
    "name": "webkit · and the clip exports",
    "ok": true,
-   "detail": "rendered 60 frames in 2.1 s (28.1 fps) · 2.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+   "detail": "rendered 60 frames in 2.2 s (27.7 fps) · 2.3 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
   },
   {
    "name": "webkit · the export is the clip's own length",
@@ -4862,7 +5272,7 @@
   {
    "name": "no requestFrame · the export still runs",
    "ok": true,
-   "detail": "rendered 60 frames in 2.4 s (25.3 fps) · 1.6 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+   "detail": "rendered 60 frames in 2.4 s (25.4 fps) · 1.6 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
   },
   {
    "name": "no requestFrame · and the compositor path wrote every frame",
@@ -4887,7 +5297,7 @@
   {
    "name": "no adapter · a still segments on the WASM backend",
    "ok": true,
-   "detail": "1 subject in 1.12 s (768 px) · #1 5300 px · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
+   "detail": "1 subject in 1.13 s (768 px) · #1 5300 px · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
   },
   {
    "name": "no adapter · single-threaded, because the page is not isolated",
@@ -4902,12 +5312,12 @@
   {
    "name": "no adapter · and a clip tracks on it",
    "ok": true,
-   "detail": "tracked 15 frames in 33.8 s (0.4 fps) on WASM fp16 · 1 subject · frames via WebCodecs (hardware) · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
+   "detail": "tracked 15 frames in 33.3 s (0.5 fps) on WASM fp16 · 1 subject · frames via WebCodecs (hardware) · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
   },
   {
    "name": "no adapter · the tracked line names the backend",
    "ok": true,
-   "detail": "tracked 15 frames in 33.8 s (0.4 fps) on WASM fp16 · 1 subject · frames via WebCodecs (hardware) · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
+   "detail": "tracked 15 frames in 33.3 s (0.5 fps) on WASM fp16 · 1 subject · frames via WebCodecs (hardware) · WebGPU is present but this browser refused an adapter — in Brave that is Shields’ fingerprinting protection (set it to Standard at brave://settings/shields, or enable brave://flags/#enable-unsafe-webgpu). Running on WASM instead, ~6x slower"
   },
   {
    "name": "DV_API_KEY: /api/meta is 401 without a bearer token",
@@ -4926,7 +5336,7 @@
   {
    "name": "DV_API_KEY: /api/meta advertises the gate",
    "ok": true,
-   "detail": "{\"ok\":true,\"name\":\"dither-studio\",\"api\":2,\"device\":\"mps\",\"backend\":null,\"auth\":\"bearer\",\"max_objects\":6,\"track_sizes\":[512,768,1024],\"default_track_size\":768,\"per_object_prompt_frames\":true,\"segment_image\":true,\"uncapped\":true,\"reextract\":true,\"extract_progress\":true,\"gc\":true,\"original\":true,\"frame_range\":true,\"canvas\":true,\"dots_max_frames\":65535,\"formats\":[\"mp4\",\"webm\",\"gif\",\"webm-alpha\",\"prores\"]}"
+   "detail": "{\"ok\":true,\"name\":\"dither-studio\",\"api\":2,\"device\":\"mps\",\"backend\":null,\"auth\":\"bearer\",\"max_objects\":6,\"track_sizes\":[512,768,1024],\"default_track_size\":768,\"per_object_prompt_frames\":true,\"incremental_track\":true,\"segment_image\":true,\"uncapped\":true,\"reextract\":true,\"extract_progress\":true,\"gc\":true,\"original\":true,\"frame_range\":true,\"canvas\":true,\"dots_max_frames\":65535,\"formats\":[\"mp4\",\"webm\",\"gif\",\"webm-alpha\",\"prores\"]}"
   },
   {
    "name": "DV_API_KEY: the page itself stays reachable",
@@ -4936,7 +5346,7 @@
   {
    "name": "DV_API_KEY: the remote engine connects with the key",
    "ok": true,
-   "detail": "{\"id\":\"remote\",\"label\":\"Remote server\",\"baseUrl\":\"http://127.0.0.1:56568\",\"supports\":{\"maskPrompt\":true,\"perObjectPromptFrames\":true,\"backward\":true,\"multiObject\":\"batched\",\"exportMime\":\"video/mp4\",\"exportExt\":\"mp4\",\"exportPlayable\":true,\"stillSubjects\":true,\"reextract\":true,\"extractProgress\":true,\"uncapped\":true,\"original\":true,\"canvas\":true,\"frameRange\":true,\"formats\":[{\"available\":true,\"note\":\"\",\"id\":\"mp4\",\"ext\":\"mp4\",\"mime\":\"video/mp4\",\"alpha\":false,\"label\":\"MP4 · H.264\"},{\"available\":true,\"note\":\"\",\"id\":\"webm\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":false,\"label\":\"WebM · VP9\"},{\"available\":true,\"note\":\"\",\"id\":\"gif\",\"ext\":\"gif\",\"mime\":\"image/gif\",\"alpha\":false,\"label\":\"GIF · looping\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"webm-alpha\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":true,\"label\":\"WebM · VP9 + alpha\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"prores\",\"ext\":\"mov\",\"mime\":\"video/quicktime\",\"alpha\":true,\"label\":\"ProRes 4444 · alpha\"}]},\"modelsMissing\":null,\"tried\":[{\"url\":\"http://127.0.0.1:56568\",\"ok\":true}]}"
+   "detail": "{\"id\":\"remote\",\"label\":\"Remote server\",\"baseUrl\":\"http://127.0.0.1:60807\",\"supports\":{\"maskPrompt\":true,\"perObjectPromptFrames\":true,\"backward\":true,\"multiObject\":\"batched\",\"exportMime\":\"video/mp4\",\"exportExt\":\"mp4\",\"exportPlayable\":true,\"stillSubjects\":true,\"reextract\":true,\"incrementalTrack\":true,\"extractProgress\":true,\"uncapped\":true,\"original\":true,\"canvas\":true,\"frameRange\":true,\"formats\":[{\"available\":true,\"note\":\"\",\"id\":\"mp4\",\"ext\":\"mp4\",\"mime\":\"video/mp4\",\"alpha\":false,\"label\":\"MP4 · H.264\"},{\"available\":true,\"note\":\"\",\"id\":\"webm\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":false,\"label\":\"WebM · VP9\"},{\"available\":true,\"note\":\"\",\"id\":\"gif\",\"ext\":\"gif\",\"mime\":\"image/gif\",\"alpha\":false,\"label\":\"GIF · looping\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"webm-alpha\",\"ext\":\"webm\",\"mime\":\"video/webm\",\"alpha\":true,\"label\":\"WebM · VP9 + alpha\"},{\"available\":true,\"note\":\"the flat background is keyed out; only the dots are opaque\",\"id\":\"prores\",\"ext\":\"mov\",\"mime\":\"video/quicktime\",\"alpha\":true,\"label\":\"ProRes 4444 · alpha\"}]},\"modelsMissing\":null,\"tried\":[{\"url\":\"http://127.0.0.1:60807\",\"ok\":true}]}"
   }
  ],
  "browser": {
@@ -4946,6 +5356,6 @@
   "clipSeconds": 5
  },
  "only": [],
- "checksPassed": 392,
- "checksTotal": 392
+ "checksPassed": 426,
+ "checksTotal": 426
 }

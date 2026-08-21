@@ -7,6 +7,7 @@ Everything lives under jobs/<job-id>/. Nothing leaves the machine.
 """
 import base64
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -204,7 +205,15 @@ def status_of(jid):
             if os.path.exists(os.path.join(JOBS, jid, "out.mp4")):
                 st["render"]["state"] = "done"
             _jobs[jid] = st
-        return json.loads(json.dumps(st))
+        out = json.loads(json.dumps(st))
+    # `objects` is what the LAST run walked; `tracked` is everything that has
+    # masks on disk, which after an incremental run is a superset of it.
+    out["tracked"] = tracked_objects(jid)
+    try:
+        out["tracks"] = read_meta(jid).get("tracks") or {}
+    except Exception:                                        # noqa: BLE001
+        out["tracks"] = {}
+    return out
 
 
 # ------------------------------------------------------------------ ffmpeg
@@ -498,6 +507,9 @@ def api_meta():
             "track_sizes": [t["size"] for t in TRACK_SIZES],
             "default_track_size": DEFAULT_TRACK_SIZE,
             "per_object_prompt_frames": True,
+            # POST /track takes `only: [obj ids]` and rewrites masks for those
+            # ids alone; DELETE /jobs/<id>/subject/<obj> drops one subject.
+            "incremental_track": True,
             "segment_image": True,
             "uncapped": True,          # no 10 s / 300 frame ceiling on upload
             "reextract": True,         # POST /api/jobs/<id>/reextract
@@ -540,6 +552,7 @@ def palettes():
         "precision": _precision(_backend or BACKEND),
         "max_objects": MAX_OBJECTS,
         "segment_image": True,
+        "incremental_track": True,
         "uncapped": True,
         "reextract": True,
         "extract_progress": True,
@@ -863,11 +876,56 @@ class TrackReq(BaseModel):
     frame_idx: int = 0                      # default for objects without one
     objects: list[TrackObject]
     image_size: int = DEFAULT_TRACK_SIZE    # tracker input square, not the clip
+    # INCREMENTAL TRACKING. `objects` is always the whole cast -- it is what
+    # meta.json records, and what a later run needs in order to know which
+    # prompts a subject's masks were made from. `only` is the subset this run
+    # actually walks: masks/<obj>/ is rewritten for those ids and left exactly
+    # as it was for every other id, so "track #1, then add #2 and track it"
+    # costs one clip's worth of tracking each time instead of two.
+    # None (the default) = all of them, which is what an older client sends.
+    only: list[int] | None = None
 
     def frames(self):
         """[(object, its prompt frame)] in request order."""
         return [(o, self.frame_idx if o.frame_idx is None else o.frame_idx)
                 for o in self.objects]
+
+    def run_objects(self):
+        """The subjects this run tracks -- `only`, or all of them."""
+        if self.only is None:
+            return list(self.objects)
+        keep = {int(x) for x in self.only}
+        return [o for o in self.objects if int(o.id) in keep]
+
+    def run_frames(self):
+        """[(object, its prompt frame)] for the subjects this run tracks."""
+        return [(o, self.frame_idx if o.frame_idx is None else o.frame_idx)
+                for o in self.run_objects()]
+
+
+def prompt_hash(o, frame_idx, image_size):
+    """A stable fingerprint of one subject's prompt.
+
+    Two runs that hash the same produced the same masks, which is what lets the
+    page mark a subject `stale` when its marks moved and leave it `tracked` when
+    they did not. The rasterised lasso is hashed by its bytes, so redrawing the
+    same shape a pixel differently counts as a change."""
+    h = hashlib.sha1()
+    h.update(json.dumps({"points": o.points, "box": o.box,
+                         "mask": o.mask or "", "frame_idx": int(frame_idx),
+                         "image_size": int(image_size)},
+                        sort_keys=True).encode())
+    return h.hexdigest()[:16]
+
+
+def tracked_objects(jid):
+    """The subjects that have masks on disk right now, newest run or not."""
+    mroot = os.path.join(JOBS, jid, "masks")
+    if not os.path.isdir(mroot):
+        return []
+    return sorted((o for o in os.listdir(mroot)
+                   if os.path.isdir(os.path.join(mroot, o))),
+                  key=lambda x: (len(x), x))
 
 
 @app.post("/api/jobs/{jid}/track")
@@ -888,6 +946,14 @@ def track(jid: str, req: TrackReq):
     if req.image_size not in [t["size"] for t in TRACK_SIZES]:
         raise HTTPException(400, "image_size must be one of %s"
                             % [t["size"] for t in TRACK_SIZES])
+    if req.only is not None:
+        have = {int(o.id) for o in req.objects}
+        unknown = [x for x in req.only if int(x) not in have]
+        if unknown:
+            raise HTTPException(400, "only: %s not in objects" % unknown)
+    run = req.run_objects()
+    if not run:
+        raise HTTPException(400, "only: nothing left to track")
 
     with _state_lock:
         st = _jobs.get(jid) or new_status(meta["n_frames"])
@@ -895,8 +961,8 @@ def track(jid: str, req: TrackReq):
             raise HTTPException(409, "already tracking")
         st.update(state="loading", done_frames=0, elapsed_s=0.0, fps=0.0, error=None,
                   n_frames=meta["n_frames"],
-                  objects=[str(o.id) for o in req.objects],
-                  prompt_frames={str(o.id): fi for o, fi in req.frames()})
+                  objects=[str(o.id) for o in run],
+                  prompt_frames={str(o.id): fi for o, fi in req.run_frames()})
         _jobs[jid] = st
 
     # the rasterised mask is big and reproducible from the paths the client
@@ -905,11 +971,15 @@ def track(jid: str, req: TrackReq):
                 "frame_idx": fi} for o, fi in req.frames()]
     write_meta(jid, {**meta, "prompts": {"frame_idx": req.frame_idx,
                                         "image_size": req.image_size,
+                                        "only": ([int(x) for x in req.only]
+                                                 if req.only is not None else None),
                                         "objects": prompts}})
     threading.Thread(target=_track_worker, args=(jid, d, req), daemon=True).start()
     return {"job": jid, "state": "loading", "image_size": req.image_size,
-            "objects": [str(o.id) for o in req.objects],
-            "prompt_frames": {str(o.id): fi for o, fi in req.frames()}}
+            "objects": [str(o.id) for o in run],
+            "kept": [o for o in tracked_objects(jid)
+                     if o not in {str(x.id) for x in run}],
+            "prompt_frames": {str(o.id): fi for o, fi in req.run_frames()}}
 
 
 def _set(jid, **kw):
@@ -920,6 +990,7 @@ def _set(jid, **kw):
 def _track_worker(jid, d, req):
     import torch
     t0 = time.perf_counter()
+    run_objs = req.run_objects()
     try:
         with _gpu_lock:
             predictor, backend = get_predictor(req.image_size)
@@ -927,8 +998,11 @@ def _track_worker(jid, d, req):
                  image_size=req.image_size)
             frames_dir = os.path.join(d, "frames")
             mroot = os.path.join(d, "masks")
-            shutil.rmtree(mroot, ignore_errors=True)
-            for o in req.objects:
+            # INCREMENTAL: only the subjects this run walks lose their masks.
+            # Everyone else's masks/<obj>/ is not touched, which is the whole
+            # point -- their bytes have to survive this run unchanged.
+            for o in run_objs:
+                shutil.rmtree(os.path.join(mroot, str(o.id)), ignore_errors=True)
                 os.makedirs(os.path.join(mroot, str(o.id)), exist_ok=True)
 
             cast = (contextlib.nullcontext() if backend == "torch-fp32"
@@ -942,7 +1016,7 @@ def _track_worker(jid, d, req):
 
                 meta = read_meta(jid)
                 mpad = pad_of(meta)
-                pairs = req.frames()
+                pairs = req.run_frames()
                 _apply_prompts(predictor, state, pairs, meta["w"], meta["h"])
                 _sync()
                 start = min(fi for _, fi in pairs)
@@ -993,15 +1067,65 @@ def _track_worker(jid, d, req):
                 torch.mps.empty_cache()
 
         el = time.perf_counter() - t0
+
+        # Per-object provenance, and per-object cache invalidation. A subject
+        # that was not in this run keeps its entry and keeps its polished
+        # masks; the ones that were re-tracked lose theirs, because the masks
+        # they were polished from no longer exist.
+        meta = read_meta(jid)
+        tracks = dict(meta.get("tracks") or {})
+        for o, fi in req.run_frames():
+            tracks[str(o.id)] = {
+                "hash": prompt_hash(o, fi, req.image_size),
+                "frame_idx": int(fi), "image_size": int(req.image_size),
+                "frames": len(seen), "elapsed_s": round(el, 2),
+                "backend": backend, "at": round(time.time(), 3),
+            }
+            shutil.rmtree(os.path.join(d, "polish", str(o.id)), ignore_errors=True)
+        write_meta(jid, {**meta, "tracks": tracks})
+
         _set(jid, state="done", elapsed_s=round(el, 2),
              fps=round(len(seen) / el, 2) if el > 0 else 0.0)
-        print("[track] %s: %d frames, %d obj, %.1fs (%.2f fps, %s @ %d px)"
-              % (jid, len(seen), len(req.objects), el, len(seen) / max(el, 1e-6),
+        print("[track] %s: %d frames, %d obj%s, %.1fs (%.2f fps, %s @ %d px)"
+              % (jid, len(seen), len(run_objs),
+                 "" if req.only is None else " of %d (incremental)" % len(req.objects),
+                 el, len(seen) / max(el, 1e-6),
                  backend, req.image_size), flush=True)
     except Exception as e:  # noqa: BLE001
         import traceback
         traceback.print_exc()
         _set(jid, state="error", error="%s: %s" % (type(e).__name__, e))
+
+
+@app.delete("/api/jobs/{jid}/subject/{obj}")
+def drop_subject(jid: str, obj: str):
+    """Forget one subject: its masks, its polished masks and its provenance.
+
+    This is the real removal, not a toggle -- the page hides a subject from the
+    render by leaving it out of the `subjects` list, which needs no server at
+    all. This route is what "remove it, I am not going to re-track it" does,
+    and it is the only thing that gets the disk back."""
+    d = job_dir(jid)
+    if os.path.sep in obj or obj.startswith("."):
+        raise HTTPException(400, "bad subject")
+    with _state_lock:
+        st = _jobs.get(jid)
+        if st and st["state"] in ("tracking", "loading"):
+            raise HTTPException(409, "busy tracking")
+    mdir = os.path.join(d, "masks", obj)
+    had = os.path.isdir(mdir)
+    shutil.rmtree(mdir, ignore_errors=True)
+    shutil.rmtree(os.path.join(d, "polish", obj), ignore_errors=True)
+    meta = read_meta(jid)
+    tracks = dict(meta.get("tracks") or {})
+    tracks.pop(obj, None)
+    write_meta(jid, {**meta, "tracks": tracks})
+    with _state_lock:
+        st = _jobs.get(jid)
+        if st:
+            st["objects"] = [o for o in st.get("objects", []) if o != obj]
+    left = tracked_objects(jid)
+    return {"job": jid, "removed": obj, "existed": had, "tracked": left}
 
 
 @app.post("/api/jobs/{jid}/preview")

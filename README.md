@@ -497,6 +497,100 @@ scene** — and step 5 gets a *transparent background* checkbox.
   three would triple an 83 MB download for a knob that mostly matters when you
   are waiting on a server.
 
+#### One subject at a time
+
+Track used to be all-or-nothing: one press re-walked every subject and replaced
+every mask, so adding a third subject to a clip meant paying for the first two
+again, and being unhappy with one of them meant re-tracking all of them. Nothing
+about the data ever required that. A subject's masks are its own —
+`jobs/<id>/masks/<obj>/` on the server, one logit array per id in the tab — and
+the only thing that made a run global was the button.
+
+So it is per subject now. **Track one, look at it, add another, track only the
+new one.** Change your mind about #2 and re-track #2; #1 does not move. Remove
+one and it is gone from the picture immediately, with nothing re-tracked.
+
+Each chip carries the state of its own subject:
+
+| dot | chip says | what it means |
+|---|---|---|
+| hollow | `#2 · 1pt+box @ 0 · new` | prompted, no masks yet |
+| green | `#1 · 1pt+box @ 0` | tracked, and the marks still match the masks |
+| amber | `#2 · 2pt+box @ 0 · stale` | tracked, but the marks (or the frame, or the tracking quality) moved since |
+| pulsing | `#2 · … · tracking…` | in the run going on right now |
+
+`stale` is a statement about provenance, not about quality: the masks are still
+there and still render. It says only that they were made from something other
+than what is on screen now.
+
+The **Track button reads the plan** rather than the cast, so it cannot promise
+one thing and do another: *Track subject* → *Track 1 new subject* → *Re-track
+#2* → *Track all (2 stale)* → *Track all 3 again*. What it will walk is what it
+says, and the estimate beside it is priced for that subset.
+
+A chip whose subject has masks gets a **⋯ menu** instead of a delete cross:
+
+* **re-track this one** — walks the clip again for that subject alone; everyone
+  else keeps the masks they have.
+* **hide from the render** — keeps the masks, takes the subject out of the
+  picture. A toggle, and free.
+* **remove it** — the real delete. The masks drop out of the render at once and
+  are forgotten: `DELETE /api/jobs/<id>/subject/<obj>` on the server (masks and
+  the polish cache for that subject), the logits dropped from the map in the
+  tab. Nothing is re-tracked.
+
+Everything downstream consumes *tracked and visible*: the preview, the dots, the
+palettes, the crop path, the exports and a sequence capture all read the same
+list, so a hidden subject has no palette slot and no dots, on both engines and
+on the server alike.
+
+**What it costs, honestly.** The two engines answer differently and the note
+under the button says which one you are on:
+
+| | tracking two subjects together | tracking them one at a time |
+|---|---|---|
+| **server** | one inference state, **one encoder pass** over the clip, a memory bank per subject hanging off it | each run walks the clip again |
+| **browser** | one full pass per subject anyway — one `WebTracker` is one memory bank | the same work, in two runs |
+
+Measured on `sample.mp4` (150 frames, 768 px, CoreML on an idle M4 Pro), through
+the API with nothing else running:
+
+| run | seconds |
+|---|---|
+| subject #1 alone | **8.3** (9.3 on a repeat) |
+| subject #2 alone | **8.7** |
+| both in one run | **11.7** (12.2 on a repeat) |
+| both, as two separate runs | **~17** |
+
+The suites measure the same thing through the UI, on a machine that is also
+running a headless Chromium: **20.6 s** split against **16.5 s** joint on the
+server, **25.0 s** against **26.6 s** in the tab. The shape holds; the absolute
+numbers move with the load.
+
+So on the server the second subject costs about **3 s** inside a shared run and
+a full pass in a run of its own. That is the price of being able to change your
+mind about one subject without re-tracking the others — and it is stated in the
+UI rather than hidden. In the browser engine there is no such premium: splitting
+the runs costs nothing, because the loop was one subject at a time already.
+
+**On the wire.** `POST /api/jobs/<id>/track` takes the whole cast in `objects`
+and an optional `only: [ids]`; it rewrites `masks/<obj>/` for those ids alone,
+leaves every other subject's PNGs untouched byte for byte, drops
+`polish/<obj>/` only for what it re-tracked, and records per-subject provenance
+(prompt hash, prompt frame, tracker square, frames, seconds, backend) under
+`meta.json` → `tracks`. `GET /status` grows a `tracked` list — everything with
+masks on disk, which after an incremental run is a superset of the `objects` the
+last run walked. A server without `incremental_track` in `/api/meta` gets no
+`only` field and behaves exactly as it did — and the page stops offering to
+spend less than it is going to spend there: the plan becomes the whole cast and
+the ⋯ menu drops "re-track this one", because on that server every run is a run
+of everything.
+
+| | |
+|---|---|
+| ![one subject tracked, one new](docs/ux-after/subjects-2-new.png) | ![the per-subject menu](docs/ux-after/subjects-5-menu.png) |
+| the button offers the new subject, and only that | re-track this one · hide · remove |
+
 ### 3 · Look
 Seven algorithms, each labelled with how it behaves on video:
 
@@ -1560,7 +1654,13 @@ node verify-web.mjs http://127.0.0.1:8765 clip.mp4 docs/entry-clip.mp4 still.jpg
 still dotted whole-image down to a one-frame `.dots.gz`, a still with a clicked
 subject segmented in one frame and exported as a transparent PNG, a whole-frame
 clip, two tracked subjects, one subject at a non-default tracking quality, a
-polygon mask prompt with a frame preview, the **matched cut** — a 2 s window
+polygon mask prompt with a frame preview, **per-subject incremental tracking**
+(track #1 alone with `masks/2` asserted absent; add #2 and track only the new
+one with #1's 150 mask PNGs hashed byte for byte before and after; edit #2's
+prompt so it goes stale while #1 does not; re-track #2 alone from its chip
+menu; hide #1 and check its masks survive; remove #1 and check they do not;
+export what is left — with every `POST /track` body logged and `only` asserted
+to be exactly `[1] [2] [2] [2,3]`), the **matched cut** — a 2 s window
 exported with *also save the original* on, both files through ffprobe (60
 frames, 1280×720, `30/1`, identical), three of the original's frames compared
 against the very JPEGs in `jobs/<id>/frames/` the render read, the second
@@ -1592,7 +1692,12 @@ auto probe and the manual switch, a still, whole-image dots on a still, a still
 subject **on both engines**, a whole-frame clip, a tracked subject (exported with
 the mask polish on), a polygon through the `heads_mask` graph, two subjects
 prompted on two different frames — and the same two-frame test on the server
-engine, so the feature is checked on both. It exports a **pair** in the tab too:
+engine, so the feature is checked on both. **Per-subject tracking** is run
+end-to-end in the tab as well, with a hash over every stored logit array
+standing in for the server suite's mask PNGs: #1 tracked alone, #2 added and
+tracked on its own with #1's logits unchanged, #2 made stale and re-tracked
+alone, #1 hidden and then removed, and a joint run timed against the two
+separate ones to check that splitting a run really does cost nothing here. It exports a **pair** in the tab too:
 a dithered WebM and the matched cut beside it, both 150 frames at 1280×720 at
 the same rate to within about a percent, three frames of the second one
 checked against the exact `ImageData` the recorder was handed, and the checkbox
@@ -1647,10 +1752,13 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | engine parity, kernels | **110/110 byte-identical**, and 110/110 again through a mask |
 | engine parity, compose | **15/15 byte-identical** — whole, cutout, overlay, two subjects, chunky pixels, alpha |
 | engine parity, polish | **27/27 float-identical** (3 strengths × 9 frames); crop shortcut vs whole frame, max difference **0** |
-| `verify.mjs` | 15 flows, **0 console errors** |
+| `verify.mjs` | 16 flows, **0 console errors**, **0 page errors** |
 | `jobsgc_check.py` | **29/29**, six cases, no server and no real jobs/ |
 | jobs/ janitor, live | a stale job deleted, a fresh one kept, a `camera-` job trimmed to `source.webm` + `meta.json`; **12 sweeps** fired through a real track → render and it finished untouched |
-| `verify-web.mjs` | 21 flows, **283/283 assertions**, **0 console errors** |
+| `verify-web.mjs` | 27 flows, **426/426 assertions**, **0 console errors**, **0 page errors** |
+| per-subject tracking, server | #1 tracked alone (`masks/2` absent); #2 tracked alone and #1's 150 mask PNGs **byte-identical** across it (`c9864a00927b5a2e` before and after, and again after a #2-only re-track); `POST /track` carried `only: [1] [2] [2] [2,3]`; #1 hidden → its masks survive, #1 removed → `masks/1` gone, `masks/2` untouched, 150 frames still render |
+| per-subject tracking, tab | the same story on the browser engine with a hash over every stored logit array: #1 `ad477aa9` through three runs it was not part of, #2 `54e383d4` → `1607c628` when its prompt changed, `remove` leaves `{2}` in the map, 150-frame VP9 out |
+| the price of splitting a run | server **20.6 s** as two runs against **16.5 s** as one, through the UI, on a loaded machine (**~17 s** against **11.7 s** through the API on an idle one); tab **25.0 s** against **26.6 s** — no premium, because it was one pass per subject already |
 | sequence: an item's look | item 2 through all 7 modes, a palette, cell 6, gamma 1.4 and polish 70 — items 1 and 3 **hash identically** before and after (`c7b68293`, `a9e6316d`), item 2 goes `c7b68293` → `2853216c` and back again |
 | sequence: pixel modes | a cell-1 Bayer photograph is **484,508 dots a frame**; its morph flies **3,773** mid-air and lands on 711, the subject's own count |
 | canvas: 9:16 cutout | 1080×1920, 60 frames, dots 2.7–4.5 % of the frame, the subject centred to within 25 % of the width on every sampled frame; its `.dots.gz` is 1080×1920 with **0** dots outside |

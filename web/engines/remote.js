@@ -38,6 +38,11 @@ export class RemoteEngine {
       // POST /api/jobs/<id>/reextract: a different trim out of the clip the
       // server already has. Older servers say nothing and get a re-upload.
       reextract: false,
+      // POST /track carries `only: [ids]` and rewrites masks for those ids
+      // alone; DELETE /jobs/<id>/subject/<obj> forgets one. An older server
+      // re-tracks the whole cast every time, so the page stops offering
+      // "track just this one" rather than lying about what it costs.
+      incrementalTrack: false,
       // GET /api/extract/<ticket> while the upload POST is still running.
       extractProgress: false,
       // no 10 s / 300 frame ceiling. An old server still has one; the page
@@ -100,6 +105,7 @@ export class RemoteEngine {
     this.supports.original = !!this.probe.original;
     this.supports.frameRange = !!this.probe.frame_range;
     this.supports.canvas = !!this.probe.canvas;
+    this.supports.incrementalTrack = !!this.probe.incremental_track;
     return this;
   }
 
@@ -111,6 +117,9 @@ export class RemoteEngine {
     if (m.original !== undefined) this.supports.original = !!m.original;
     if (m.frame_range !== undefined) this.supports.frameRange = !!m.frame_range;
     if (m.canvas !== undefined) this.supports.canvas = !!m.canvas;
+    if (m.incremental_track !== undefined) {
+      this.supports.incrementalTrack = !!m.incremental_track;
+    }
     if (m.extract_progress !== undefined) {
       this.supports.extractProgress = !!m.extract_progress;
     }
@@ -312,13 +321,21 @@ export class RemoteEngine {
              backend: r.backend, frameIdx: r.frame_idx };
   }
 
-  async track({ objects, imageSize }, onProgress) {
+  /** `only` is the incremental half: `objects` is always the whole cast (the
+   *  server records it, and a later run needs to know what a subject's masks
+   *  were made from), `only` the ids this run actually walks. Everyone else's
+   *  masks/<obj>/ stays byte for byte where it was. */
+  async track({ objects, imageSize, only }, onProgress) {
+    const run = (only && this.supports.incrementalTrack)
+      ? objects.filter((o) => only.includes(o.id)) : objects;
     await this.api(this.jobPath('/track'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        frame_idx: objects.length ? objects[0].frameIdx | 0 : 0,
+        frame_idx: run.length ? run[0].frameIdx | 0 : 0,
         image_size: imageSize,
         objects: RemoteEngine.payload(objects),
+        ...(only && this.supports.incrementalTrack
+          ? { only: run.map((o) => o.id | 0) } : {}),
       }),
     });
     for (;;) {
@@ -333,11 +350,20 @@ export class RemoteEngine {
       if (st.state === 'done') {
         return { frames: st.done_frames, elapsedS: st.elapsed_s, fps: st.fps,
                  device: (st.device || '').toUpperCase(),
-                 backend: st.backend || st.precision || '', imageSize: st.image_size };
+                 backend: st.backend || st.precision || '', imageSize: st.image_size,
+                 tracked: st.tracked || [], ran: st.objects || [] };
       }
       if (st.state === 'error') throw new Error(st.error);
       await sleep(350);
     }
+  }
+
+  /** Forget one subject for good: masks, polished masks and provenance.
+   *  Idempotent -- a subject that was never tracked deletes cleanly. */
+  async forget(objId) {
+    if (!this.clip || !this.clip.job) return { removed: String(objId) };
+    if (!this.supports.incrementalTrack) return { removed: String(objId) };
+    return this.api(this.jobPath('/subject/' + objId), { method: 'DELETE' });
   }
 
   /* ------------------------------------------------------------- export */

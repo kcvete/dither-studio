@@ -27,10 +27,18 @@
  *   P  clip    -> a tracked subject with MASK POLISH on: the motion gate, the
  *                 tab's polished mask against the server's byte for byte, the
  *                 wipe, and preview-vs-export
+ *   S  clip    -> PER-SUBJECT INCREMENTAL TRACKING: track subject #1 alone,
+ *                 add #2 and track only the new one (with #1's mask PNGs
+ *                 checked byte for byte across the run), edit #2's prompt so
+ *                 it goes stale, re-track #2 alone from its chip menu, then
+ *                 remove #1 and render what is left. Every POST /track body
+ *                 is logged and asserted on: `only` must name exactly the
+ *                 subjects the UI said it would walk
  * Writes screenshots to docs/ and a JSON report to docs/verify-report.json.
  */
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -42,6 +50,9 @@ const CLIP = process.argv[3] || path.join(HERE, 'sample.mp4');
 const STILL = process.argv[4] || CLIP.replace(/\.\w+$/, '.jpg');
 const DOCS = path.join(HERE, 'docs');
 fs.mkdirSync(DOCS, { recursive: true });
+/* the after-evidence directory the UX screenshots live in */
+const AFTER = path.join(DOCS, 'ux-after');
+fs.mkdirSync(AFTER, { recursive: true });
 
 const SUBJECT_A = { box: [435, 95, 625, 360], point: [545, 205] };   // parkour athlete
 const SUBJECT_B = { box: [1005, 5, 1279, 470], point: [1150, 160] }; // tree, right edge
@@ -1850,6 +1861,204 @@ async function runCanvas(page) {
   return r;
 }
 
+/* ---- S: per-subject incremental tracking ---------------------------------
+ *
+ * The claim: one Track run walks the subjects it says it is going to walk and
+ * nobody else's masks move. That is checked twice over -- from the outside, by
+ * hashing masks/<obj>/ on disk before and after, and from the inside, by
+ * logging every POST /track body the page sends.
+ */
+function maskDirHash(job, obj) {
+  const d = path.join(HERE, 'jobs', job, 'masks', String(obj));
+  if (!fs.existsSync(d)) return null;
+  const names = fs.readdirSync(d).sort();
+  const h = crypto.createHash('sha256');
+  for (const n of names) { h.update(n); h.update(fs.readFileSync(path.join(d, n))); }
+  return { files: names.length, hash: h.digest('hex').slice(0, 16) };
+}
+
+async function runSubjects(page) {
+  const r = { trackPosts: [] };
+  const log = (rq) => {
+    if (!/\/track$/.test(rq.url()) || rq.method() !== 'POST') return;
+    let b = null;
+    try { b = JSON.parse(rq.postData() || 'null'); } catch (e) { b = null; }
+    if (!b) return;
+    r.trackPosts.push({ only: b.only === undefined ? null : b.only,
+                        objects: (b.objects || []).map((o) => o.id) });
+  };
+  page.on('request', log);
+  try {
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    await page.waitForFunction(() => window.DV_ready === true, { timeout: 20000 });
+    await page.setInputFiles('#file', CLIP);
+    await page.waitForFunction(() => window.DV.kind === 'video', { timeout: 90000 });
+    const job = await page.evaluate(() => window.DV.job);
+    r.job = job;
+    await page.click('#scope .chip[data-scope="track"]');
+    await sleep(700);
+
+    /* --- 1. one subject, tracked alone -------------------------------- */
+    await prompt(page, SUBJECT_A);
+    r.ctaFirst = (await page.textContent('#bTrack')).trim();
+    const t1 = Date.now();
+    await page.click('#bTrack');
+    r.trackOne = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+    if (/failed/.test(r.trackOne)) throw new Error(r.trackOne);
+    r.secondsOne = +((Date.now() - t1) / 1000).toFixed(1);
+    r.afterOne = { m1: maskDirHash(job, 1), m2: maskDirHash(job, 2) };
+    if (!r.afterOne.m1) throw new Error('subject #1 has no masks on disk');
+    if (r.afterOne.m2) throw new Error('subject #2 was tracked and should not have been');
+    r.statusOne = await (await page.request.get(`${BASE}/api/jobs/${job}/status`)).json();
+    if (JSON.stringify(r.statusOne.tracked) !== '["1"]') {
+      throw new Error('status.tracked is ' + JSON.stringify(r.statusOne.tracked));
+    }
+    r.stateOne = await page.evaluate(() => window.DV_subjects.list());
+    await page.screenshot({ path: path.join(AFTER, 'subjects-1-tracked.png') });
+
+    /* --- 2. add a second subject; the button offers only the new one --- */
+    await openStep(page, 'st2');
+    await page.click('#bAdd');
+    await sleep(400);
+    await prompt(page, SUBJECT_B);
+    r.planNew = await page.evaluate(() => window.DV_subjects.plan());
+    if (JSON.stringify(r.planNew.ids) !== '[2]') {
+      throw new Error('the plan should be [2], is ' + JSON.stringify(r.planNew.ids));
+    }
+    if (!/1 new subject/.test(r.planNew.cta)) {
+      throw new Error('the CTA should offer the new subject, says ' + r.planNew.cta);
+    }
+    r.chipsNew = await page.$$eval('#subs .chip', (n) => n.map((e) => ({
+      text: e.textContent.replace(/\s+/g, ' ').trim(), state: e.dataset.state })));
+    await page.screenshot({ path: path.join(AFTER, 'subjects-2-new.png') });
+
+    const t2 = Date.now();
+    await page.click('#bTrack');
+    r.trackTwo = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+    if (/failed/.test(r.trackTwo)) throw new Error(r.trackTwo);
+    r.secondsTwo = +((Date.now() - t2) / 1000).toFixed(1);
+    r.afterTwo = { m1: maskDirHash(job, 1), m2: maskDirHash(job, 2) };
+    if (!r.afterTwo.m2) throw new Error('subject #2 still has no masks');
+    if (r.afterTwo.m1.hash !== r.afterOne.m1.hash) {
+      throw new Error(`#1's masks moved: ${r.afterOne.m1.hash} -> ${r.afterTwo.m1.hash}`);
+    }
+    r.keptNoted = /kept from an earlier run/.test(r.trackTwo);
+    if (!r.keptNoted) throw new Error('the run did not say #1 was kept: ' + r.trackTwo);
+    await page.screenshot({ path: path.join(AFTER, 'subjects-3-both.png') });
+
+    /* --- 3. edit #2's prompt: it goes stale, #1 does not --------------- */
+    await openStep(page, 'st2');
+    await page.evaluate(() => { window.DV_subjects.prompt(); window.DV.active = 1; });
+    await sleep(400);
+    const [bx, by] = await stageXY(page, '#pov', SUBJECT_B.point[0] - 40,
+                                   SUBJECT_B.point[1] + 120);
+    await page.mouse.click(bx, by);
+    await sleep(400);
+    r.stateStale = await page.evaluate(() => window.DV_subjects.list());
+    const st2 = (r.stateStale.find((x) => x.id === 2) || {}).state;
+    const st1 = (r.stateStale.find((x) => x.id === 1) || {}).state;
+    if (st2 !== 'stale') throw new Error('#2 should be stale, is ' + st2);
+    if (st1 !== 'tracked') throw new Error('#1 should be untouched, is ' + st1);
+    r.planStale = await page.evaluate(() => window.DV_subjects.plan());
+    if (!/Re-track #2/.test(r.planStale.cta)) {
+      throw new Error('the CTA should offer to re-track #2, says ' + r.planStale.cta);
+    }
+    await page.screenshot({ path: path.join(AFTER, 'subjects-4-stale.png') });
+
+    /* --- 4. the chip menu, and a re-track of one subject --------------- */
+    r.menu = await page.evaluate(() => window.DV_subjects.menu(1));
+    await page.screenshot({ path: path.join(AFTER, 'subjects-5-menu.png') });
+    await page.evaluate(() => window.DV_subjects.closeMenu());
+    const t3 = Date.now();
+    await page.evaluate(() => window.DV_subjects.track([2]));
+    r.trackAgain = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+    if (/failed/.test(r.trackAgain)) throw new Error(r.trackAgain);
+    r.secondsAgain = +((Date.now() - t3) / 1000).toFixed(1);
+    r.afterAgain = { m1: maskDirHash(job, 1), m2: maskDirHash(job, 2) };
+    if (r.afterAgain.m1.hash !== r.afterOne.m1.hash) {
+      throw new Error('#1 moved on a #2-only re-track');
+    }
+    if (r.afterAgain.m2.hash === r.afterTwo.m2.hash) {
+      throw new Error('#2 was re-tracked from a different prompt and did not change');
+    }
+
+    /* --- 5. hide, then remove -- the render follows immediately -------- */
+    await page.evaluate(() => window.DV_draw(20)); await sleep(600);
+    r.bothActive = await page.evaluate(() => window.DV_subjects.active());
+    r.censusBoth = await census(page);
+    await page.evaluate(() => window.DV_subjects.hide(1, true));
+    await sleep(500);
+    await page.evaluate(() => window.DV_draw(20)); await sleep(600);
+    r.hiddenActive = await page.evaluate(() => window.DV_subjects.active());
+    if (JSON.stringify(r.hiddenActive) !== '[2]') {
+      throw new Error('hiding #1 left ' + JSON.stringify(r.hiddenActive));
+    }
+    r.hiddenMasksKept = !!maskDirHash(job, 1);
+    if (!r.hiddenMasksKept) throw new Error('hiding threw the masks away');
+    await page.screenshot({ path: path.join(AFTER, 'subjects-6-hidden.png') });
+    await page.evaluate(() => window.DV_subjects.hide(1, false));
+    await sleep(400);
+
+    await page.evaluate(() => window.DV_subjects.remove(1));
+    await sleep(1200);
+    r.afterRemove = { m1: maskDirHash(job, 1), m2: maskDirHash(job, 2) };
+    if (r.afterRemove.m1) throw new Error('#1 was removed and its masks are still there');
+    if (!r.afterRemove.m2) throw new Error('removing #1 took #2 with it');
+    r.leftActive = await page.evaluate(() => window.DV_subjects.active());
+    r.leftChips = await page.$$eval('#subs .chip', (n) => n.map(
+      (e) => e.textContent.replace(/\s+/g, ' ').trim()));
+    await page.evaluate(() => window.DV_draw(20)); await sleep(700);
+    r.censusLeft = await census(page);
+    await page.screenshot({ path: path.join(AFTER, 'subjects-7-removed.png') });
+
+    /* --- 6. and it still exports, with the subject that is left -------- */
+    await openStep(page, 'st5');
+    await page.click('#bExport');
+    r.render = await waitText(page, '#rinfo', /rendered|failed/, 300000);
+    if (/failed/.test(r.render)) throw new Error(r.render);
+    r.probe = ffprobe(path.join(HERE, 'jobs', job, 'out.mp4'));
+    await page.screenshot({ path: path.join(AFTER, 'subjects-8-export.png') });
+
+    /* --- 7. what actually went over the wire --------------------------- */
+    r.onlySent = r.trackPosts.map((p) => p.only);
+    const want = JSON.stringify([[1], [2], [2]]);
+    if (JSON.stringify(r.onlySent.slice(0, 3)) !== want) {
+      throw new Error('POST /track only: ' + JSON.stringify(r.onlySent)
+        + ' — expected ' + want);
+    }
+
+    /* --- 8. what incremental actually costs ---------------------------- *
+     * Two subjects walked in ONE run against the same clip at the same
+     * quality, timed the same way, so the price of splitting a run is a
+     * measurement in the report and not a claim in a comment. */
+    await openStep(page, 'st2');
+    await page.evaluate(() => { window.DV_subjects.prompt(); });
+    await sleep(300);
+    await page.click('#bAdd'); await sleep(400);
+    await prompt(page, SUBJECT_A);
+    const t4 = Date.now();
+    await page.evaluate(() => window.DV_subjects.track(
+      window.DV.subjects.map((x) => x.id)));
+    r.trackBoth = await waitText(page, '#tinfo', /tracked|failed/, 300000);
+    if (/failed/.test(r.trackBoth)) throw new Error(r.trackBoth);
+    r.secondsBoth = +((Date.now() - t4) / 1000).toFixed(1);
+    r.onlySent = r.trackPosts.map((p) => p.only);
+    if (r.onlySent.length !== 4 || r.onlySent[3].length !== 2) {
+      throw new Error('the joint run sent ' + JSON.stringify(r.onlySent));
+    }
+    r.runs = await page.evaluate(() => window.DV_subjects.runs());
+    r.cost = {
+      separately: +(r.runs.filter((x) => x.n === 1)
+        .slice(-2).reduce((a, x) => a + x.seconds, 0)).toFixed(2),
+      together: (r.runs.find((x) => x.n === 2) || {}).seconds,
+    };
+    r.costNote = (await page.textContent('#tracknote') || '').replace(/\s+/g, ' ').trim();
+  } finally {
+    page.off('request', log);
+  }
+  return r;
+}
+
 /* ------------------------------------------------------------------ main */
 const browser = await chromium.launch({ headless: true, channel: process.env.DV_CHANNEL || undefined });
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2,
@@ -1888,6 +2097,7 @@ try {
   await run('canvas', runCanvas);
   await run('range', runRange);
   await run('lasso', runLasso);
+  await run('subjects', runSubjects);
   await run('polish', runPolish);
   await run('gc', runGC);
 } catch (e) {

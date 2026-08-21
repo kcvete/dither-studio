@@ -233,16 +233,100 @@ function clipEstimate() {
 }
 
 /** The Track button carries the honest estimate: what it costs, before it is
- *  pressed. Stills keep their own label ("Use this selection"). */
+ *  pressed — and, since tracking became per-subject, WHICH subjects it is
+ *  about to spend that on. Stills keep their own label ("Use this selection").
+ *
+ *  The words follow `trackPlan()`, so the button can never promise one thing
+ *  and do another:
+ *
+ *    nothing tracked yet   Track subject / Track 3 subjects   (as it always was)
+ *    one new one added     Track 1 new subject
+ *    one subject's marks
+ *      moved since its run  Re-track #2
+ *    several stale          Track all (2 stale)
+ *    everything current     Track all again
+ */
+function trackCTA() {
+  const total = S.subjects.length;
+  const plan = trackPlan();
+  const anyTracked = S.subjects.some((x) => !!x.track);
+  const n = plan.length;
+  // nothing is prompted yet (a cleared subject, a fresh one): the button is
+  // still the invitation it always was
+  if (!n) return total > 1 ? 'Track subjects' : 'Track subject';
+  if (!anyTracked) {
+    return n > 1 ? `Track ${n} subjects` : 'Track subject';
+  }
+  const fresh = plan.filter((x) => subjState(x) === 'untracked').length;
+  const stale = plan.filter((x) => subjState(x) === 'stale').length;
+  if (!fresh && !stale) return n > 1 ? `Track all ${n} again` : `Re-track #${plan[0].id}`;
+  if (n === 1) {
+    return fresh ? 'Track 1 new subject' : `Re-track #${plan[0].id}`;
+  }
+  if (fresh && !stale) return `Track ${fresh} new subjects`;
+  if (stale && !fresh) {
+    return n === total ? `Track all (${stale} stale)` : `Re-track ${stale} subjects`;
+  }
+  return `Track ${n} of ${total} (${fresh} new · ${stale} stale)`;
+}
+
 function paintTrackCTA() {
   const b = $('#bTrack');
+  // a still has no Track run and therefore no run to price
+  if (S.kind !== 'video' && $('#tracknote')) $('#tracknote').hidden = true;
   if (!b || S.kind !== 'video') return;
   if (b.dataset.running === '1') return;      // progress copy owns it mid-run
-  const nSub = Math.max(1, S.subjects.length || 1);
-  let est = 0;
-  try { est = clipEstimate().trackS * nSub; } catch (e) { est = 0; }
-  b.textContent = (nSub > 1 ? `Track ${nSub} subjects` : 'Track subject')
-    + (est ? ` — ≈ ${fmtDur(est)}` : '');
+  const n = Math.max(1, trackPlan().length);
+  const est = passSeconds() * n;
+  b.textContent = trackCTA() + (est ? ` — ≈ ${fmtDur(est)}` : '');
+  paintTrackNote();
+}
+
+/* What a separate run actually costs, in the open — and it is not the same
+ * answer on the two engines, so this does not give one answer.
+ *
+ * SERVER: subjects walked together share ONE pass of the image encoder over
+ * the clip. One inference state, one encode per frame, a memory bank per
+ * subject hanging off it (server/edgetam_util.py, `propagate_per_object`).
+ * Tracking them one at a time is the same masks for more time: every extra run
+ * pays that encoder pass again. Measured on the reference clip (sample.mp4,
+ * 150 frames, 768 px, CoreML on an idle M4 Pro): one subject 8.3-9.3 s, the
+ * two of them in one run 11.7-12.2 s, the two of them in separate runs ~17 s.
+ * The second subject costs about 3 s inside a shared run and a full pass in a
+ * run of its own — which is the price of being able to change your mind about
+ * one subject without re-tracking the others.
+ *
+ * TAB: the browser engine tracks subjects one after another whatever it is
+ * asked for — one WebTracker is one memory bank — so a subject costs a full
+ * pass either way and splitting the runs costs nothing at all.
+ *
+ * The button already prices the run it is about to do; this says why, and
+ * quotes the seconds the runs on THIS clip actually took. */
+const TRACK_LOG = [];      // {n, seconds} per completed run, this clip
+function paintTrackNote() {
+  const box = $('#tracknote');
+  if (!box) return;
+  if (S.kind !== 'video' || !S.subjects.length) { box.hidden = true; return; }
+  const anyTracked = S.subjects.some((x) => !!x.track);
+  if (!anyTracked && TRACK_LOG.length < 1) { box.hidden = true; return; }
+  const shared = E() && E().supports && E().supports.multiObject === 'batched';
+  const one = passSeconds();
+  const bits = [shared
+    ? 'Subjects tracked together share one pass of the encoder over the clip, '
+      + 'so tracking them one at a time is the same masks for more time — each '
+      + 'separate run walks the whole clip again'
+      + (one ? `, ≈ ${fmtDur(one)} here` : '') + '.'
+    : 'In this tab subjects are tracked one after another however you ask for '
+      + 'them — one pass each — so tracking them separately costs nothing '
+      + 'extra' + (one ? `; a pass is ≈ ${fmtDur(one)} here` : '') + '.'];
+  if (TRACK_LOG.length) {
+    const done = S.subjects.filter((x) => !!x.track).length;
+    bits.push('So far: ' + TRACK_LOG.map((r) => `${r.n}\u00d7 in ${fmtDur(r.seconds)}`)
+      .join(' · ') + ` — ${fmtDur(TRACK_LOG.reduce((a, r) => a + r.seconds, 0))} `
+      + `of tracking, ${done} subject${done === 1 ? '' : 's'} tracked now.`);
+  }
+  box.hidden = false;
+  box.textContent = bits.join(' ');
 }
 
 function paintEstimate() {
@@ -912,6 +996,7 @@ async function uploadClip(f, trim, opts = {}) {
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.cur = 0; S.promptFrame = 0;
     S.scope = 'whole'; S.coachSeen = null;
+    TRACK_LOG.length = 0; TRACK_RUN = null;
     /* Where these frames start in the source file's own seconds. It is what
      * lets the trim bar (which speaks seconds) address frames on disk, so a
      * later trim can be a window instead of a second extraction. */
@@ -923,6 +1008,8 @@ async function uploadClip(f, trim, opts = {}) {
       S.subjects = opts.keep.map((s) => Object.assign({}, s, {
         promptFrame: s.promptFrame === null ? null
           : clamp(s.promptFrame, 0, j.nFrames - 1),
+        // a new job has no masks under it, whatever the old one had
+        track: null, hidden: false,
       }));
       S.nextId = Math.max(...S.subjects.map((s) => s.id | 0)) + 1;
       S.scope = 'track';
@@ -999,9 +1086,12 @@ function paintScopeSummary() {
     return;
   }
   const n = S.subjects.length;
+  const done = S.subjects.filter((x) => !!x.track).length;
+  const stale = S.subjects.filter((x) => subjState(x) === 'stale').length;
   $('#s2sum').textContent = still
     ? (S.stillMasks.size ? `${S.stillMasks.size} selected` : `${n} subj`)
-    : (S.tracked ? `${n} tracked` : `${n} subj${n > 1 ? 's' : ''}`);
+    : (done ? `${done}/${n} tracked${stale ? ` · ${stale} stale` : ''}`
+      : `${n} subj${n > 1 ? 's' : ''}`);
 }
 
 /* Compose (flat background vs keep the scene) only means something when part
@@ -1059,7 +1149,13 @@ function addSubject() {
                     points: [], box: null, paths: [], promptFrame: null,
                     // mask polish, 0-100; 0 is off and is the default. See
                     // web/polish.js — the same algorithm the server runs.
-                    polish: 0 });
+                    polish: 0,
+                    /* PER-SUBJECT TRACK STATE. `track` is null until this
+                     * subject has masks of its own, and afterwards it is the
+                     * fingerprint of the prompt those masks were made from —
+                     * which is the whole of "stale". `hidden` drops it out of
+                     * the render without throwing its masks away. */
+                    track: null, hidden: false });
   S.active = S.subjects.length - 1;
   renderSubjects(); buildTargets();
 }
@@ -1091,6 +1187,83 @@ const hasPrompt = (s) => !!(s.points.length || s.box || (s.paths || []).length);
 const frameOf = (s) => (s.promptFrame === null ? S.promptFrame : s.promptFrame);
 const onThisFrame = (s) => frameOf(s) === S.promptFrame;
 
+/* ================================================ per-subject track state ===
+ *
+ * Tracking used to be all-or-nothing: one press re-walked every subject and
+ * replaced every mask. Nothing about the data ever required that. A subject's
+ * masks are its own — masks/<obj>/ on the server, one logit array per id in
+ * the tab — so the only thing that made a run global was the button.
+ *
+ * So each subject carries `track`: null until it has masks, and after a run
+ * the fingerprint of the prompt those masks came out of. Four states follow:
+ *
+ *   untracked  no masks yet
+ *   tracking   in the run that is going on right now
+ *   tracked    has masks, and the marks on screen still hash to the same thing
+ *   stale      has masks, but the marks (or the frame, or the detail) moved
+ *
+ * `stale` is a statement about provenance, not about quality: the masks are
+ * still there and still render. It only says they were made from something
+ * else than what is on screen now.
+ */
+/** Everything about a subject that decides what its masks look like. The lasso
+ *  is hashed by its points, which is what the rasteriser is a function of. */
+function promptSig(s) {
+  return JSON.stringify([
+    s.points, s.box || null,
+    (s.paths || []).map((p) => [p.op, p.pts]),
+    frameOf(s), S.trackSize | 0,
+  ]);
+}
+
+/** Ids the run in flight is walking, so their chips can say so. */
+let TRACK_RUN = null;
+
+function subjState(s) {
+  if (TRACK_RUN && TRACK_RUN.has(s.id)) return 'tracking';
+  if (S.kind === 'image') return S.stillMasks.has(s.id) ? 'tracked' : 'untracked';
+  if (!s.track) return 'untracked';
+  return s.track.sig === promptSig(s) ? 'tracked' : 'stale';
+}
+
+/** A subject contributes to the picture when it has masks AND is not hidden.
+ *  Everything downstream — the preview, the dots, the exports, the crop path —
+ *  asks this instead of walking S.subjects, so a hidden or never-tracked
+ *  subject is simply not part of the render. */
+const renderable = (s) => !s.hidden
+  && (S.kind === 'image' ? S.stillMasks.has(s.id) : !!s.track);
+const activeSubs = () => S.subjects.filter(renderable);
+
+/** Keep the old global flag honest: "this clip has masks somewhere". */
+function syncTracked() {
+  S.tracked = S.kind === 'image' ? S.stillMasks.size > 0
+    : S.subjects.some((s) => !!s.track);
+}
+
+/** Can whatever is answering track a SUBSET? The browser engine always could;
+ *  a server has to say `incremental_track` in /api/meta. An older one re-tracks
+ *  the whole cast whatever it is sent, so the page must not offer to spend less
+ *  than it is going to spend — every run is a run of everything there. */
+const canIncrement = () => !!(E() && E().supports && E().supports.incrementalTrack);
+
+/** Which subjects the Track button would walk if it were pressed now.
+ *
+ *  Whatever needs the work: the ones with no masks and the ones whose marks
+ *  have moved since they got theirs. When everything is up to date the button
+ *  still works and re-tracks the lot, because "do it again" has to stay
+ *  available — it is just no longer what it does by default. */
+function trackPlan() {
+  const cast = S.subjects.filter(hasPrompt);
+  if (!canIncrement()) return cast;
+  const work = cast.filter((s) => subjState(s) !== 'tracked');
+  return work.length ? work : cast;
+}
+
+/** Seconds one pass over this clip costs, per subject, at this quality. */
+function passSeconds() {
+  try { return clipEstimate().trackS || 0; } catch (e) { return 0; }
+}
+
 function claimFrame(s) {
   if (s.promptFrame === null) { s.promptFrame = S.promptFrame; paintOffFrame(); }
 }
@@ -1099,7 +1272,9 @@ function claimFrame(s) {
 function paintOffFrame() {
   const box = $('#offframe');
   const away = S.subjects.filter((s) => hasPrompt(s) && !onThisFrame(s));
-  if (!away.length || S.tracked) { box.hidden = true; box.textContent = ''; return; }
+  if (!away.length || $('#pwrap').hidden) {
+    box.hidden = true; box.textContent = ''; return;
+  }
   box.hidden = false; box.textContent = '';
   away.forEach((s, i) => {
     if (i) box.append(document.createTextNode(' · '));
@@ -1115,12 +1290,22 @@ function paintOffFrame() {
   });
 }
 
+/* The words a chip's state dot is worth saying out loud. */
+const STATE_WORD = { untracked: 'not tracked', tracking: 'tracking…',
+                     tracked: 'tracked', stale: 'stale' };
+
 function renderSubjects() {
   const wrap = $('#subs'); wrap.textContent = '';
+  closeSubMenu();
   S.subjects.forEach((s, i) => {
+    const st = subjState(s);
     const b = document.createElement('button');
     b.className = 'chip sub';
+    b.dataset.state = st;
+    if (s.hidden) b.classList.add('hid');
     b.setAttribute('aria-pressed', String(i === S.active));
+    const dot = document.createElement('i');
+    dot.className = 'tdot';
     const sw = document.createElement('span');
     sw.className = 'sw'; sw.style.background = s.palette[s.palette.length - 1];
     const nm = document.createElement('span');
@@ -1129,35 +1314,56 @@ function renderSubjects() {
     if (nl) bits.push(`${nl} shape${nl > 1 ? 's' : ''}`);
     else if (np || s.box) bits.push(`${np}pt${s.box ? '+box' : ''}`);
     if (s.promptFrame !== null && S.kind !== 'image') bits.push('@ ' + s.promptFrame);
+    // the state is only worth a word when it is not the obvious one: before
+    // anything is tracked every chip is "not tracked" and saying so six times
+    // is noise
+    if (S.kind === 'video' && S.subjects.some((x) => !!x.track)) {
+      if (st === 'stale') bits.push('stale');
+      else if (st === 'untracked') bits.push('new');
+      else if (st === 'tracking') bits.push('tracking…');
+    }
+    if (s.hidden) bits.push('hidden');
     nm.textContent = `#${s.id}` + (bits.length ? ' · ' + bits.join(' ') : '');
+    b.title = `subject #${s.id} — ${STATE_WORD[st]}`
+      + (s.hidden ? ', hidden from the render' : '');
     if (hasPrompt(s) && !onThisFrame(s)) b.classList.add('away');
-    b.append(sw, nm);
+    b.append(dot, sw, nm);
     // selecting a subject that lives on another frame goes there, otherwise
     // its marks would be invisible and the next click would land on the wrong
-    // frame and be silently ignored
+    // frame and be silently ignored. A tracked clip can be prompted again --
+    // that is what adding a subject to an existing track means -- so this
+    // follows the stage that is actually showing, not S.tracked.
     b.addEventListener('click', () => {
       S.active = i;
-      if (s.promptFrame !== null && s.promptFrame !== S.promptFrame && !S.tracked) {
+      if (s.promptFrame !== null && s.promptFrame !== S.promptFrame
+          && !$('#pwrap').hidden) {
         $('#sPF').value = s.promptFrame; $('#vPF').textContent = String(s.promptFrame);
         showPromptFrame(s.promptFrame);
       }
       renderSubjects(); drawOverlay();
     });
-    if (S.subjects.length > 1) {
+    /* A subject with masks has three things you can do to it that a subject
+     * without masks does not, so it gets a menu instead of a delete cross:
+     * re-track only this one, remove it (the masks drop out of the render at
+     * once, nothing is re-tracked), or hide it and keep them. */
+    const owns = S.kind === 'video' && !!s.track;
+    if (owns) {
+      const g = document.createElement('span');
+      g.className = 'x more'; g.textContent = '⋯';
+      g.title = 'what to do with this subject';
+      g.addEventListener('click', (e) => {
+        e.stopPropagation();
+        S.active = i; renderSubjects();
+        openSubMenu(s, wrap.children[i] || b);
+      });
+      b.append(g);
+    } else if (S.subjects.length > 1) {
       const x = document.createElement('span');
       x.className = 'x'; x.textContent = '✕';
+      x.title = 'remove this subject';
       x.addEventListener('click', (e) => {
         e.stopPropagation();
-        S.subjects.splice(i, 1);
-        S.active = Math.min(S.active, S.subjects.length - 1);
-        if (S.kind === 'image') {
-          const m = S.stillMasks.get(s.id);
-          if (m && m.close) m.close();
-          S.stillMasks.delete(s.id);
-          S.tracked = S.stillMasks.size > 0;
-          paintCompose(); paintAlphaUI(); draw();
-        }
-        renderSubjects(); drawOverlay(); buildTargets();
+        removeSubject(s);
       });
       b.append(x);
     }
@@ -1168,6 +1374,95 @@ function renderSubjects() {
   paintOffFrame();
   renderPolish();
   paintTrackCTA();
+}
+
+/* ------------------------------------------------------- the subject menu */
+let SUBMENU = null;
+function closeSubMenu() {
+  if (SUBMENU && SUBMENU.parentNode) SUBMENU.remove();
+  SUBMENU = null;
+}
+document.addEventListener('click', (e) => {
+  if (SUBMENU && !SUBMENU.contains(e.target)) closeSubMenu();
+}, true);
+
+function openSubMenu(s, anchor) {
+  closeSubMenu();
+  const m = document.createElement('div');
+  m.className = 'submenu';
+  const head = document.createElement('div');
+  head.className = 'hd';
+  head.textContent = `#${s.id} · ${STATE_WORD[subjState(s)]}`
+    + (s.track ? ` · ${s.track.frames} frames @ ${s.track.size} px` : '');
+  m.append(head);
+  const item = (label, hint, fn) => {
+    const b = document.createElement('button');
+    b.className = 'mi';
+    const t = document.createElement('b'); t.textContent = label;
+    const h = document.createElement('i'); h.textContent = hint;
+    b.append(t, h);
+    b.addEventListener('click', (e) => { e.stopPropagation(); closeSubMenu(); fn(); });
+    m.append(b);
+  };
+  const one = passSeconds();
+  // an older server has no `only`: it re-tracks the whole cast whatever it is
+  // sent, so offering "just this one" there would be a lie about the bill
+  if (canIncrement()) {
+    item('re-track this one',
+         `walks the clip again for #${s.id} only${one ? ` — ≈ ${fmtDur(one)}` : ''}; `
+         + 'every other subject keeps the masks it has',
+         () => { backToPrompt(); track([s.id]); });
+  }
+  item(s.hidden ? 'show in the render' : 'hide from the render',
+       s.hidden ? 'put its masks back into the picture'
+         : 'keeps the masks — the picture just stops using them',
+       () => { s.hidden = !s.hidden; afterSubjectChange(); });
+  item('remove it',
+       'drops its masks out of the render at once and forgets them; '
+       + 'nothing is re-tracked',
+       () => removeSubject(s));
+  document.body.append(m);
+  const r = anchor.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(window.innerWidth - m.offsetWidth - 8,
+                                      r.left)) + 'px';
+  // below the chip, unless that would run off the bottom — on a phone the
+  // chips sit in a sheet near the foot of the screen
+  const below = r.bottom + 6;
+  m.style.top = (below + m.offsetHeight > window.innerHeight - 8
+    ? Math.max(8, r.top - m.offsetHeight - 6) : below) + 'px';
+  SUBMENU = m;
+}
+
+/** Everything that has to happen when the cast, or its visibility, changed. */
+function afterSubjectChange() {
+  syncTracked();
+  dropCache();
+  DOTS_CACHE = null;
+  renderSubjects(); buildTargets(); renderModes(); paintCompose(); paintAlphaUI();
+  drawOverlay();
+  if (!$('#vwrap').hidden) draw();
+}
+
+/** Remove a subject for good. Tracked subjects also tell the engine to forget
+ *  their masks — the server deletes masks/<obj>/ and its polish cache, the
+ *  browser engine drops the logits — and the render stops using them
+ *  immediately, without re-tracking anything. */
+function removeSubject(s) {
+  const i = S.subjects.indexOf(s);
+  if (i < 0) return;
+  if (S.subjects.length <= 1 && !s.track && !S.stillMasks.has(s.id)) return;
+  S.subjects.splice(i, 1);
+  S.active = Math.max(0, Math.min(S.active, S.subjects.length - 1));
+  if (S.kind === 'image') {
+    const m = S.stillMasks.get(s.id);
+    if (m && m.close) m.close();
+    S.stillMasks.delete(s.id);
+  }
+  if (s.track && E() && E().forget) {
+    Promise.resolve(E().forget(s.id)).catch(() => { /* it is gone either way */ });
+  }
+  if (!S.subjects.length) addSubject();
+  afterSubjectChange();
 }
 
 const pimg = $('#pimg'), pov = $('#pov'), pctx = pov.getContext('2d');
@@ -1582,6 +1877,9 @@ function paintTrackSize() {
   $('#vTQ').textContent = t ? tqName(t) : `${S.trackSize} px`;
   // the estimate quotes THIS quality's fps, so it moves when the chip does
   paintEstimate();
+  // and so do the chips: masks made at another square did not come out of this
+  // one, so changing the quality is what makes every tracked subject stale
+  if (S.kind === 'video' && S.subjects.length) renderSubjects();
 }
 
 $('#bTrack').addEventListener('click', () => {
@@ -1810,8 +2108,10 @@ async function paintTrackedFrame(i, withMasks) {
   TSTREAM.busy = true;
   try {
     const frame = await E().frame(i);
+    const live = TRACK_RUN
+      ? S.subjects.filter((x) => TRACK_RUN.has(x.id)) : S.subjects;
     const masks = withMasks
-      ? await Promise.all(S.subjects.map(
+      ? await Promise.all(live.map(
           (x) => E().mask(x.id, i).catch(() => null)))
       : [];
     const cv = $('#vcv');
@@ -1819,7 +2119,7 @@ async function paintTrackedFrame(i, withMasks) {
     const g = cv.getContext('2d');
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.drawImage(frame, 0, 0);
-    S.subjects.forEach((x, k) => {
+    live.forEach((x, k) => {
       if (!masks[k]) return;
       g.save(); g.globalAlpha = 0.5;
       g.drawImage(tintedMask(masks[k], x.palette[x.palette.length - 1]),
@@ -1834,10 +2134,29 @@ async function paintTrackedFrame(i, withMasks) {
   TSTREAM.busy = false;
 }
 
-async function track() {
+/** Track some subjects. `only` is a list of ids — from the chip menu's
+ *  "re-track this one" — and omitting it means "whatever `trackPlan()` says",
+ *  which is the new subjects and the stale ones, or everything when there is
+ *  nothing outstanding.
+ *
+ *  The engines are told the whole cast and the subset to walk: the prompts of
+ *  the subjects that are NOT being tracked still have to be on record, because
+ *  that is what a later run needs in order to know what a subject's masks were
+ *  made from. Their masks are not touched by either engine. */
+async function track(only) {
   if (S.curPath) commitPath();
-  const bad = S.subjects.filter((s) => !hasPrompt(s));
+  const cast = S.subjects.filter(hasPrompt);
+  const plan = (only && canIncrement())
+    ? cast.filter((s) => only.includes(s.id)) : trackPlan();
+  if (!plan.length) {
+    const nop = S.subjects.filter((s) => !hasPrompt(s));
+    toast(nop.length ? 'subject #' + nop[0].id + ' has no prompt yet'
+      : 'every subject is already tracked', true);
+    return;
+  }
+  const bad = plan.filter((s) => !hasPrompt(s));
   if (bad.length) { toast('subject #' + bad[0].id + ' has no prompt yet', true); return; }
+  const kept = S.subjects.filter((s) => s.track && !plan.includes(s));
   while (pvBusy || segBusy) await sleep(60);   // one tracker session, one user
   const btn = $('#bTrack'); btn.disabled = true;
   btn.dataset.running = '1';
@@ -1856,13 +2175,16 @@ async function track() {
   // The tint rides along only when the mask files' order is knowable (one
   // subject, prompted on frame 0) — otherwise the raw frames alone advance.
   const streamed = E().id !== 'browser';
-  const maskStream = streamed && S.subjects.length === 1
-    && frameOf(S.subjects[0]) === 0;
+  const maskStream = streamed && plan.length === 1 && frameOf(plan[0]) === 0
+    && !kept.length;
   if (streamed) { stop(); showStage('result'); }
+  TRACK_RUN = new Set(plan.map((s) => s.id));
+  renderSubjects();
   const t0 = performance.now();
   try {
     const st = await E().track(
-      { objects: promptPayload(), imageSize: S.trackSize },
+      { objects: promptPayload(cast), imageSize: S.trackSize,
+        only: plan.map((s) => s.id) },
       (p) => {
         bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
         const el = (performance.now() - t0) / 1000;
@@ -1885,20 +2207,32 @@ async function track() {
           }
         }
       });
-    prog.hidden = true; S.tracked = true; hideSlowHint();
-    const spread = new Set(S.subjects.map(frameOf));
+    prog.hidden = true; hideSlowHint();
+    TRACK_RUN = null;
+    // the masks these subjects now have came out of exactly these marks
+    plan.forEach((s) => {
+      s.hidden = false;
+      s.track = { sig: promptSig(s), frame: frameOf(s), size: S.trackSize,
+                  frames: st.frames, at: Date.now(),
+                  elapsedS: +(st.elapsedS / plan.length).toFixed(2) };
+    });
+    TRACK_LOG.push({ n: plan.length, seconds: st.elapsedS });
+    syncTracked();
+    const spread = new Set(plan.map(frameOf));
     const box = $('#tinfo'); box.hidden = false; box.classList.remove('err');
     box.textContent = `tracked ${st.frames} frames in ${st.elapsedS.toFixed(1)} s `
       + `(${st.fps.toFixed(1)} fps) on ${st.device} ${st.backend || ''} · `
-      + `${S.subjects.length} subject${S.subjects.length > 1 ? 's' : ''}`
+      + `${plan.length} subject${plan.length > 1 ? 's' : ''}`
       + (spread.size > 1 ? ` prompted on ${spread.size} different frames` : '')
+      + (kept.length ? ` · ${kept.length} kept from an earlier run `
+          + `(#${kept.map((s) => s.id).join(', #')})` : '')
       + (st.note ? ' · ' + st.note : '');
     $('#s2sum').textContent = `${st.frames}f · ${st.fps.toFixed(1)} fps`;
     $('#pwrap').hidden = true; $('#vwrap').hidden = false;
     $('#offframe').hidden = true;
     $('#composeui').hidden = false;
     $('#bgui').hidden = S.P.compose !== 'cutout';
-    dropCache(); buildTargets(); renderModes(); renderPolish(); openStep(3);
+    dropCache(); buildTargets(); renderModes(); renderSubjects(); openStep(3);
     DOTS_CACHE = null;
     coach('tracked', 'if the outline slips somewhere, scrub to that frame, '
       + 'add or remove a tap, and Track again');
@@ -1910,6 +2244,8 @@ async function track() {
     play();
   } catch (err) {
     prog.hidden = true; hideSlowHint();
+    TRACK_RUN = null;
+    renderSubjects();
     const box = $('#tinfo'); box.hidden = false; box.classList.add('err');
     box.textContent = 'track failed: ' + why(err);
     backToPrompt();
@@ -1926,7 +2262,8 @@ const CACHE = new Map();
 async function frameAt(i) {
   const hit = CACHE.get(i);
   if (hit) { CACHE.delete(i); CACHE.set(i, hit); return hit; }
-  const ids = (S.kind === 'video' && usingSubjects()) ? S.subjects.map((s) => s.id) : [];
+  const ids = (S.kind === 'video' && usingSubjects())
+    ? activeSubs().map((s) => s.id) : [];
   const [frame, ...masks] = await Promise.all([
     E().frame(i),
     ...ids.map((id) => E().mask(id, i)),
@@ -1949,8 +2286,7 @@ function dropCache() {
  * compose split, the per-subject palettes, the dots renderer, the exports)
  * asks this and not the source kind. */
 const usingSubjects = () => S.scope === 'track' && S.subjects.length > 0
-  && (S.kind === 'video' ? S.tracked
-    : S.kind === 'image' ? S.stillMasks.size > 0 : false);
+  && (S.kind === 'video' || S.kind === 'image') && activeSubs().length > 0;
 
 /* A whole-image dither has no mask; the dots renderer still wants one, because
  * density is measured inside a mask. This is the "all of it" mask. */
@@ -1967,7 +2303,7 @@ function fullMask(w, h) {
  *  stays index-aligned with the palette list. */
 function stillMasksAt(w, h, slot) {
   const pre = slot || 'sm';
-  return S.subjects.map((s, k) => {
+  return activeSubs().map((s, k) => {
     const im = S.stillMasks.get(s.id);
     return im ? bitmapAlpha(im, w, h, pre + k) : new Float32Array(w * h);
   });
@@ -2033,11 +2369,12 @@ const PM = newWell('pm', {
 });
 
 const polishOn = () => S.kind === 'video' && usingSubjects()
-  && S.subjects.some((s) => (s.polish | 0) > 0);
+  && activeSubs().some((s) => (s.polish | 0) > 0);
 
 function polishKey() {
   return JSON.stringify([E().id, S.job, S.W, S.H,
-                         S.subjects.map((s) => [s.id, s.polish | 0])]);
+                         activeSubs().map((s) => [s.id, s.polish | 0,
+                                                  s.track ? s.track.at : 0])]);
 }
 function dropPolish() { PM.key = null; wellReset(PM); }
 function checkPolishKey() {
@@ -2151,10 +2488,10 @@ async function masksFor(i, rec, slot) {
   if (!polishOn()) return rec.masks.map((m, k) => bitmapAlpha(m, S.W, S.H, slot + k));
   checkPolishKey();
   const out = [];
-  for (let k = 0; k < S.subjects.length; k++) {
-    out.push((S.subjects[k].polish | 0) > 0
-      ? await polishedMask(PM, S.subjects[k].id, i, S.subjects[k].polish | 0,
-                           'pf' + k)
+  const subs = activeSubs();
+  for (let k = 0; k < subs.length; k++) {
+    out.push((subs[k].polish | 0) > 0
+      ? await polishedMask(PM, subs[k].id, i, subs[k].polish | 0, 'pf' + k)
       : bitmapAlpha(rec.masks[k], S.W, S.H, slot + k));
   }
   return out;
@@ -2474,7 +2811,7 @@ function pathKey() {
                          // by the file itself — two photographs dropped one
                          // after the other must not share a crop centre
                          S.kind === 'image' ? [S.fileName, S.natW, S.natH] : 0,
-                         usingSubjects() ? S.subjects.map((s) => s.id) : [],
+                         usingSubjects() ? activeSubs().map((s) => s.id) : [],
                          S.kind === 'image' ? S.stillMasks.size : 0]);
 }
 
@@ -2518,7 +2855,7 @@ async function ensureCanvasPath(onProgress) {
   const centre = { ok: true, x: 0.5, y: 0.5, box: null };
   if (S.kind === 'image') {
     const ms = usingSubjects()
-      ? S.subjects.map((s) => S.stillMasks.get(s.id)).filter(Boolean) : [];
+      ? activeSubs().map((s) => S.stillMasks.get(s.id)).filter(Boolean) : [];
     const c = ms.length ? centroidFromBitmaps(ms, S.W || 1, S.H || 1) : centre;
     Object.assign(CPATH, { key, centers: [[c.x, c.y]], union: c.box, n: 1 });
     return CPATH;
@@ -2529,7 +2866,7 @@ async function ensureCanvasPath(onProgress) {
     return CPATH;
   }
   const n = S.nFrames;
-  const ids = S.subjects.map((s) => s.id);
+  const ids = activeSubs().map((s) => s.id);
   let raw = null;
   if (E().centroids) {
     try { raw = await E().centroids(ids); } catch (err) { raw = null; }
@@ -2802,8 +3139,13 @@ $('#vcv').addEventListener('pointercancel', cvDragEnd);
 let BLUE = null;
 let drawSeq = 0;
 
+/* Index-aligned with what `masksFor()` hands back, which is the subjects that
+ * are actually in the picture — not every subject on the chip row. A hidden or
+ * never-tracked subject has no mask and therefore no palette slot, on both
+ * engines and on the server, so the three cannot disagree about which colour
+ * belongs to which outline. */
 function palettesForRender() {
-  return [S.palette].concat(S.subjects.map((s) => s.palette));
+  return [S.palette].concat(activeSubs().map((s) => s.palette));
 }
 
 /* fit the source into the preview budget; stills only, clips are already 720p */
@@ -3065,7 +3407,7 @@ function renderPolish() {
   if (!show) return;
   const wrap = $('#pollist');
   wrap.textContent = '';
-  S.subjects.forEach((s, k) => {
+  activeSubs().forEach((s, k) => {
     const on = (s.polish | 0) > 0;
     const row = document.createElement('div');
     row.className = 'mini';
@@ -3084,18 +3426,17 @@ function renderPolish() {
     sl.disabled = !on;
     const v = document.createElement('b');
     v.textContent = on ? String(s.polish | 0) : 'off';
-    t.addEventListener('click', () => setPolish(k, on ? 0 : (+sl.value || 70)));
-    sl.addEventListener('input', () => setPolish(k, +sl.value));
+    t.addEventListener('click', () => setPolish(s, on ? 0 : (+sl.value || 70)));
+    sl.addEventListener('input', () => setPolish(s, +sl.value));
     row.append(t, sl, v);
     wrap.append(row);
   });
-  const lit = S.subjects.filter((s) => (s.polish | 0) > 0);
-  $('#vPol').textContent = lit.length
-    ? `${lit.length}/${S.subjects.length} on` : 'off';
+  const subs = activeSubs();
+  const lit = subs.filter((s) => (s.polish | 0) > 0);
+  $('#vPol').textContent = lit.length ? `${lit.length}/${subs.length} on` : 'off';
 }
 
-function setPolish(k, v) {
-  const s = S.subjects[k];
+function setPolish(s, v) {
   if (!s) return;
   s.polish = clamp(v | 0, 0, 100);
   dropPolish();
@@ -3828,8 +4169,8 @@ async function exportClip() {
       // frames directory, the browser engine walks the same indices
       frame_in: rng.in, frame_out: rng.out,
       subjects: usingSubjects()
-        ? S.subjects.map((s) => ({ id: s.id, palette: s.palette,
-                                   polish: s.polish | 0 })) : [],
+        ? activeSubs().map((s) => ({ id: s.id, palette: s.palette,
+                                     polish: s.polish | 0 })) : [],
     });
     const r = await E().exportClip(params, (p) => {
       bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
@@ -3957,8 +4298,8 @@ function dotsParams(rng) {
     // the dot data carries the canvas too: a .dots.gz written for a 9:16
     // export has 9:16 in its header and positions inside it
     canvas: canvasPayload(r),
-    subjects: S.subjects.map((x) => ({ id: x.id, palette: x.palette,
-                                      polish: x.polish | 0 })),
+    subjects: activeSubs().map((x) => ({ id: x.id, palette: x.palette,
+                                        polish: x.polish | 0 })),
   };
 }
 
@@ -3991,7 +4332,7 @@ async function dotsDocStill(whole) {
     masks = use ? on.masks : [fullMask(W, H)];
   }
   const r = dotsOn(sd, W, H, masks, S.P, BLUE);
-  const cols = use ? S.subjects.map((x) => x.palette[x.palette.length - 1])
+  const cols = use ? activeSubs().map((x) => x.palette[x.palette.length - 1])
     : [S.palette[S.palette.length - 1]];
   const doc = { w: W, h: H, fps: 1, dotpx: S.P.dotpx,
                 palette: [S.bg].concat(cols), bgIndex: 0, bg: S.bg,
@@ -4042,7 +4383,7 @@ async function dotsDoc(onProgress, rng) {
                                    text: `${frames.length}/${R0.n}` });
       if (i % 8 === 0) await sleep(0);
     }
-    const cols = S.subjects.map((x) => x.palette[x.palette.length - 1]);
+    const cols = activeSubs().map((x) => x.palette[x.palette.length - 1]);
     doc = { w: DW, h: DH, fps: S.fps, dotpx: S.P.dotpx,
             palette: [S.bg].concat(cols), bgIndex: 0, bg: S.bg,
             subjects: cols.map((c) => ({ color: c })), frames };
@@ -4308,10 +4649,11 @@ async function captureClip() {
     (pr) => seqInfo('reading dot positions ' + pr.text), whole));
   const source = E().snapshot ? E().snapshot() : null;
   if (!source) throw new Error('this engine has no handle on that clip');
+  const inPicture = activeSubs();
   const subs = doc.subjects.map((sub, k) => ({
-    id: (S.subjects[k] || {}).id || (k + 1),
+    id: (inPicture[k] || {}).id || (k + 1),
     color: sub.color,
-    polish: (S.subjects[k] || {}).polish | 0,
+    polish: (inPicture[k] || {}).polish | 0,
   }));
   const item = {
     id: SEQID++, kind: 'clip', name: S.fileName || 'clip',
@@ -4359,8 +4701,9 @@ async function captureStill(opts) {
   if (had) return had;
   const { doc } = await withoutCanvas(() => dotsDocStill(whole));
   const use = !whole && usingSubjects();
+  const inPicture = activeSubs();
   const subs = doc.subjects.map((sub, k) => ({
-    id: use ? ((S.subjects[k] || {}).id || (k + 1)) : 1,
+    id: use ? ((inPicture[k] || {}).id || (k + 1)) : 1,
     color: sub.color, polish: 0,
   }));
   const item = {
@@ -4372,7 +4715,7 @@ async function captureStill(opts) {
     src: { kind: 'still', bitmap: S.bitmap, whole,
            // a COPY of each mask: dropStill() closes the studio's when another
            // picture is loaded, and this item has to outlive that
-           masks: use ? await Promise.all(S.subjects.map(async (s) => ({
+           masks: use ? await Promise.all(inPicture.map(async (s) => ({
              id: s.id, image: await cloneMask(S.stillMasks.get(s.id)),
            }))) : null },
   };
@@ -4699,7 +5042,7 @@ function seqCandidates() {
   if (S.kind === 'image') {
     const cut = usingSubjects();
     if (cut) {
-      S.subjects.forEach((sub, k) => out.push({
+      activeSubs().forEach((sub, k) => out.push({
         id: 'still', arg: { subject: k },
         label: `this still · #${sub.id}`,
         note: `subject #${sub.id}, cut out of ${name}, as dots`,
@@ -6003,6 +6346,49 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
   renderSeq();
   window.DV = S;
   window.DV_maskURL = subjectMaskDataURL;
+  /* Per-subject tracking, for the verifiers and for anyone driving the page
+   * from a console. Everything here goes through the same functions the chips
+   * and the button do, so a test cannot take a path the UI cannot. */
+  window.DV_subjects = {
+    /* the whole cast, with the state the chips are showing */
+    list: () => S.subjects.map((x) => ({
+      id: x.id, state: subjState(x), hidden: !!x.hidden,
+      prompted: hasPrompt(x), frame: x.promptFrame,
+      renders: renderable(x),
+      track: x.track ? { frame: x.track.frame, size: x.track.size,
+                         frames: x.track.frames } : null,
+    })),
+    /* what pressing Track would walk right now, and what the button says */
+    plan: () => ({ ids: trackPlan().map((x) => x.id), label: trackCTA(),
+                   cta: ($('#bTrack') || {}).textContent || '' }),
+    /* track a subset by id; omitted = the plan */
+    track: (only) => track(only),
+    add: () => { addSubject(); backToPrompt(); return S.subjects.slice(-1)[0].id; },
+    /* hand the prompt canvas back, the way the chip menu and + add do */
+    prompt: () => backToPrompt(),
+    remove: (id) => removeSubject(S.subjects.find((x) => x.id === +id)),
+    hide: (id, on) => {
+      const x = S.subjects.find((q) => q.id === +id);
+      if (!x) throw new Error('no subject ' + id);
+      x.hidden = on === undefined ? !x.hidden : !!on;
+      afterSubjectChange();
+      return x.hidden;
+    },
+    /* the ids the render is actually composed from, in palette order */
+    active: () => activeSubs().map((x) => x.id),
+    runs: () => TRACK_LOG.slice(),
+    menu: (id) => {
+      const k = S.subjects.findIndex((x) => x.id === +id);
+      if (k < 0) throw new Error('no subject ' + id);
+      const chip = $('#subs').children[k];
+      const more = chip && chip.querySelector('.more');
+      if (!more) throw new Error('subject ' + id + ' has no menu');
+      more.click();
+      return [...document.querySelectorAll('.submenu .mi b')]
+        .map((b) => b.textContent);
+    },
+    closeMenu: closeSubMenu,
+  };
   // an explicit frame request pauses playback first — scrubbing means pause,
   // and the verifiers depend on the frame they asked for staying put
   window.DV_draw = (i) => { if (i !== undefined) stop(); return draw(i); };
@@ -6034,7 +6420,7 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
     areas: () => {
       const out = {};
       const ms = stillMasksAt(S.W, S.H, 'vm');
-      S.subjects.forEach((sub, k) => {
+      activeSubs().forEach((sub, k) => {
         let n = 0;
         for (let q = 0; q < ms[k].length; q++) if (ms[k][q] >= 0.5) n++;
         out[sub.id] = n;
@@ -6046,22 +6432,24 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
    * console: strengths in, the algorithm's own numbers out. */
   window.DV_polish = {
     set: (id, strength) => {
-      const k = S.subjects.findIndex((x) => String(x.id) === String(id));
-      if (k < 0) throw new Error('no subject ' + id);
-      setPolish(k, strength);
-      return S.subjects[k].polish;
+      const x = S.subjects.find((q) => String(q.id) === String(id));
+      if (!x) throw new Error('no subject ' + id);
+      setPolish(x, strength);
+      return x.polish;
     },
-    all: (strength) => { S.subjects.forEach((x, k) => setPolish(k, strength));
+    all: (strength) => { S.subjects.forEach((x) => setPolish(x, strength));
                          return S.subjects.map((x) => x.polish); },
     get: () => S.subjects.map((x) => ({ id: x.id, polish: x.polish | 0 })),
     params: (strength) => MaskPolish.params(strength),
     /* the polished mask for one subject on one frame, 8-bit, as the renderer
      * sees it — the browser half of the preview/export parity check */
     mask: async (id, frame) => {
-      const k = S.subjects.findIndex((x) => String(x.id) === String(id));
+      const subs = activeSubs();
+      const k = subs.findIndex((x) => String(x.id) === String(id));
+      if (k < 0) throw new Error('no subject ' + id);
       checkPolishKey();
-      const m = await polishedMask(PM, S.subjects[k].id, frame,
-                                   S.subjects[k].polish | 0, 'pf' + k);
+      const m = await polishedMask(PM, subs[k].id, frame,
+                                   subs[k].polish | 0, 'pf' + k);
       const u8 = new Uint8Array(m.length);
       for (let q = 0; q < m.length; q++) u8[q] = Math.round(m[q] * 255);
       return Array.from(u8);
@@ -6408,10 +6796,16 @@ function subsHTML() {
   const out = [row('subjects', `${n} / 6`)];
   S.subjects.forEach((sub) => {
     const f = (typeof frameOf === 'function') ? frameOf(sub) : 0;
-    out.push(row('#' + sub.id, S.kind === 'image' ? 'this frame' : '@ ' + f));
+    const st = (typeof subjState === 'function') ? subjState(sub) : '';
+    out.push(row('#' + sub.id,
+      (S.kind === 'image' ? 'this frame' : '@ ' + f)
+      + (S.kind === 'video' ? ' · ' + (STATE_WORD[st] || st) : '')
+      + (sub.hidden ? ' · hidden' : '')));
   });
+  const done = S.subjects.filter((x) => !!x.track).length;
   out.push(`<div style="margin-top:5px;opacity:.55">`
-    + (S.tracked ? 'tracked' : 'not tracked yet') + '</div>');
+    + (S.kind === 'image' ? (S.tracked ? 'selected' : 'nothing selected yet')
+      : done ? `${done} of ${n} tracked` : 'not tracked yet') + '</div>');
   return out.join('');
 }
 
