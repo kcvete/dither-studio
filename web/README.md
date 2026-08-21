@@ -111,13 +111,32 @@ Or just the ONNX half, if the rest is already built:
 env/venv/bin/python onnxexport/export_onnx.py --image-size 768
 ```
 
-**Download them.** The intended distribution for people who are not going to run
-PyTorch is a GitHub release attached to this repository, or a Hugging Face model
-repo, containing exactly the contents of `models/` and `ort/`:
+**Download them.** For anyone who is not going to run PyTorch, the graphs are
+attached to the [`models-v1`](https://github.com/kcvete/dither-studio/releases/tag/models-v1)
+release. One command from the repo root, and no python at all:
 
 ```sh
-curl -L https://github.com/<owner>/<repo>/releases/download/models-v1/dither-studio-models.tar.gz \
-  | tar xz -C web/
+./setup.sh --page-only          # models + onnxruntime-web, nothing else
+```
+
+Or by hand:
+
+```sh
+curl -fL https://github.com/kcvete/dither-studio/releases/download/models-v1/dither-studio-models-v1.tar.gz \
+  | tar xz -C web/              # -> web/models/*.fp16.onnx + memenc + consts
+npm pack onnxruntime-web@1.27   # -> web/ort/, see setup.sh for which files
+```
+
+`dither-studio-models-v1.tar.gz` (53 MB) is the fp16 set the page loads by
+default plus both memory-encoder builds. `dither-studio-models-fp32-v1.tar.gz`
+(83 MB) is the fp32 graphs, which nothing in the UI asks for — they exist for
+a machine whose WebGPU fp16 is broken and which sets `fp16:false` on the saved
+engine preference by hand. `SHA256SUMS.txt` is on the release beside them.
+
+A full `./setup.sh` can pull the same tarball instead of exporting:
+
+```sh
+DV_MODELS=download ./setup.sh
 ```
 
 The weights are derived from the EdgeTAM checkpoint and carry its Apache-2.0

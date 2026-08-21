@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
-# Idempotent environment bootstrap for Dither Video.
-# Creates env/venv (python 3.13) + env/EdgeTAM (editable install) + checkpoint.
+# Idempotent environment bootstrap for Dither Studio.
+# Creates env/venv (python 3.13) + env/EdgeTAM (editable install) + checkpoint,
+# then the CoreML graphs, the ONNX graphs and the vendored onnxruntime-web.
+#
+#   ./setup.sh --page-only    just the static page: pre-exported ONNX graphs
+#                             from the models-v1 release + onnxruntime-web.
+#                             No venv, no PyTorch, no checkpoint.
+#   DV_MODELS=download        full install, but download the ONNX graphs
+#                             instead of exporting them
+#   DV_SKIP_WEB_MODELS=1      server only: no ONNX graphs, no web/ort
+#   DV_EDGETAM_CKPT=<path>    reuse an edgetam.pt you already have
+#   DV_PYTHON=<path>          which python builds the venv (default 3.13)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENVD="$HERE/env"
@@ -8,10 +18,61 @@ VENV="$ENVD/venv"
 REPO="$ENVD/EdgeTAM"
 CKPT="$REPO/checkpoints/edgetam.pt"
 EDGETAM_COMMIT="7711e012a30a2402c4eaab637bdb00a521302c91"
+ORT_VERSION="1.27"
+# where the pre-exported browser-engine graphs live, for DV_MODELS=download
+MODELS_RELEASE="${DV_MODELS_RELEASE:-models-v1}"
+MODELS_URL="https://github.com/kcvete/dither-studio/releases/download/$MODELS_RELEASE/dither-studio-models-v1.tar.gz"
 PY="${DV_PYTHON:-/opt/homebrew/opt/python@3.13/bin/python3.13}"
 [ -x "$PY" ] || PY="$(command -v python3.13)"
 
 mkdir -p "$ENVD"
+
+# onnxruntime-web itself. Vendored, not pulled from a CDN at run time, because
+# the whole point of the browser engine is that the page talks to nobody.
+vendor_ort() {
+  local ORT="$HERE/web/ort" PKG D v
+  if [ -f "$ORT/ort.all.bundle.min.mjs" ]; then return 0; fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "[setup] no npm - skipping onnxruntime-web (see web/README.md)"
+    return 0
+  fi
+  echo "[setup] fetching onnxruntime-web (once, ~39 MB)"
+  PKG="$ENVD/ortpkg"
+  mkdir -p "$PKG" "$ORT"
+  ( cd "$PKG" && npm install --silent --no-audit --no-fund --prefix "$PKG" \
+      onnxruntime-web@"$ORT_VERSION" >/dev/null 2>&1 ) || true
+  D="$PKG/node_modules/onnxruntime-web/dist"
+  if [ -f "$D/ort.all.bundle.min.mjs" ]; then
+    # only the two builds the page can actually load: .jsep is the WebGPU one,
+    # the bare one is the multi-threaded WASM fallback. The asyncify and jspi
+    # variants are another 39 MB nothing here asks for.
+    cp "$D/ort.all.bundle.min.mjs" "$ORT/"
+    for v in "" ".jsep"; do
+      cp "$D/ort-wasm-simd-threaded$v.mjs" "$D/ort-wasm-simd-threaded$v.wasm" "$ORT/"
+    done
+    echo "[setup] onnxruntime-web ok ($(du -sh "$ORT" | cut -f1))"
+  else
+    echo "[setup] onnxruntime-web download failed - see web/README.md"
+  fi
+}
+
+# --page-only: everything the static page needs and nothing else. No venv, no
+# PyTorch, no EdgeTAM clone, no checkpoint -- the graphs come pre-exported from
+# the release and onnxruntime-web from npm. This is the install for anyone who
+# is hosting web/ and never running the accelerator.
+if [ "${1:-}" = "--page-only" ] || [ "${DV_PAGE_ONLY:-0}" = "1" ]; then
+  echo "[setup] page only: models from $MODELS_RELEASE, no python environment"
+  if [ -f "$HERE/web/models/encoder.fp16.onnx" ]; then
+    echo "[setup] models already there"
+  else
+    curl -fL --progress-bar "$MODELS_URL" | tar xz -C "$HERE/web" \
+      || { echo "[setup] model download failed: $MODELS_URL"; exit 1; }
+    echo "[setup] models ok"
+  fi
+  vendor_ort
+  echo "[setup] ok - now serve web/ with any static server"
+  exit 0
+fi
 
 if [ ! -d "$REPO/.git" ]; then
   echo "[setup] cloning EdgeTAM -> $REPO"
@@ -108,6 +169,16 @@ if [ "${DV_SKIP_WEB_MODELS:-0}" != "1" ]; then
   [ "$HERE/onnxexport/export_onnx.py" -nt "$MAN" ] && NEED=1
   [ "$HERE/onnxexport/wrappers_onnx.py" -nt "$MAN" ] && NEED=1
   [ "$CKPT" -nt "$MAN" ] && NEED=1
+  # DV_MODELS=download pulls the same graphs from the release instead of
+  # spending 90 s and a PyTorch install re-deriving them from the checkpoint.
+  if [ "$NEED" = "1" ] && [ "${DV_MODELS:-export}" = "download" ]; then
+    echo "[setup] downloading the ONNX graphs from $MODELS_RELEASE (~53 MB)"
+    if curl -fL --progress-bar "$MODELS_URL" | tar xz -C "$HERE/web"; then
+      echo "[setup] models ok"; NEED=0
+    else
+      echo "[setup] model download failed - falling back to the export"
+    fi
+  fi
   if [ "$NEED" = "1" ]; then
     if ! "$VENV/bin/python" -c "import onnx, onnxruntime" >/dev/null 2>&1; then
       echo "[setup] installing onnx + onnxruntime (for the ONNX export)"
@@ -124,33 +195,7 @@ if [ "${DV_SKIP_WEB_MODELS:-0}" != "1" ]; then
     fi
   fi
 
-  # onnxruntime-web itself. Vendored, not pulled from a CDN at run time, because
-  # the whole point of the browser engine is that the page talks to nobody.
-  ORT="$HERE/web/ort"
-  if [ ! -f "$ORT/ort.all.bundle.min.mjs" ]; then
-    if command -v npm >/dev/null 2>&1; then
-      echo "[setup] fetching onnxruntime-web (once, ~41 MB)"
-      PKG="$ENVD/ortpkg"
-      mkdir -p "$PKG" "$ORT"
-      ( cd "$PKG" && npm install --silent --no-audit --no-fund --prefix "$PKG" \
-          onnxruntime-web@1.27 >/dev/null 2>&1 ) || true
-      D="$PKG/node_modules/onnxruntime-web/dist"
-      if [ -f "$D/ort.all.bundle.min.mjs" ]; then
-        # only the two builds the page can actually load: .jsep is the WebGPU
-        # one, the bare one is the multi-threaded WASM fallback. The asyncify
-        # and jspi variants are another 39 MB nothing here asks for.
-        cp "$D/ort.all.bundle.min.mjs" "$ORT/"
-        for v in "" ".jsep"; do
-          cp "$D/ort-wasm-simd-threaded$v.mjs" "$D/ort-wasm-simd-threaded$v.wasm" "$ORT/"
-        done
-        echo "[setup] onnxruntime-web ok ($(du -sh "$ORT" | cut -f1))"
-      else
-        echo "[setup] onnxruntime-web download failed - see web/README.md"
-      fi
-    else
-      echo "[setup] no npm - skipping onnxruntime-web (see web/README.md)"
-    fi
-  fi
+  vendor_ort
 fi
 
 # the serial dither modes (error diffusion, Riemersma) run a per-pixel loop that
