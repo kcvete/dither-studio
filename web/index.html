@@ -74,30 +74,8 @@
           <div class="note warn" id="estwarn" hidden></div>
           <div class="note" id="estlong" hidden></div>
         </div>
-        <div id="trimui" hidden>
-          <div class="lbl"><span>Trim</span><span id="vTrim"></span></div>
-          <div id="strip">
-            <canvas id="stripcv" width="960" height="80"></canvas>
-            <div id="trimdim" class="dim l"></div>
-            <div id="trimdim2" class="dim r"></div>
-            <button id="hIn" class="hand" aria-label="trim in"></button>
-            <button id="hOut" class="hand" aria-label="trim out"></button>
-          </div>
-          <div class="row">
-            <button class="btn" id="bTrim">use this range</button>
-            <button class="btn" id="bTrimAll">whole clip</button>
-          </div>
-          <div class="note" id="trimnote"></div>
-          <!-- a range that runs past the frames on disk: what is missing, what
-               getting it costs, and the two answers. Never a refusal. -->
-          <div id="trimoffer" hidden>
-            <div class="note warn" id="trimoffernote"></div>
-            <div class="row">
-              <button class="btn go" id="bExtend">re-cut and track</button>
-              <button class="btn" id="bExtendNo">keep the tracked range</button>
-            </div>
-          </div>
-        </div>
+        <!-- the trim bar itself lives under the stage (#trimui), next to the
+             pixels it cuts; this panel keeps the clip facts + estimates -->
         <div id="upstat" class="stat" hidden></div>
       </div>
     </section>
@@ -504,12 +482,43 @@
         <button class="chip" id="bPlay" aria-pressed="false" hidden>play</button>
         <input type="range" id="sFrame" min="0" max="0" step="1" value="0" hidden>
         <span class="mono" id="fcount" hidden>0 / 0</span>
-        <!-- the active range: which frames the preview, the render and every
-             export are working on, and one click back to all of them -->
-        <span class="mono" id="rangelbl" hidden></span>
-        <button class="chip" id="bRangeAll" hidden title="use every tracked frame again">full clip ↺</button>
         <span class="mono" id="fps">–</span>
         <button class="chip" id="bCmp" aria-pressed="false">before / after</button>
+      </div>
+    </div>
+
+    <!-- ------------------------------------------------- trim / range bar
+         ONE control for both meanings of "trim", docked under the stage so
+         the handles sit next to the pixels they cut (ux-spec §2.1.1). Before
+         a track "use this range" re-extracts the chosen seconds; after one it
+         windows frames already on disk — applyTrim() decides. The post-track
+         state ("frames 15–44 of 300 · full clip ↺") reads out on the same
+         bar. A range past the frames on disk raises the offer below: what is
+         missing, what getting it costs, and the two answers. Never a refusal. -->
+    <div id="trimui" hidden>
+      <div id="strip">
+        <canvas id="stripcv" width="1280" height="88"></canvas>
+        <div id="trimdim" class="dim l"></div>
+        <div id="trimdim2" class="dim r"></div>
+        <div id="trimsel"></div>
+        <button id="hIn" class="hand" aria-label="trim in"><s id="hInLbl"></s></button>
+        <button id="hOut" class="hand" aria-label="trim out"><s id="hOutLbl"></s></button>
+      </div>
+      <div id="trimrow">
+        <span class="mono" id="vTrim"></span>
+        <span class="mono" id="rangelbl" hidden></span>
+        <button class="chip" id="bRangeAll" hidden title="use every tracked frame again">full clip ↺</button>
+        <span class="note" id="trimnote"></span>
+        <span class="sp"></span>
+        <button class="btn" id="bTrim">use this range</button>
+        <button class="btn" id="bTrimAll">whole clip</button>
+      </div>
+      <div id="trimoffer" hidden>
+        <div class="note warn" id="trimoffernote"></div>
+        <div class="row">
+          <button class="btn go" id="bExtend">re-cut and track</button>
+          <button class="btn" id="bExtendNo">keep the tracked range</button>
+        </div>
       </div>
     </div>
     <div id="coach" hidden></div>
@@ -530,3 +539,5 @@
 <script src="./dither.js"></script>
 <script src="./polish.js"></script>
 <script type="module" src="./app.js"></script>
+<!-- one line, one file: the "run it locally, it is faster" link. web/oss-link.js -->
+<script src="./oss-link.js" defer></script>

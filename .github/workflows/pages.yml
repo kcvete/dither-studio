@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# GitHub Pages.
+#
+# web/ is the whole product and there is no build step, so this workflow is
+# almost entirely about the two things that are deliberately NOT in git:
+#
+#   web/models/*.onnx   ~53 MB of EdgeTAM graphs, downloaded from the models-v1
+#                       release (built by onnxexport/export_onnx.py)
+#   web/ort/            ~39 MB of onnxruntime-web, taken from npm at the same
+#                       version setup.sh pins, so the deployed page and a local
+#                       checkout run identical binaries
+#
+# Neither is fetched at run time. Both are baked into the artifact, because the
+# browser engine's whole claim is that the page talks to nobody.
+#
+# The site lands on a subpath (/dither-studio/). Every asset reference in
+# index.html and in the engine modules is relative, so nothing here rewrites
+# anything. The one thing that IS absolute is the engine probe's `/api/meta`,
+# and that is correct: on Pages it 404s, engines/index.js catches it and falls
+# back to the browser engine, which is the entire design.
+# ---------------------------------------------------------------------------
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+      - 'setup.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and never cancel one that is already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: The ONNX graphs, from the models-v1 release
+        run: |
+          set -euo pipefail
+          URL=https://github.com/${{ github.repository }}/releases/download/models-v1/dither-studio-models-v1.tar.gz
+          curl -fL --retry 3 --retry-delay 2 "$URL" | tar xz -C web
+          # the fp32 set is not deployed: nothing in the UI asks for it and it
+          # would add 83 MB to every visitor's mirror of the release.
+          test -f web/models/encoder.fp16.onnx
+          test -f web/models/memenc.f16in.onnx
+          ls -la web/models
+
+      - name: onnxruntime-web, at the version setup.sh pins
+        run: |
+          set -euo pipefail
+          V=$(grep -m1 '^ORT_VERSION=' setup.sh | cut -d'"' -f2)
+          echo "onnxruntime-web@$V"
+          PKG="$RUNNER_TEMP/ortpkg"
+          mkdir -p "$PKG" web/ort
+          npm install --silent --no-audit --no-fund --prefix "$PKG" "onnxruntime-web@$V"
+          D="$PKG/node_modules/onnxruntime-web/dist"
+          cp "$D/ort.all.bundle.min.mjs" web/ort/
+          for v in "" ".jsep"; do
+            cp "$D/ort-wasm-simd-threaded$v.mjs" "$D/ort-wasm-simd-threaded$v.wasm" web/ort/
+          done
+          # onnxruntime-web is MIT; a distribution that bundles it carries the
+          # notice with it. NOTICE at the repo root says so, and it rides along.
+          cp "$PKG/node_modules/onnxruntime-web/README.md" web/ort/ONNXRUNTIME-WEB-README.md || true
+          cp NOTICE web/NOTICE
+          cp LICENSE web/LICENSE
+          ls -la web/ort
+
+      - name: No Jekyll, and a sanity pass over the tree
+        run: |
+          set -euo pipefail
+          touch web/.nojekyll
+          du -sh web
+          test -f web/index.html
+          test -f web/app.js
+          test -f web/oss-link.js
+          test -f web/demo/demo.dots.gz
+          test -f web/models/manifest.json
+          # nothing may reference an absolute site path: that is what would
+          # break under /dither-studio/.
+          if grep -nE '(src|href)="/[^/]' web/index.html; then
+            echo "absolute asset path in index.html - it would 404 on a subpath"; exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
