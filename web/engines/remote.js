@@ -391,6 +391,22 @@ export class RemoteEngine {
                  image: fmt === 'gif', alpha: !!f.alpha,
                  frames: st.done_frames, elapsedS: st.elapsed_s, fps: st.fps,
                  bytes: st.bytes || 0,
+                 /* How long the file plays for. ffmpeg is given a fixed -r, so
+                  * this was never in doubt on this engine -- it is here so the
+                  * stat line reads the same on both, now that the tab reports
+                  * the render rate and the playing length as two numbers. A
+                  * GIF is decimated to gif_fps and its delays are whole
+                  * hundredths of a second, so it gets its own arithmetic. */
+                 durationS: (() => {
+                   const n = st.done_frames || 0;
+                   const rate = fmt === 'gif'
+                     ? Math.max(1, Math.min(50, params.gif_fps || 15))
+                     : (params.fps || 30);
+                   if (!n || !rate) return null;
+                   return fmt === 'gif'
+                     ? +(n * Math.max(2, Math.round(100 / rate)) / 100).toFixed(3)
+                     : +(n / rate).toFixed(3);
+                 })(),
                  note: fmt === 'prores'
                    ? 'ProRes 4444 does not play in a browser — download it'
                    : (f.alpha ? 'alpha channel written' : '') };

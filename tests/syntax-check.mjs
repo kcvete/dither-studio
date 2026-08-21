@@ -30,6 +30,11 @@
 
    A missing file is a failure, not a skip: renaming a file out from under this
    list should turn CI red rather than quietly shrink the coverage.
+
+   web/vendor/webm-muxer.js and web/vendor/mp4-muxer.js are NOT here. They are
+   third-party builds vendored verbatim from npm (see NOTICE); this check is
+   for code written in this repository, and a minified upstream bundle failing
+   to parse would be a supply-chain problem, not a typo.
 --------------------------------------------------------------------------- */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -55,6 +60,7 @@ const MODULES = [
   'web/engines/index.js',
   'web/engines/browser.js',
   'web/engines/decode.js',
+  'web/engines/encode.js',
   'web/engines/remote.js',
   'web/workers/decode-core.js',
   'web/workers/decode-worker.js',

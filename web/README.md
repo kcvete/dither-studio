@@ -28,6 +28,10 @@ engines/
   browser.js      everything in the tab: decode, track, dither, encode.
                   `snapshot()` hands out a detached handle on the open clip,
                   which is what lets a sequence item outlive it
+  encode.js       how frames become a file: WebCodecs VideoEncoder with the
+                  timestamps written down (i * 1e6 / fps), muxed to WebM or
+                  MP4. This is why an export is the clip's own length however
+                  long the render took
   decode.js       how a clip becomes frames: WebCodecs in a Worker, WebCodecs
                   on the main thread, or the original <video> seek loop, picked
                   by feature detection and verified by trying. All three
@@ -48,6 +52,11 @@ workers/
                     Segments and Clusters MediaRecorder writes
 vendor/
   gifenc.js       a GIF89a/LZW encoder, ~220 lines, no dependencies
+  webm-muxer.js   Vanilagy's WebM/Matroska muxer, MIT, vendored verbatim
+  mp4-muxer.js    the same for MP4. The pair is what turns the browser's own
+                  VideoEncoder output into a file; see NOTICE. Nothing is
+                  fetched at run time and they are imported lazily, so a page
+                  that only dithers stills never loads either
 player/
   dither-player.js  plays a .dots.gz on a canvas: the codec, the four
                     transitions, the sequence builder and the player, one file,
@@ -106,9 +115,12 @@ eight: eight would not be a slower fast path, it would be a failed init, because
 threads need `SharedArrayBuffer` and that needs these headers. One thread tracks
 at ~0.5 fps, which is a still and a handful of frames, not a clip.
 
-**Browsers.** Fastest in Chrome and Safari; Firefox works but is slower, and its
-WebM export can come up a frame short on a slow render (it says so when it
-does). See *Browsers* in the root README for the measured table.
+**Browsers.** Fastest in Chrome and Safari; Firefox works but is slower. All
+three write WebM and MP4 through `VideoEncoder` and all three produce a file the
+clip's own length. Firefox's *alpha* export can come up a frame or two short —
+its `requestFrame()` queues the grab for the next paint, so two grabs inside one
+paint collapse — and it says so when it does. See *Browsers* in the root README
+for the measured table.
 
 ## The models
 
@@ -240,25 +252,51 @@ in the tab. The chip in the header names the winner and switches it by hand:
 | tracking | 12.4 fps (WebGPU fp16, M4 Pro) | 20.9 fps (CoreML, same Mac, same 768 px) |
 | tracker resolutions | 768 only — one exported set | 512 / 768 / 1024 |
 | multiple subjects | one pass each, so N subjects cost N x | one batched propagate pass |
-| video export | WebM (VP9) via MediaRecorder | H.264 MP4 via ffmpeg |
-| the matched cut | the decoded frames back through the same recorder, WebM | `jobs/<id>/frames/*.jpg` re-encoded, MP4 (WebM beside a WebM render) |
+| video export | WebM (VP9) **or H.264 MP4**, via WebCodecs `VideoEncoder` + a vendored muxer | H.264 MP4 via ffmpeg |
+| the matched cut | the decoded frames back through the same encoder, same container as the render | `jobs/<id>/frames/*.jpg` re-encoded, MP4 (WebM beside a WebM render) |
 | a trim after the track | a window on the frames and mask logits already in memory — nothing re-decoded | `frame_in`/`frame_out` on `/render`, `/original` and `/dots`, a slice of the frames and masks already on disk |
 | frames | never leave the tab | uploaded, decoded to JPEG under `jobs/` |
 | still export | PNG (RGBA when you ask for a transparent background), in the tab | the same, in the tab |
 | subject in a still | one frame through `encoder` + `heads_prompt`, nothing uploaded | `POST /api/upload_image`, then one `/preview` per click |
 
-The WebM trade-off is the one worth knowing about. Writing H.264 in the tab
-would mean shipping an encoder, and ffmpeg.wasm is ~32 MB that would have to be
-vendored to keep the no-CDN rule — a bigger download than the tracker. WebM
-plays everywhere except older Safari; if you need MP4, the local server is one
-`./run.sh` away.
+### The export, and the length of what comes out
 
-The export is also paced in real time, because MediaRecorder timestamps each
-frame when the page hands it over. If a frame takes longer to dither than the
-clip's own frame interval, the result plays slow, and the export line says so
-rather than letting you find out in QuickTime. *Also save the original* is
-handed over at whatever pace the dithered pass actually managed, so the pair
-keeps one duration between them even when that happens.
+**The file is `nFrames / fps` seconds long, always.** It did not use to be.
+The export was `MediaRecorder` over a canvas capture stream, and a recorder
+stamps a frame with the moment it *arrives* — so the file's time base was the
+wall clock of the render, and a 3.0 s clip whose dots took 84 s to draw came out
+as an 84 s file. The progress line even said so, which made it a documented
+defect rather than a hidden one.
+
+`VideoEncoder` takes the timestamp as an argument (`engines/encode.js`): frame
+*i* is stamped `i × 1e6 / fps` µs and carries `1e6 / fps` of duration, so how
+long the render took cannot reach the output. `VideoEncoder.isConfigSupported`
+is probed at the size the export will use — VP9 → VP8 → AV1 for WebM, H.264 →
+HEVC → AV1 for MP4 — and the first yes wins; a container this browser cannot
+write is greyed in the format chips with that reason. The muxers are Vanilagy's
+`webm-muxer` and `mp4-muxer`, MIT, vendored verbatim into `vendor/` (see
+NOTICE). About 130 KB for the pair, and the reason "writing H.264 in the tab
+needs ~32 MB of ffmpeg.wasm" was never true: the *encoder* was in the platform,
+and what was missing was a box writer.
+
+Two things still go through `MediaRecorder`: the **alpha** WebM, because a WebM
+alpha plane is a second bitstream in a Matroska `BlockAdditional` and
+`VideoEncoder` will not produce one, and any browser with no `VideoEncoder`.
+Those render every frame first, into a store of lossless PNGs, and then
+**replay** the finished frames to the recorder on the clip's own clock — a
+decoded PNG is microseconds against a dither's tens of milliseconds, so the two
+clocks are the same clock. Dithered output is two to four flat colours, so the
+store is tens of kilobytes a frame; past 256 MB the replay is chunked and the
+recorder paused between runs.
+
+`?slowrender=100` (or `window.DV_slowRender(100)`) sleeps 100 ms after every
+frame the export dithers and changes nothing else. It exists so the property
+above can be asserted rather than believed: `verify-web.mjs`'s `exportTiming`
+flow throttles the render to ~4× slower than real time and demuxes what comes
+out. One cosmetic caveat — `webm-muxer` writes the Matroska `Duration` as the
+last timestamp, one frame interval short of the playable length, so ffprobe
+reports 1.966 for a 60-frame 30 fps WebM that plays every one of them. MP4 is
+exact.
 
 ## Hacking on it
 

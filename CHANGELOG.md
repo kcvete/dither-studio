@@ -84,9 +84,17 @@ tagged release will close this section.
 
 - Five containers, not one: H.264 MP4, VP9 WebM, GIF (a ~220-line home-grown
   encoder), an alpha variant and ProRes 4444.
+- **The tab writes MP4.** `VideoEncoder` (H.264, HEVC or AV1) into Vanilagy's
+  `mp4-muxer`, vendored verbatim under `web/vendor/` — MIT, ~65 KB. The format
+  chips stop saying "needs the local server" for MP4 wherever the platform
+  encoder will write it, which is Chrome, Edge, Safari and Firefox. The reason it
+  did not before was stated as "writing H.264 in the tab needs ~32 MB of
+  ffmpeg.wasm", and that was a claim about an *encoder*: the encoder was in the
+  browser already, and what was missing was a box writer.
 - Export the clip beside its dither — a matched cut of the original, the same
-  frames, rate and shape, named alongside the dithered file. `.dots.gz` export
-  from both the studio and the sequence view.
+  frames, rate and shape, named alongside the dithered file. It now follows the
+  render's container rather than always being WebM. `.dots.gz` export from both
+  the studio and the sequence view.
 
 ### UI and UX
 
@@ -129,6 +137,31 @@ tagged release will close this section.
 
 ### Fixed
 
+- **An exported clip is the length of the clip, not the length of the render.**
+  A 3.0 s / 88-frame clip at 1080×1920 that took 84 s to dither came out as an
+  84 s file: every frame present, every frame in the wrong place. The export was
+  `MediaRecorder` over a canvas capture stream, and a recorder stamps a frame
+  with the moment it arrives, so the file's time base was the wall clock of the
+  render. The progress line admitted it — *"the WebM is paced to wall clock, so
+  it plays slow"* — which made it a documented defect rather than a hidden one.
+  Fixed at the root: WebM and MP4 are now written with WebCodecs `VideoEncoder`
+  (`web/engines/encode.js`), where frame *i* is stamped `i × 1e6 / fps`
+  microseconds, so the render's cost cannot reach the output. The two exports
+  that still need `MediaRecorder` — the alpha WebM, whose alpha plane no
+  `VideoEncoder` will produce, and any browser without WebCodecs — render every
+  frame first and then **replay** the finished frames to the recorder on the
+  clip's own clock. The matched original cut lost its `pace_ms` argument, which
+  existed only to make the second file as slow as the first. The excuse text is
+  gone; the stat line reports the render rate and the playing length as two
+  separate numbers.
+- `verify-web.mjs` grew an `exportTiming` flow that throttles the render to
+  slower than real time on purpose (`?slowrender=100`) and demuxes what comes
+  out with ffprobe: every container, the matched pair and a sequence's encode
+  have to play for `frames / fps`. Measured on a 60-frame 30 fps clip whose
+  render was made to take 7.6 s — WebM 1.999 s, MP4 2.000 s, alpha WebM 1.967 s,
+  against 8.626 s before the fix. Firefox and WebKit are asserted the same way,
+  as are a page with `VideoEncoder` deleted and a page with `requestFrame`
+  deleted.
 - The Track CTA now follows the subject count instead of going stale, and stale
   single-frame predictions are dropped. Never snap a camera frame that has not
   been delivered yet; camera checks no longer assume an environment.

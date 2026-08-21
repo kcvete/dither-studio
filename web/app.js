@@ -4293,11 +4293,11 @@ function paintFormat() {
  * already has its source on disk — and only where the engine can write it (an
  * older server has no /original route).
  *
- * Containers: the tab has no H.264 encoder, so the browser engine always pairs
- * with WebM. The server follows the render's format where that means anything
- * and falls back to MP4 where it does not: a GIF of the original would be
- * decimated to gif_fps, and an alpha format has nothing to key out of footage
- * nobody dithered.
+ * Containers: both engines follow the render's format where that means
+ * anything and fall back to a plain video container where it does not — a GIF
+ * of the original would be decimated to gif_fps, and an alpha format has
+ * nothing to key out of footage nobody dithered. In the tab that fallback is
+ * whichever of MP4 and WebM the platform encoder will write.
  */
 const ORIG_KEY = 'dither-studio.saveOriginal';
 const ORIGINAL_EXT = { mp4: 'mp4', webm: 'webm', gif: 'mp4',
@@ -4306,8 +4306,16 @@ const originalOffered = () => S.kind === 'video'
   && !!(E() && E().supports && E().supports.original);
 
 function originalExt() {
-  return E() && E().id === 'browser'
-    ? 'webm' : (ORIGINAL_EXT[currentFormat().id] || 'mp4');
+  const f = currentFormat();
+  if (E() && E().id === 'browser') {
+    // a plain video render pairs with its own container; a GIF or an alpha
+    // render pairs with whatever plain video this tab can write
+    if (f.id === 'webm' || f.id === 'mp4') return f.ext || 'webm';
+    const v = engineFormats().find((x) => x.available
+      && (x.id === 'webm' || x.id === 'mp4'));
+    return (v && v.ext) || 'webm';
+  }
+  return ORIGINAL_EXT[f.id] || 'mp4';
 }
 
 function paintOriginalUI() {
@@ -4317,12 +4325,12 @@ function paintOriginalUI() {
   $('#cOrig').checked = S.saveOriginal;
   if (box.hidden) return;
   const ext = originalExt(), f = currentFormat();
-  const reason = E().id === 'browser'
-    ? 'the tab has no other encoder.'
-    : (f.id === 'gif'
-      ? "a GIF of the original would be decimated to the GIF's frame rate, and "
-        + 'pairing a GIF with a GIF is pointless.'
-      : 'an alpha container has nothing to key out of footage nobody dithered.');
+  const reason = f.id === 'gif'
+    ? "a GIF of the original would be decimated to the GIF's frame rate, and "
+      + 'pairing a GIF with a GIF is pointless.'
+    : f.alpha
+      ? 'an alpha container has nothing to key out of footage nobody dithered.'
+      : 'it is the container this engine can write.';
   const swapped = ext !== f.ext
     ? ` The ${(f.ext || '').toUpperCase()} pairs with an ${ext.toUpperCase()}: ${reason}`
     : '';
@@ -4416,6 +4424,14 @@ async function exportClip() {
       lab.textContent = p.text;
     }, (i) => composeAt(i, { alpha: fmt.alpha }));
     prog.hidden = true;
+    /* What the export actually did, kept for the readouts and for the
+     * verifier: which container came out, how the frames were placed in time
+     * and how long the file plays for. `paced: 'timestamps'` is the WebCodecs
+     * path; anything else is the recorder fallback. */
+    S.lastExport = { format: r.ext, mime: r.mime, codec: r.codec || null,
+                     paced: r.paced || null, frames: r.frames,
+                     framesWritten: r.framesWritten || r.frames,
+                     durationS: r.durationS || null, bytes: r.bytes || 0 };
     if (S.exportURL) { URL.revokeObjectURL(S.exportURL); S.exportURL = null; }
     if (r.url.startsWith('blob:')) S.exportURL = r.url;
     const dl = $('#dl');
@@ -4427,8 +4443,12 @@ async function exportClip() {
     else if (r.playable) { const v = $('#outvid'); v.src = r.url; v.hidden = false; }
     offerShare(r.url, 'clip.' + r.ext, fmt.mime);
     const box = $('#rinfo'); box.hidden = false; box.classList.remove('err');
+    /* The render rate and the FILE'S LENGTH are two different numbers and the
+     * line says both. It used to say only the first and then apologise that
+     * the file was as long as the render; the file is now always the clip. */
     box.textContent = `rendered ${r.frames} frames in ${r.elapsedS.toFixed(1)} s `
       + `(${r.fps.toFixed(1)} fps)`
+      + (r.durationS ? ` · plays for ${r.durationS.toFixed(2)} s` : '')
       + (rng.whole ? '' : ` · frames ${rng.in}–${rng.out} of ${S.nFrames}`)
       + (canvas ? ` · ${canvas.w}×${canvas.h}` : '')
       + (r.bytes ? ` · ${(r.bytes / 1e6).toFixed(1)} MB` : '')
@@ -4457,21 +4477,17 @@ async function exportClip() {
 async function exportOriginalCut(params, r, prog, bar, lab) {
   // the frames the render consumed: the active range, not the whole clip
   const want = activeRange().n;
-  /* If the dither ran slower than real time the tab's recorder wrote a file at
-   * that slower rate (exportWebM says so in its note). The pair is only usable
-   * if both files carry the same rate, so the original is handed over at the
-   * pace the render actually achieved rather than at the clip's own — but only
-   * where the two files are the same kind of thing, since a GIF render is
-   * decimated to gif_fps and pairs with a full-rate video. The server engine
-   * encodes at a fixed -r and never needs any of this. */
-  const paced = r.frames === want && r.elapsedS ? (r.elapsedS * 1000) / r.frames : 0;
-  const realMs = 1000 / Math.max(1, S.fps);
+  /* There is no pacing argument here any more, and there is nothing to
+   * reconcile. Both files are written from frame indices — timestamps on the
+   * encoder path, a replay clock on the recorder one — so both are
+   * nFrames / fps seconds long by construction, on either engine. The old
+   * `pace_ms` existed only to make the original cut as slow as a slow render,
+   * which was the bug wearing a hat. */
   try {
     prog.hidden = false;
     bar.style.width = '0%'; lab.textContent = 'the original cut…';
     const o = await E().exportOriginal(
-      Object.assign({}, params, { expect_frames: want,
-                                  pace_ms: paced > realMs * 1.05 ? paced : 0 }),
+      Object.assign({}, params, { expect_frames: want }),
       (p) => {
         bar.style.width = (p.total ? (p.done / p.total) * 100 : 0).toFixed(1) + '%';
         lab.textContent = 'original · ' + p.text;
@@ -6893,6 +6909,19 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
     S.format = id; $('#sFmt').value = id; paintFormat();
     return currentFormat();
   };
+  /* Make the render slower than real time on purpose — the export path sleeps
+   * this long after every frame it dithers. It is a test hook for the one
+   * assertion that matters about an export: the OUTPUT is nFrames / fps
+   * seconds long whatever the render cost. Also reachable as ?slowrender=100
+   * so a plain browser can be pointed at it. */
+  window.DV_slowRender = (ms) => {
+    window.DV_SLOW_RENDER_MS = Math.max(0, +ms || 0);
+    return window.DV_SLOW_RENDER_MS;
+  };
+  try {
+    const q = new URLSearchParams(location.search).get('slowrender');
+    if (q) window.DV_slowRender(q);
+  } catch (e) { /* no location to read, which is fine */ }
   initHero();
   window.DV_ready = true;
 })();

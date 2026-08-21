@@ -900,15 +900,71 @@ Clips get a **format** select, and what is in it depends on the engine.
 
 | Format | id | browser | server | notes |
 |---|---|---|---|---|
-| MP4 · H.264 | `mp4` | — | ✅ crf 18, yuv420p | writing H.264 in the tab means vendoring ~32 MB of ffmpeg.wasm, which is a bigger download than the tracker |
-| WebM · VP9 | `webm` | ✅ `MediaRecorder` | ✅ libvpx-vp9 crf 32 | the browser's default |
+| MP4 · H.264 | `mp4` | ✅ `VideoEncoder` + `vendor/mp4-muxer.js` | ✅ crf 18, yuv420p | HEVC or AV1 where a browser has those and not H.264 |
+| WebM · VP9 | `webm` | ✅ `VideoEncoder` + `vendor/webm-muxer.js` | ✅ libvpx-vp9 crf 32 | the browser's default; VP8 or AV1 as fallbacks |
 | GIF · looping | `gif` | ✅ `web/vendor/gifenc.js` | ✅ ffmpeg `palettegen`/`paletteuse` | 15 or 30 fps, loops forever |
-| WebM + alpha | `webm-alpha` | ✅ VP8 (`alpha_mode=1`) | ✅ VP9 `yuva420p` | dots on transparency |
+| WebM + alpha | `webm-alpha` | ✅ VP8 (`alpha_mode=1`), `MediaRecorder` | ✅ VP9 `yuva420p` | dots on transparency |
 | ProRes 4444 | `prores` | — | ✅ `yuva444p12le` | the lossless-ish alpha master |
 
 Formats the running engine cannot write stay in the menu, greyed, with the
 reason — a menu that quietly has three entries in the tab and five on the server
 would be worse.
+
+**The tab writes MP4 now, and the file is always the clip's own length.** Both
+of those used to be false and the second one was a defect. The export was
+`MediaRecorder` over a canvas capture stream: a recorder stamps a frame with the
+moment it *arrives*, so the file's time base was the wall clock of the render. A
+3.0 s clip whose dots took 84 s to draw came out as an **84 s file** — every
+frame present, every frame in the wrong place — and the progress line said so,
+which made it a documented defect rather than a hidden one.
+
+`VideoEncoder` takes the timestamp as an argument. Frame *i* is stamped
+`i × 1e6 / fps` microseconds and carries `1e6 / fps` of duration, so the output
+is `nFrames / fps` seconds long whether the render took two seconds or two
+minutes, and the encode itself is never paced. The muxers are Vanilagy's
+[`webm-muxer`](https://github.com/Vanilagy/webm-muxer) and
+[`mp4-muxer`](https://github.com/Vanilagy/mp4-muxer), MIT, vendored verbatim
+into `web/vendor/` — about 130 KB for the pair, against the ~32 MB of
+ffmpeg.wasm that "writing H.264 in the tab" used to mean. The encoder was in the
+platform the whole time; what was missing was a box writer.
+
+Which codec comes out is a probe, not an assumption: `VideoEncoder.isConfigSupported`
+is asked for VP9 → VP8 → AV1 for WebM and H.264 → HEVC → AV1 for MP4, **at the
+size the export will actually use**, and the first yes wins. A container this
+browser cannot write is greyed with that reason rather than failing at the
+button.
+
+Two things still go through `MediaRecorder`: the **alpha** WebM, because a WebM
+alpha plane is a second bitstream carried in a Matroska `BlockAdditional` and
+`VideoEncoder` will not produce one; and any browser with no `VideoEncoder` at
+all. Their timing is fixed the other way round — render every frame first, into
+a store of lossless PNGs, then **replay** the finished frames to the recorder on
+the clip's own clock. Replaying a decoded PNG is microseconds against a dither's
+tens of milliseconds, so the wall clock and the clip's clock are the same clock.
+Dithered output is two to four flat colours, so the store is tens of kilobytes a
+frame; past 256 MB of it the replay is chunked and the recorder paused between
+runs, which a recorder excludes from its timeline.
+
+Measured, headless, with the render deliberately throttled to slower than real
+time (`?slowrender=100`, which sleeps 100 ms after every frame the export
+dithers and changes nothing else) on a 60-frame 30 fps clip that should play for
+**2.000 s** (`docs/verify-web-report.exportTiming.json`):
+
+| container | render took | frames out | plays for |
+|---|---|---|---|
+| WebM · VP9 | 7.6 s | 60 of 60 | **1.999 s** |
+| MP4 · H.264 | 7.5 s | 60 of 60 | **2.000 s** |
+| WebM + alpha (recorder) | 10.8 s | 60 of 60 | **1.967 s** |
+| GIF | 4.3 s | 30 at 15 fps | **2.100 s** (GIF delays are whole hundredths) |
+
+The same file before the fix, same clip, same throttle: 60 frames, **8.626 s**.
+
+One cosmetic caveat, stated because it is real: `webm-muxer` writes the
+Matroska `Duration` element as the *last timestamp*, one frame interval short of
+the playable length, so ffprobe reports 1.966 for a file that plays 60 frames at
+30 fps. Every frame is there and every player renders all of them; MP4 is exact.
+A GIF's length was never affected by any of this — its delays are written per
+frame — but it is quantised to hundredths, so 15 fps is really 100/7.
 
 **GIF** is not a consolation prize here. The looks this tool produces are two to
 four flat colours, which is exactly what a 256-entry palette is good at: on the
@@ -952,9 +1008,8 @@ request (409) before writing one.
 Containers pair where pairing means something. MP4 with MP4, WebM with WebM;
 **GIF, WebM + alpha and ProRes pair with an MP4** — a GIF of the original would
 be decimated to `gif_fps` and pairing a GIF with a GIF is pointless, and an
-alpha container has nothing to key out of footage nobody dithered. The tab has
-no H.264 encoder at all (see the formats table), so the browser engine always
-pairs with WebM.
+alpha container has nothing to key out of footage nobody dithered. In the tab
+the fallback is whichever of MP4 and WebM the platform encoder will write.
 
 Measured, server engine, a 2 s window of the parkour clip
 (`docs/verify-report.json`): both files 60 frames, 1280×720, `30/1`; frames 0,
@@ -962,20 +1017,21 @@ Measured, server engine, a 2 s window of the parkour clip
 `0000.jpg`, `0030.jpg` and `0059.jpg` — mean absolute difference **0.69 / 1.11 /
 0.90** out of 255. In the tab (`docs/verify-web-report.json`): both files 150
 frames, 1280×720, frames 0, 75 and 149 within **3.09 / 2.24 / 2.27** of
-the exact `ImageData` the recorder was handed — VP9 is a lossier round trip than
-H.264. The tab's rate is the recorder's wall clock rather than a number either
-file was told to carry, so the pair's frame *count* is exact and its frame
-*rate* lands within about a percent (measured **1.1 %**, 29.75 against 29.42).
+the exact `ImageData` the encoder was handed — VP9 is a lossier round trip than
+H.264. Both files are written from frame indices rather than from a clock, so
+the pair's frame *count* and its frame *rate* are both exact: measured under a
+deliberately slow render, dithered and original are 150 frames each and both
+play for 4.999 s against an expected 5.000.
 
 Three things it is honest about. The original is a re-encode of the decoded
 frames, not a copy of your file: it carries the extraction's 720p normalisation
 and one generation of H.264 or VP9. Its MP4 comes out full-range (`yuvj420p`)
 where the dithered MP4 is `yuv420p`, both correctly flagged, because squeezing
 the source into limited range to match would cost more than it buys (measured:
-mean absolute difference 1.91 instead of 0.69). And in the tab both files are
-paced by the recorder's wall clock, so when a heavy look renders slower than
-real time the original is handed over at that same slower pace rather than at
-the clip's own — the pair keeps one duration between them.
+mean absolute difference 1.91 instead of 0.69). And the second file follows the
+render's container where the engine can write it — a GIF or an alpha render
+pairs with plain video instead, since a GIF of the original would be decimated
+to `gif_fps` and an alpha container has nothing to key.
 
 Sequences have no original — there is no single clip behind a strip of morphs —
 so the checkbox is not offered in that view.
@@ -2153,20 +2209,24 @@ and what actually ran is in the stats lines.
 | WebGPU tracking | **yes**, fp16 | yes, fp16 | not in the headless build tested |
 | WebCodecs decode in a worker | **yes** | **yes** | **yes** |
 | 60 frames of 720p decoded | 0.49 s | 0.15 s | 1.66 s |
-| `MediaRecorder` WebM | VP9 | VP8 (no VP9) | VP9 |
+| `VideoEncoder` WebM | VP9 | VP9 | VP9 |
+| `VideoEncoder` MP4 | H.264 | H.264 | H.264 |
 | canvas `requestFrame()` | on the **track** | on the **stream** | on the **track** |
-| a 60-frame export is exactly 60 frames | **yes** | 59 of 60, and it says so | **yes** |
+| a 60-frame export is exactly 60 frames | **yes** | **yes** | **yes** |
+| …and plays for 2.000 s after a 4× slow render | **yes** | **yes** | **yes** |
 
-Two of those rows are the same bug seen from two sides. `requestFrame()` is a
-method on `CanvasCaptureMediaStreamTrack` in Chromium and WebKit and a method on
-the *stream* in Firefox, which is why the export threw *"vtrack.requestFrame is
-not a function"* there; and Firefox's version queues the grab for the next paint
-rather than taking it there and then, so a render slower than real time loses
-the odd frame. All three forms are handled — track, stream, and neither (the
-compositor samples the canvas instead, which no shipping engine needs today and
-is tested by deleting the API) — and on the two asynchronous ones the finished
-file is **demuxed and counted**, so a short cut says it is short instead of
-looking fine.
+`requestFrame()` only matters for the alpha export now, and it is still the same
+bug seen from two sides: it is a method on `CanvasCaptureMediaStreamTrack` in
+Chromium and WebKit and a method on the *stream* in Firefox, which is why the
+export once threw *"vtrack.requestFrame is not a function"* there; and Firefox's
+version queues the grab for the next paint rather than taking it there and then,
+so two frames handed over inside one paint interval collapse into one —
+measured, 58 of 60 on an alpha WebM. All three forms are handled — track, stream
+and neither (the compositor samples the canvas instead, which no shipping engine
+needs today and is tested by deleting the API) — and on the two asynchronous
+ones the finished file is **demuxed and counted**, so a short cut says it is
+short instead of looking fine. The *length* is right on all three regardless,
+which is the property that used to be wrong everywhere.
 
 WebGPU tracking was verified in Chromium and Firefox. Headless WebKit offers no
 adapter, so Safari's tracking speed is **not measured here** and is not claimed;
@@ -2356,8 +2416,9 @@ its decode and its export are.
   frame with a subject that was 250 px tall in the source.
 * **A 1080×1920 canvas is 2.2× the pixels of 720p.** In the tab that shows: the
   reference clip exports at ~12 fps into a 9:16 WebM, which is slower than real
-  time, so the recorder paces the file to the wall clock and says so. The
-  server does not care.
+  time. That is a wait, not a defect — the file is still `nFrames / fps` long,
+  because the encoder is handed the timestamps rather than a clock. The stat
+  line reports the render rate and the playing length as two separate numbers.
 * **An overlay canvas upscales.** Clips are normalised to 720p on the way in,
   so a 9:16 crop of one is 405×720 stretched to 1080×1920 — 2.67×. The dots
   looks do not care (they are computed on the canvas), but `keep scene` and

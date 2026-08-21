@@ -1,0 +1,308 @@
+{
+ "base": "http://127.0.0.1:8765",
+ "clip": "sample.mp4",
+ "entryClip": "docs/entry-clip.mp4",
+ "still": "sample.jpg",
+ "consoleErrors": [],
+ "pageErrors": [],
+ "runs": {
+  "exportTiming": {
+   "throttleMs": 100,
+   "formats": {
+    "webm": {
+     "wallSeconds": 8.7,
+     "bytes": 2571117,
+     "codec": "vp9",
+     "frames": 60,
+     "expectedFrames": 60,
+     "expectedS": 2,
+     "plays": {
+      "seconds": 1.999,
+      "header": 1.966,
+      "lastPts": 1.966,
+      "packets": 60
+     },
+     "reported": {
+      "format": "webm",
+      "mime": "video/webm",
+      "codec": "vp09.00.10.08",
+      "paced": "timestamps",
+      "frames": 60,
+      "framesWritten": 60,
+      "durationS": 2,
+      "bytes": 2571117
+     },
+     "info": "rendered 60 frames in 7.6 s (7.9 fps) · plays for 2.00 s · 2.6 MB · VP9 · WEBM · 2.00 s at 30 fps"
+    },
+    "gif": {
+     "wallSeconds": 4.7,
+     "bytes": 3818299,
+     "codec": "gif",
+     "frames": 30,
+     "expectedFrames": null,
+     "expectedS": 2.1,
+     "plays": {
+      "seconds": 2.1,
+      "header": 2.1,
+      "lastPts": 2.03,
+      "packets": 30
+     },
+     "reported": {
+      "format": "gif",
+      "mime": "image/gif",
+      "codec": null,
+      "paced": null,
+      "frames": 30,
+      "framesWritten": 30,
+      "durationS": 2.1,
+      "bytes": 3818299
+     },
+     "info": "rendered 30 frames in 4.3 s (7.0 fps) · plays for 2.10 s · 3.8 MB · 30 frames at 15 fps · 3 colours · loops forever"
+    },
+    "webm-alpha": {
+     "wallSeconds": 11.5,
+     "bytes": 2309513,
+     "codec": "vp8",
+     "frames": 60,
+     "expectedFrames": 60,
+     "expectedS": 2,
+     "plays": {
+      "seconds": 1.967,
+      "header": 1.966553,
+      "lastPts": null,
+      "packets": 60
+     },
+     "reported": {
+      "format": "webm",
+      "mime": "video/webm;codecs=vp8",
+      "codec": null,
+      "paced": "track",
+      "frames": 60,
+      "framesWritten": 60,
+      "durationS": 2,
+      "bytes": 2309513
+     },
+     "info": "rendered 60 frames in 10.8 s (5.6 fps) · plays for 2.00 s · 2.3 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too · 2.00 s at 30 fps"
+    },
+    "mp4": {
+     "wallSeconds": 8.1,
+     "bytes": 1640729,
+     "codec": "h264",
+     "frames": 60,
+     "expectedFrames": 60,
+     "expectedS": 2,
+     "plays": {
+      "seconds": 2,
+      "header": 2,
+      "lastPts": 1.966667,
+      "packets": 60
+     },
+     "reported": {
+      "format": "mp4",
+      "mime": "video/mp4",
+      "codec": "avc1.640034",
+      "paced": "timestamps",
+      "frames": 60,
+      "framesWritten": 60,
+      "durationS": 2,
+      "bytes": 1640729
+     },
+     "info": "rendered 60 frames in 7.5 s (8.0 fps) · plays for 2.00 s · 1.6 MB · H.264 · MP4 · 2.00 s at 30 fps"
+    }
+   },
+   "nFrames": 60,
+   "fps": 30,
+   "expectedS": 2,
+   "offered": [
+    {
+     "id": "webm",
+     "ext": "webm"
+    },
+    {
+     "id": "gif",
+     "ext": "gif"
+    },
+    {
+     "id": "webm-alpha",
+     "ext": "webm"
+    },
+    {
+     "id": "mp4",
+     "ext": "mp4"
+    }
+   ],
+   "renderSeconds": 8.7,
+   "pairInfo": "rendered 60 frames in 7.5 s (8.0 fps) · plays for 2.00 s · 2.6 MB · VP9 · WEBM · 2.00 s at 30 fps · original cut: 60 frames, WEBM, 0.8 MB",
+   "pair": {
+    "dithered": {
+     "seconds": 1.999,
+     "header": 1.966,
+     "lastPts": 1.966,
+     "packets": 60
+    },
+    "original": {
+     "seconds": 1.999,
+     "header": 1.966,
+     "lastPts": 1.966,
+     "packets": 60
+    },
+    "ditheredFrames": 60,
+    "originalFrames": 60
+   },
+   "sequence": {
+    "frames": 48,
+    "durationS": 2,
+    "paced": "timestamps",
+    "expectedS": 2,
+    "renderS": 10.04
+   }
+  }
+ },
+ "checks": [
+  {
+   "name": "timing · the throttle is armed",
+   "ok": true
+  },
+  {
+   "name": "timing · webm exports",
+   "ok": true,
+   "detail": "rendered 60 frames in 7.6 s (7.9 fps) · plays for 2.00 s · 2.6 MB · VP9 · WEBM · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · webm plays for the clip's own length, not the render's",
+   "ok": true,
+   "detail": "1.999s against 2s — {\"seconds\":1.999,\"header\":1.966,\"lastPts\":1.966,\"packets\":60}"
+  },
+  {
+   "name": "timing · webm carries every frame",
+   "ok": true,
+   "detail": "60 of 60 (paced: timestamps)"
+  },
+  {
+   "name": "timing · webm states the length it will play for",
+   "ok": true,
+   "detail": "rendered 60 frames in 7.6 s (7.9 fps) · plays for 2.00 s · 2.6 MB · VP9 · WEBM · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · webm does not claim the file plays slow",
+   "ok": true,
+   "detail": "rendered 60 frames in 7.6 s (7.9 fps) · plays for 2.00 s · 2.6 MB · VP9 · WEBM · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · gif exports",
+   "ok": true,
+   "detail": "rendered 30 frames in 4.3 s (7.0 fps) · plays for 2.10 s · 3.8 MB · 30 frames at 15 fps · 3 colours · loops forever"
+  },
+  {
+   "name": "timing · gif plays for the clip's own length, not the render's",
+   "ok": true,
+   "detail": "2.1s against 2.1s — {\"seconds\":2.1,\"header\":2.1,\"lastPts\":2.03,\"packets\":30}"
+  },
+  {
+   "name": "timing · gif states the length it will play for",
+   "ok": true,
+   "detail": "rendered 30 frames in 4.3 s (7.0 fps) · plays for 2.10 s · 3.8 MB · 30 frames at 15 fps · 3 colours · loops forever"
+  },
+  {
+   "name": "timing · gif does not claim the file plays slow",
+   "ok": true,
+   "detail": "rendered 30 frames in 4.3 s (7.0 fps) · plays for 2.10 s · 3.8 MB · 30 frames at 15 fps · 3 colours · loops forever"
+  },
+  {
+   "name": "timing · webm-alpha exports",
+   "ok": true,
+   "detail": "rendered 60 frames in 10.8 s (5.6 fps) · plays for 2.00 s · 2.3 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · webm-alpha plays for the clip's own length, not the render's",
+   "ok": true,
+   "detail": "1.967s against 2s — {\"seconds\":1.967,\"header\":1.966553,\"lastPts\":null,\"packets\":60}"
+  },
+  {
+   "name": "timing · webm-alpha carries every frame",
+   "ok": true,
+   "detail": "60 of 60 (paced: track)"
+  },
+  {
+   "name": "timing · webm-alpha states the length it will play for",
+   "ok": true,
+   "detail": "rendered 60 frames in 10.8 s (5.6 fps) · plays for 2.00 s · 2.3 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · webm-alpha does not claim the file plays slow",
+   "ok": true,
+   "detail": "rendered 60 frames in 10.8 s (5.6 fps) · plays for 2.00 s · 2.3 MB · video/webm;codecs=vp8 with an alpha channel — the server writes ProRes 4444 too · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · mp4 exports",
+   "ok": true,
+   "detail": "rendered 60 frames in 7.5 s (8.0 fps) · plays for 2.00 s · 1.6 MB · H.264 · MP4 · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · mp4 plays for the clip's own length, not the render's",
+   "ok": true,
+   "detail": "2s against 2s — {\"seconds\":2,\"header\":2,\"lastPts\":1.966667,\"packets\":60}"
+  },
+  {
+   "name": "timing · mp4 carries every frame",
+   "ok": true,
+   "detail": "60 of 60 (paced: timestamps)"
+  },
+  {
+   "name": "timing · mp4 states the length it will play for",
+   "ok": true,
+   "detail": "rendered 60 frames in 7.5 s (8.0 fps) · plays for 2.00 s · 1.6 MB · H.264 · MP4 · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · mp4 does not claim the file plays slow",
+   "ok": true,
+   "detail": "rendered 60 frames in 7.5 s (8.0 fps) · plays for 2.00 s · 1.6 MB · H.264 · MP4 · 2.00 s at 30 fps"
+  },
+  {
+   "name": "timing · the render really was slower than real time",
+   "ok": true,
+   "detail": "8.7s of work for a 2s clip"
+  },
+  {
+   "name": "timing · the pair exports",
+   "ok": true,
+   "detail": "rendered 60 frames in 7.5 s (8.0 fps) · plays for 2.00 s · 2.6 MB · VP9 · WEBM · 2.00 s at 30 fps · original cut: 60 frames, WEBM, 0.8 MB"
+  },
+  {
+   "name": "timing · the dithered half of the pair is the clip's own length",
+   "ok": true,
+   "detail": "1.999s against 2s"
+  },
+  {
+   "name": "timing · the original half of the pair is the clip's own length",
+   "ok": true,
+   "detail": "1.999s against 2s"
+  },
+  {
+   "name": "timing · the pair is frame for frame",
+   "ok": true,
+   "detail": "{\"dithered\":{\"seconds\":1.999,\"header\":1.966,\"lastPts\":1.966,\"packets\":60},\"original\":{\"seconds\":1.999,\"header\":1.966,\"lastPts\":1.966,\"packets\":60},\"ditheredFrames\":60,\"originalFrames\":60}"
+  },
+  {
+   "name": "timing · a sequence encode is its own length too",
+   "ok": true,
+   "detail": "{\"frames\":48,\"durationS\":2,\"paced\":\"timestamps\",\"expectedS\":2,\"renderS\":10.04}"
+  },
+  {
+   "name": "timing · and that sequence render really was slower than real time",
+   "ok": true,
+   "detail": "{\"frames\":48,\"durationS\":2,\"paced\":\"timestamps\",\"expectedS\":2,\"renderS\":10.04}"
+  }
+ ],
+ "browser": {
+  "how": "chromium (headless, WebGPU flags)",
+  "executionProvider": "webgpu",
+  "webgpu": "ok",
+  "clipSeconds": 5
+ },
+ "only": [
+  "exportTiming"
+ ],
+ "checksPassed": 27,
+ "checksTotal": 27
+}

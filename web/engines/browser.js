@@ -5,12 +5,20 @@
                  frame; the <video> seek loop is the fallback (engines/decode.js)
      track       EdgeTAM as four ONNX graphs on onnxruntime-web (web/track.js)
      dither      web/dither.js, the same engine the server mirrors
-     export      MediaRecorder over a canvas capture stream -> WebM
+     export      WebCodecs VideoEncoder + a vendored muxer -> WebM or MP4
+                 (engines/encode.js). MediaRecorder is the fallback, and the
+                 only path the alpha export can take.
 
    Nothing is uploaded and nothing is fetched from a CDN. The cost is speed
-   (12.4 fps tracking on an M4 Pro against the local server's 20.9) and the
-   container: MediaRecorder gives WebM, not the H.264 MP4 the server writes.
-   Both trade-offs are stated in the UI rather than hidden.
+   (12.4 fps tracking on an M4 Pro against the local server's 20.9). The
+   container is no longer a cost: the tab writes VP9 WebM where the platform
+   encoder has VP9 and H.264 MP4 where it has H.264, and says which it used.
+
+   THE OUTPUT IS ALWAYS THE CLIP'S OWN LENGTH. That is not a detail, it is the
+   contract: nFrames / fps seconds, whatever the render cost. `VideoEncoder`
+   gets the timestamp as an argument; the MediaRecorder fallback renders every
+   frame first and then replays the finished frames to the recorder at the
+   clip's rate, because a recorder stamps a frame when it arrives.
 
    MEMORY. A 150-frame 720p clip is kept as ~15 MB of JPEG blobs plus, per
    subject, 150 x 192x192 float32 mask logits (~22 MB). Full-resolution RGBA is
@@ -22,17 +30,49 @@
 
 import { WebTracker } from '../track.js';
 import { decodeClip, decodeSupport } from './decode.js';
+import { encodeClip, encoderSupport, hasVideoEncoder, bitrateFor } from './encode.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/* One compositor frame. Only the capture path that has no requestFrame needs
- * it, and a document that is hidden never fires one — hence the timeout. */
-const raf = () => new Promise((r) => {
-  if (typeof requestAnimationFrame !== 'function') return setTimeout(r, 16);
-  let done = false;
-  const go = () => { if (!done) { done = true; r(); } };
+/* One compositor frame. Only the capture paths that do not capture
+ * synchronously need it, and a document that is hidden never fires one —
+ * hence the timeout.
+ *
+ * `n` matters. An rAF callback runs BEFORE the paint it belongs to, so one
+ * rAF does not prove a paint has happened; two do, because the second runs
+ * before the paint AFTER the first one. Firefox's stream-level
+ * `requestFrame()` queues its grab for the next paint, so two grabs separated
+ * by only one rAF collapse into a single captured frame — measured, 58 of 60.
+ * Two rAFs is what makes each replayed frame its own paint. */
+const raf = (n = 1) => new Promise((r) => {
+  if (typeof requestAnimationFrame !== 'function') return setTimeout(r, 16 * n);
+  let left = n, done = false;
+  const go = () => {
+    if (done) return;
+    if (--left > 0) { requestAnimationFrame(go); return; }
+    done = true; r();
+  };
   requestAnimationFrame(go);
-  setTimeout(go, 100);
+  setTimeout(() => { if (!done) { done = true; r(); } }, 100 * n);
 });
+
+/* How many bytes of rendered-frame PNGs the MediaRecorder fallback will hold
+ * before it stops accumulating, replays what it has and pauses the recorder
+ * for the next run. Dithered output is 2-4 flat colours, so a 1080x1920 frame
+ * is tens of kilobytes and a whole clip normally never reaches this. */
+const RECORD_STORE_BUDGET = 256e6;
+
+/* How many replay frames are decoded ahead of the one being handed over. */
+const LEAD = 4;
+
+/* A test hook, and only that: sleep this long after every rendered frame, to
+ * produce a render that is slower than real time on purpose. Nothing about the
+ * OUTPUT is allowed to change when it is set — that is the assertion
+ * verify-web.mjs makes with it. Set `window.DV_SLOW_RENDER_MS`, or open the
+ * page with ?slowrender=100. */
+function slowRenderMs() {
+  const v = +(globalThis.DV_SLOW_RENDER_MS || 0);
+  return v > 0 && isFinite(v) ? Math.min(2000, v) : 0;
+}
 
 /** How many video frames a recorded WebM actually contains. Uses the demuxer
  *  the decode path already ships; a file it cannot read reports 0, which the
@@ -123,32 +163,60 @@ export function clipMemoryEstimate(nFrames, w, h, subjects = 1,
 }
 
 /* ====================================================== export formats ===
- * What the tab can actually write, decided at load: MediaRecorder's codec
- * support is a runtime fact, and mp4/ProRes are a flat no. `available: false`
- * entries stay in the list on purpose — the UI shows them greyed with the
- * reason, which is more honest than pretending the format does not exist.
+ * What the tab can actually write. Two runtime facts, not one:
+ *
+ *   WebCodecs   `VideoEncoder.isConfigSupported` per codec — this is what
+ *               decides whether WebM and MP4 are on offer, and it is ASYNC,
+ *               so the list is built once optimistically and refreshed by
+ *               `refreshFormats()` from meta() before the UI paints it.
+ *   MediaRecorder  still the only way to an alpha WebM, and the fallback for
+ *               a browser with no VideoEncoder at all.
+ *
+ * `available: false` entries stay in the list on purpose — the UI shows them
+ * greyed with the reason, which is more honest than pretending the format does
+ * not exist.
  */
 function canRecord(t) {
   return typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t);
 }
 
-export function browserFormats() {
-  const webm = canRecord('video/webm;codecs=vp9') || canRecord('video/webm');
+/** @param {?{webm:?object, mp4:?object}} enc  what encoderSupport() found, or
+ *  null before the probe has answered. */
+export function browserFormats(enc) {
+  const recWebM = canRecord('video/webm;codecs=vp9') || canRecord('video/webm');
   const alpha = canRecord('video/webm;codecs=vp8') || canRecord('video/webm');
+  const wcWebM = enc ? enc.webm : null;
+  const wcMP4 = enc ? enc.mp4 : null;
+  const wc = hasVideoEncoder();
+  // The exact-timing note, said once. It is the reason this list changed shape.
+  const exact = 'written frame by frame with WebCodecs, so the file is the '
+    + "clip's own length however long the render took";
+  const noEncoder = wc
+    ? 'this browser has no such encoder in WebCodecs'
+    : 'this browser has no WebCodecs VideoEncoder';
   return [
-    { id: 'webm', label: 'WebM · VP9', ext: 'webm', mime: 'video/webm',
-      alpha: false, available: webm,
-      note: webm ? '' : 'this browser has no MediaRecorder WebM encoder' },
+    { id: 'webm', label: `WebM · ${wcWebM ? wcWebM.label : 'VP9'}`,
+      ext: 'webm', mime: 'video/webm',
+      alpha: false, available: !!wcWebM || recWebM,
+      note: wcWebM ? exact
+        : recWebM ? 'no WebCodecs VP9/VP8/AV1 encoder here — recorded instead, '
+          + 'and every frame is rendered before any of it is recorded so the '
+          + "file is still the clip's own length"
+          : `${noEncoder}, and no MediaRecorder WebM either` },
     { id: 'gif', label: 'GIF · looping', ext: 'gif', mime: 'image/gif',
       alpha: false, available: true,
       note: 'encoded in the tab; a 300-frame 720p GIF needs ~280 MB of scratch memory' },
     { id: 'webm-alpha', label: 'WebM · VP8 + alpha', ext: 'webm', mime: 'video/webm',
       alpha: true, available: alpha,
-      note: alpha ? 'alpha only survives in players that read WebM alpha (Chrome, Firefox)'
+      note: alpha ? 'alpha only survives in players that read WebM alpha (Chrome, '
+        + 'Firefox); VideoEncoder cannot write a WebM alpha plane, so this one '
+        + 'is recorded from finished frames'
         : 'this browser has no MediaRecorder WebM encoder' },
-    { id: 'mp4', label: 'MP4 · H.264', ext: 'mp4', mime: 'video/mp4',
-      alpha: false, available: false,
-      note: 'needs the local server — writing H.264 in the tab means vendoring a ~32 MB encoder' },
+    { id: 'mp4', label: `MP4 · ${wcMP4 ? wcMP4.label : 'H.264'}`,
+      ext: 'mp4', mime: 'video/mp4',
+      alpha: false, available: !!wcMP4,
+      note: wcMP4 ? exact
+        : `${noEncoder} for H.264 or HEVC — the local server writes MP4` },
     { id: 'prores', label: 'ProRes 4444 · alpha', ext: 'mov', mime: 'video/quicktime',
       alpha: true, available: false, note: 'needs the local server' },
   ];
@@ -283,8 +351,28 @@ export class BrowserEngine {
       // `decode` is filled in per clip by open() with what actually ran
       decodePaths: decodeSupport(),
       decode: null,
-      formats: browserFormats(),
+      // the optimistic list; refreshFormats() replaces it with the probed one
+      // before the UI ever paints (meta() awaits it)
+      formats: browserFormats(null),
     };
+    this.encoders = null;                // what WebCodecs said it can write
+  }
+
+  /** Ask the platform encoder what it can write and rebuild the format list.
+   *  `isConfigSupported` is async and the format chips are painted from a
+   *  synchronous getter, so the probe has to have landed before the UI runs —
+   *  meta() awaits this, and app.js paints the chips after meta(). */
+  async refreshFormats() {
+    try {
+      this.encoders = await encoderSupport(1920, 1080, 30);
+    } catch (e) { this.encoders = { webm: null, mp4: null, available: false }; }
+    this.supports.formats = browserFormats(this.encoders);
+    const first = this.supports.formats.find((f) => f.available && f.id !== 'gif');
+    if (first) {
+      this.supports.exportMime = first.mime;
+      this.supports.exportExt = first.ext;
+    }
+    return this.supports.formats;
   }
 
   /* ---------------------------------------------------------- model set
@@ -541,6 +629,9 @@ export class BrowserEngine {
     try { S = (await this.manifestOf()).image_size; } catch (e) { /* reported later */ }
     // ask the GPU what it can do before claiming a backend on the chip
     await this.pickBackend();
+    // and ask the platform video encoder the same question, so the format
+    // chips are painted from a probe rather than from a guess
+    await this.refreshFormats();
     const tiers = (this.tiers || [S]).map((size) => Object.assign(
       { size }, TRACK_TIERS[size]
         || { id: String(size), label: `${size} px`, fps: 0 }));
@@ -959,18 +1050,26 @@ export class BrowserEngine {
   }
 
   /* ------------------------------------------------------------- export
-   * Four containers in the tab, one missing:
+   * Five containers named, four reachable in the tab:
    *
-   *   webm         MediaRecorder, VP9 (VP8 on older builds)
-   *   webm-alpha   the same recorder over an alpha canvas — VP8, because that
-   *                is the codec Chrome carries an alpha plane in
+   *   webm         VideoEncoder (VP9, or VP8/AV1) -> vendor/webm-muxer.js.
+   *                MediaRecorder only where there is no VideoEncoder at all.
+   *   mp4          VideoEncoder (H.264, or HEVC/AV1) -> vendor/mp4-muxer.js.
+   *                This used to say "needs the local server"; it does not any
+   *                more, because the encoder was in the platform all along and
+   *                what was missing was a muxer, which is 60 KB and not 32 MB.
+   *   webm-alpha   MediaRecorder over an alpha canvas — VP8, because that is
+   *                the codec Chrome carries an alpha plane in, and because
+   *                VideoEncoder cannot produce the second bitstream a WebM
+   *                alpha plane is. Timing is fixed by replay, not by pacing
+   *                the render.
    *   gif          web/vendor/gifenc.js, our own LZW encoder; the look is 2-4
-   *                flat colours, which is what a 256-entry palette is for
-   *   mp4          NOT here. Writing H.264 in the tab means shipping an
-   *                encoder; ffmpeg.wasm is ~32 MB and would have to be vendored
-   *                to keep the no-CDN rule, which is a bigger download than the
-   *                tracker. The server engine writes it.
-   *   prores       NOT here, same reason and then some.
+   *                flat colours, which is what a 256-entry palette is for.
+   *                Delays are written per frame, so a GIF was never affected
+   *                by the wall-clock bug.
+   *   prores       NOT here. The server engine writes it.
+   *
+   * Every one of them comes out nFrames / fps seconds long.
    */
   /**
    * params.source, when present, overrides the open clip's {w, h, nFrames, fps}
@@ -1004,27 +1103,57 @@ export class BrowserEngine {
         + (f && f.note ? ` — ${f.note}` : ' — use the local server'));
     }
     if (fmt === 'gif') return this.exportGIF(params, onProgress, renderFrame);
-    return this.exportWebM(params, onProgress, renderFrame, fmt === 'webm-alpha');
+    // alpha has one road out of the tab and it is the recorder
+    if (fmt === 'webm-alpha') {
+      return this.exportRecorded(params, onProgress, renderFrame, true);
+    }
+    const want = fmt === 'mp4' ? 'mp4' : 'webm';
+    if (this.encoderFor(want, params)) {
+      return this.exportEncoded(params, onProgress, renderFrame, want);
+    }
+    return this.exportRecorded(params, onProgress, renderFrame, false);
+  }
+
+  /** Whether WebCodecs will write `container`, given what the probe found.
+   *  The probe was taken at 1080p; a clip that is bigger than the level the
+   *  encoder agreed to is caught by encodeClip's own probe at the real size,
+   *  and falls back from there. */
+  encoderFor(container, params) {
+    if (!hasVideoEncoder()) return null;
+    return this.encoders ? this.encoders[container] : null;
   }
 
   /* ------------------------------------------------------- original cut
    * The clip as it came in, cut to exactly the frames the render just used.
    *
-   * Same recorder, same canvas, same loop, same `this.clip` frame count — the
+   * Same encoder, same canvas, same loop, same `this.clip` frame count — the
    * only difference is that `renderFrame` hands back the decoded frame instead
-   * of a dithered one. WebM whatever the render's container was: this tab has
-   * no H.264 encoder (see exportWebM), and the format the pair has to agree on
-   * is the frame grid, not the codec.
+   * of a dithered one. The pair has to agree on the frame grid; it now also
+   * agrees on the container wherever the render used one this engine can
+   * write, because both files come out of the same encoder.
+   *
+   * There is no pacing argument any more. Both files are stamped from the
+   * frame index, so both are nFrames / fps long by construction; the old
+   * `pace_ms` existed only to make an original as slow as a slow render.
    */
   async exportOriginal(params, onProgress, renderFrame) {
-    const r = await this.exportWebM(Object.assign({}, params, { format: 'webm' }),
-                                    onProgress, renderFrame, false);
     const src = params.source || this.clip;
     const { w, h, fps } = src;
     const [, nFrames] = BrowserEngine.window(params, src);
+    // a GIF or an alpha render pairs with whatever plain video this tab writes
+    const asked = params.format === 'mp4' ? 'mp4' : 'webm';
+    const use = this.encoderFor(asked, params) ? asked
+      : this.encoderFor(asked === 'mp4' ? 'webm' : 'mp4', params) ? (asked === 'mp4' ? 'webm' : 'mp4')
+        : null;
+    const r = use
+      ? await this.exportEncoded(Object.assign({}, params, { format: use }),
+                                 onProgress, renderFrame, use)
+      : await this.exportRecorded(Object.assign({}, params, { format: 'webm' }),
+                                  onProgress, renderFrame, false);
     return Object.assign(r, {
-      w, h, fps, format: 'webm', matched: (params.format || 'webm') === 'webm',
-      note: `${nFrames} frames, undithered — the tab writes WebM only`,
+      w, h, fps, format: r.ext === 'mp4' ? 'mp4' : 'webm',
+      matched: r.ext === (params.format === 'mp4' ? 'mp4' : 'webm'),
+      note: `${nFrames} frames, undithered · ${r.note}`,
     });
   }
 
@@ -1043,9 +1172,11 @@ export class BrowserEngine {
     const palette = gifPalette(params);
     const cache = new Map();
     const frames = [];
+    const slowMs = slowRenderMs();
     const t0 = performance.now();
     for (let i = 0; i < nFrames; i += step) {
       const img = await renderFrame(from + i, w, h);
+      if (slowMs) await sleep(slowMs);
       frames.push(G.indexFrame(img.data, w, h, palette, cache));
       if (onProgress) {
         onProgress({ done: i + 1, total: nFrames,
@@ -1062,6 +1193,12 @@ export class BrowserEngine {
     return {
       url: URL.createObjectURL(blob), mime: 'image/gif', ext: 'gif',
       playable: false, image: true, frames: frames.length,
+      /* A GIF carries a delay per frame, so its length was never the render's.
+       * It is not quite frames/fps either: GIF delays are whole hundredths of
+       * a second, which is the same rounding gifenc.encode does, so 15 fps is
+       * really 100/7 = 14.29. This reports what the file will actually do. */
+      durationS: +(frames.length * Math.max(2, Math.round(100 / (fps / step)))
+                   / 100).toFixed(3),
       elapsedS: +el.toFixed(2), fps: +(frames.length / Math.max(el, 1e-6)).toFixed(2),
       bytes: blob.size,
       note: `${frames.length} frames at ${(fps / step).toFixed(0)} fps · `
@@ -1069,102 +1206,215 @@ export class BrowserEngine {
     };
   }
 
-  /* MediaRecorder over a canvas capture stream. Two ways to drive it, because
-   * `requestFrame` is not everywhere:
-   *
-   *   captureStream(0) + requestFrame()   one frame per call, exactly when we
-   *                                       say. The recorder timestamps it on
-   *                                       arrival, so pacing the loop to the
-   *                                       clip's frame interval gives a file
-   *                                       that plays at the right speed.
-   *   captureStream(fps)                  the compositor samples the canvas
-   *                                       instead. No frame is guaranteed and
-   *                                       none is exactly placed.
-   *
-   * The first is the standard `CanvasCaptureMediaStreamTrack.requestFrame()`;
-   * Firefox has the older `CanvasCaptureMediaStream.requestFrame()` on the
-   * STREAM instead, which is why both are looked for. Safari has neither, and
-   * calling the missing one is what "vtrack.requestFrame is not a function"
-   * was. When neither exists the stream is rebuilt at `fps` and each painted
-   * frame is given a compositor frame plus its interval to be picked up —
-   * and the result is COUNTED rather than assumed: on that path only, the
-   * finished WebM is demuxed and the number of frames in it reported, with a
-   * note when it is not the number that went in. (Only on that path: counting
-   * reads the whole export back into memory, and on the requestFrame path it
-   * would be hundreds of megabytes spent confirming a tautology.)
-   *
-   * If a frame takes longer than the interval to dither, the export runs
-   * behind and the result is slower than real time — the returned `fps` says
-   * whether it did.
-   *
-   * The container is WebM (VP9, VP8 on older builds). Writing H.264 MP4 in the
-   * tab would mean shipping an encoder; ffmpeg.wasm is ~32 MB and would have to
-   * be vendored to keep the no-CDN rule, which is a bigger download than the
-   * tracker itself. The server engine writes MP4.
+  /* ------------------------------------------------------- the encoder path
+   * WebCodecs. `engines/encode.js` does the work and carries the argument for
+   * why it exists; what is left here is the shape the rest of the app expects
+   * back and the one honest note: which codec and container actually came out,
+   * when it was not the one that was asked for.
    */
-  async exportWebM(params, onProgress, renderFrame, alpha) {
+  async exportEncoded(params, onProgress, renderFrame, container) {
     const src = params.source || this.clip;
     const { w, h, fps } = src;
     const [from, nFrames] = BrowserEngine.window(params, src);
-    const cv = document.createElement('canvas');
-    cv.width = w; cv.height = h;
-    const g = cv.getContext('2d', { alpha: !!alpha });
-    // VP8 first for alpha: Chrome's WebM writer carries an alpha plane for VP8
-    // (alpha_mode=1) and not for VP9. Opaque exports prefer VP9 for the bitrate.
+    const t0 = performance.now();
+    let r;
+    try {
+      r = await encodeClip({ w, h, fps, from, nFrames, container,
+                             renderFrame, onProgress, slowMs: slowRenderMs() });
+    } catch (err) {
+      /* The probe said yes at 1080p and the real size said no, or the platform
+       * encoder fell over. Either way there is still a file to be had: drop to
+       * the other container, then to the recorder. Silently, but said in the
+       * note. */
+      const other = container === 'mp4' ? 'webm' : 'mp4';
+      if (this.encoderFor(other, params)) {
+        r = await encodeClip({ w, h, fps, from, nFrames, container: other,
+                              renderFrame, onProgress, slowMs: slowRenderMs() });
+        r.swapped = `${container.toUpperCase()} failed here (${err.message}) — `
+          + `written as ${other.toUpperCase()} instead`;
+      } else {
+        const rec = await this.exportRecorded(params, onProgress, renderFrame, false);
+        rec.note = `${container.toUpperCase()} failed here (${err.message}) · ${rec.note}`;
+        return rec;
+      }
+    }
+    const el = (performance.now() - t0) / 1000;
+    const dur = nFrames / Math.max(1e-6, fps);
+    return {
+      url: URL.createObjectURL(r.blob), mime: r.mime, ext: r.ext, playable: true,
+      alpha: false,
+      frames: nFrames, framesWritten: nFrames,
+      paced: 'timestamps',
+      codec: r.codec,
+      durationS: +dur.toFixed(3),
+      elapsedS: +el.toFixed(2),
+      fps: +(nFrames / Math.max(el, 1e-6)).toFixed(2),
+      bytes: r.blob.size,
+      note: [r.swapped || `${r.label} · ${r.ext.toUpperCase()}`,
+             `${dur.toFixed(2)} s at ${fps} fps`,
+             r.padded ? 'padded one pixel to an even side for 4:2:0' : '',
+      ].filter(Boolean).join(' · '),
+    };
+  }
+
+  /* --------------------------------------------------- the recorder path
+   * MediaRecorder, in two phases, and the two phases are the fix.
+   *
+   * A recorder timestamps a frame when it ARRIVES. The old loop dithered a
+   * frame and handed it straight over, so the file's time base was the wall
+   * clock of the render: a 3 s clip that took 84 s to dither became an 84 s
+   * file. This renders EVERY frame first, into a store of PNG blobs, and only
+   * then replays the finished frames to the recorder at the clip's own rate.
+   * Replaying a decoded PNG is microseconds of work against a dither's tens of
+   * milliseconds, so the wall clock and the clip's clock are the same clock.
+   *
+   * Only two things come here now: an alpha WebM (VideoEncoder cannot write a
+   * WebM alpha plane) and a browser with no VideoEncoder at all.
+   *
+   * THE STORE. PNG, because it is lossless — a dither must survive the round
+   * trip pixel for pixel — and because dithered output is 2-4 flat colours,
+   * which PNG stores in tens of kilobytes a frame. A few hundred frames at
+   * 1080x1920 is a few tens of megabytes, not the ~9 MB a frame that holding
+   * raw RGBA would cost. Past RECORD_STORE_BUDGET the replay is CHUNKED: the
+   * recorder is paused while the next chunk renders, which a recorder excludes
+   * from its timeline, so the seam costs no time in the file either.
+   *
+   * Three ways to hand the recorder a frame, because `requestFrame` is not
+   * everywhere:
+   *
+   *   captureStream(0) + track.requestFrame()   captures SYNCHRONOUSLY. Exact.
+   *   captureStream(0) + stream.requestFrame()  Firefox's older one: queues
+   *                                             the grab for the next paint,
+   *                                             so each frame is given one.
+   *   captureStream(fps)                        Safari: the compositor samples
+   *                                             the canvas. Nothing is exactly
+   *                                             placed, so the finished file is
+   *                                             demuxed and its frames COUNTED.
+   */
+  async exportRecorded(params, onProgress, renderFrame, alpha) {
+    const src = params.source || this.clip;
+    const { w, h, fps } = src;
+    const [from, nFrames] = BrowserEngine.window(params, src);
     const types = alpha
       ? ['video/webm;codecs=vp8', 'video/webm']
       : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
-    const mime = types.find((t) => window.MediaRecorder
+    const mime = types.find((t) => typeof MediaRecorder !== 'undefined'
       && MediaRecorder.isTypeSupported(t));
     if (!mime) throw new Error('this browser has no MediaRecorder WebM encoder');
+
+    /* TWO canvases, and the second one is not an optimisation.
+     *
+     * `cv` is the one the recorder is watching and NOTHING is painted on it
+     * until the replay starts. Rendering phase 1 onto it left the last frame
+     * sitting there when `rec.start()` ran, and a capture stream hands its
+     * recorder whatever the canvas currently holds at the moment it starts —
+     * measured, that is one extra frame at the head of the file (61 of 60).
+     * `pen` is where the frames are drawn to be turned into PNGs. */
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d', { alpha: !!alpha });
+    const pen = document.createElement('canvas');
+    pen.width = w; pen.height = h;
+    const pg = pen.getContext('2d', { alpha: !!alpha });
     let stream = cv.captureStream(0);
     let vtrack = stream.getVideoTracks()[0];
-    /* Which of the three, and it matters beyond "does it throw". Only the
-     * track-level call captures the canvas SYNCHRONOUSLY; Firefox's
-     * stream-level one queues the grab for the next paint, so two calls inside
-     * one paint interval collapse into one frame and the file comes out short.
-     * Both of the async kinds therefore get a compositor frame each. */
     const kind = typeof vtrack.requestFrame === 'function' ? 'track'
       : typeof stream.requestFrame === 'function' ? 'stream' : 'compositor';
     let push = kind === 'track' ? () => vtrack.requestFrame()
       : kind === 'stream' ? () => stream.requestFrame() : null;
     if (!push) {
-      // nothing can hand this stream a frame, so let the compositor take them
       vtrack.stop();
       stream = cv.captureStream(fps);
       vtrack = stream.getVideoTracks()[0];
     }
     const chunks = [];
     const rec = new MediaRecorder(stream, {
-      mimeType: mime,
-      videoBitsPerSecond: Math.min(24e6, Math.max(4e6, w * h * fps * 0.15)),
+      mimeType: mime, videoBitsPerSecond: bitrateFor(w, h, fps),
     });
     rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     const stopped = new Promise((ok) => { rec.onstop = ok; });
+
+    const dt = 1000 / Math.max(1e-6, fps);
+    const slowMs = slowRenderMs();
     const t0 = performance.now();
-    rec.start();
-    // `pace_ms` is the matched cut asking to be handed over at the rate the
-    // DITHERED pass actually managed. A recorder timestamps a frame when it
-    // gets it, so a render that ran slower than real time writes a file whose
-    // rate is that slower one; an original paced to 1/fps beside it would be a
-    // shorter clip with the same frames in it. Same pacing, same duration.
-    const dt = Math.max(1, +params.pace_ms || 1000 / fps);
+    let started = false, chunked = 0, storeBytes = 0, replayS = 0;
+    /* Render one run of frames into blobs, then replay that run. The whole
+     * clip is one run unless the store would get out of hand. */
+    const store = [];
+    const flushRun = async (firstIndex) => {
+      if (!store.length) return;
+      // decode a few frames ahead, so the paced loop never waits on a PNG
+      const decode = (k) => (k < store.length ? createImageBitmap(store[k]) : null);
+      const lead = [];
+      for (let k = 0; k < Math.min(LEAD, store.length); k++) lead.push(decode(k));
+      if (!started) {
+        /* Paint the run's first frame BEFORE the recorder starts. A capture
+         * stream hands its recorder whatever the canvas holds at the moment
+         * `start()` runs, and on the paths that do not capture synchronously
+         * that is a real frame in the file: measured on Firefox, an untouched
+         * canvas put a blank frame at the head. A duplicated first frame is a
+         * frame too many; a blank one is a defect. The synchronous track-level
+         * path takes nothing it was not handed, so it is not seeded — seeding
+         * it is what turns 60 frames into 61. */
+        if (kind !== 'track') {
+          const seed = await lead[0];
+          if (alpha) g.clearRect(0, 0, w, h);
+          g.drawImage(seed, 0, 0);
+        }
+        rec.start();
+        started = true;
+        // `start()` sets state synchronously; the paint is what has to land
+        await raf(2);
+      } else if (rec.state === 'paused') { rec.resume(); chunked++; await raf(2); }
+      const base = performance.now();
+      for (let k = 0; k < store.length; k++) {
+        const bmp = await lead.shift();
+        if (k + LEAD < store.length) lead.push(decode(k + LEAD));
+        if (alpha) g.clearRect(0, 0, w, h);
+        g.drawImage(bmp, 0, 0);
+        bmp.close && bmp.close();
+        if (push) push();
+        if (kind !== 'track') await raf();
+        if (onProgress) {
+          onProgress({ done: firstIndex + k + 1, total: nFrames,
+                       text: `${firstIndex + k + 1}/${nFrames} · writing` });
+        }
+        const left = base + (k + 1) * dt - performance.now();
+        if (left > 0) await sleep(left);
+      }
+      replayS += (performance.now() - base) / 1000;
+      store.length = 0;
+    };
+
+    let runStart = 0;
     for (let i = 0; i < nFrames; i++) {
-      const fs = performance.now();
-      const img = await renderFrame(from + i, w, h);   // ImageData from app.js
-      if (alpha) g.clearRect(0, 0, w, h);
-      g.putImageData(img, 0, 0);
-      if (push) push();
-      if (kind !== 'track') await raf();   // let the compositor take it
-      if (onProgress) onProgress({ done: i + 1, total: nFrames,
-                                   text: `${i + 1}/${nFrames}` });
-      const left = dt - (performance.now() - fs);
-      await sleep(Math.max(0, left));
+      const img = await renderFrame(from + i, w, h);
+      if (slowMs) await sleep(slowMs);
+      if (alpha) pg.clearRect(0, 0, w, h);
+      pg.putImageData(img, 0, 0);
+      // PNG: lossless, so the dither survives the round trip pixel for pixel,
+      // and 2-4 flat colours cost tens of kilobytes rather than the ~9 MB a
+      // frame that holding raw RGBA at 1080x1920 would
+      const blob = await new Promise((ok) => pen.toBlob(ok, 'image/png'));
+      if (!blob) throw new Error('this browser would not encode a frame to PNG');
+      store.push(blob);
+      storeBytes += blob.size;
+      if (onProgress) {
+        onProgress({ done: i + 1, total: nFrames,
+                     text: `${i + 1}/${nFrames} · dithering` });
+      }
+      // the store got big: write what we have, then pause and carry on
+      if (storeBytes > RECORD_STORE_BUDGET && i + 1 < nFrames) {
+        await flushRun(runStart);
+        runStart = i + 1; storeBytes = 0;
+        if (rec.state === 'recording' && typeof rec.pause === 'function') rec.pause();
+      }
     }
-    // Give the encoder the last frame's full interval before cutting — plus a
-    // fixed tail, because on the two asynchronous paths the final grab has not
-    // necessarily happened yet when the loop ends. Measured: without it Firefox
-    // writes 59 of 60 frames.
+    await flushRun(runStart);
+
+    // the last frame needs its own interval in the file before the cut, and
+    // the two asynchronous paths need a tail on top: measured, without it
+    // Firefox writes 59 of 60 frames
     await raf();
     await sleep(dt * 2 + (kind === 'track' ? 0 : 250));
     rec.stop();
@@ -1172,16 +1422,9 @@ export class BrowserEngine {
     vtrack.stop();
     const blob = new Blob(chunks, { type: mime });
     const el = (performance.now() - t0) / 1000;
-    const real = nFrames / fps;
-    const slow = el > real * 1.25
-      ? `rendered slower than real time (${el.toFixed(1)} s of work for a `
-        + `${real.toFixed(1)} s clip) — the WebM is paced to wall clock, so it `
-        + 'plays slow; pick a lighter look or use the local server'
-      : '';
-    // Count what actually landed in the file — but only on the compositor
-    // path, where it is genuinely unknown. Counting means reading the whole
-    // export back into an ArrayBuffer, and on the requestFrame path that is a
-    // few hundred megabytes spent confirming what the loop already guaranteed.
+    const dur = nFrames / Math.max(1e-6, fps);
+    // Count what actually landed — but only on the compositor path, where it
+    // is genuinely unknown. Counting reads the whole export back into memory.
     const written = kind === 'track' ? 0 : await countWebMFrames(blob);
     const short = written && written !== nFrames
       ? `${written} of ${nFrames} frames reached the file — this browser hands `
@@ -1192,13 +1435,17 @@ export class BrowserEngine {
       url: URL.createObjectURL(blob), mime, ext: 'webm', playable: true,
       alpha: !!alpha,
       frames: nFrames, framesWritten: written || nFrames,
-      paced: kind,
+      paced: kind, chunkedRuns: chunked, replayS: +replayS.toFixed(2),
+      durationS: +dur.toFixed(3),
       elapsedS: +el.toFixed(2),
       fps: +(nFrames / Math.max(el, 1e-6)).toFixed(2),
       bytes: blob.size,
-      note: short || slow || (alpha
-        ? `${mime} with an alpha channel — the server writes ProRes 4444 too`
-        : `${mime} — the server engine writes H.264 MP4`),
+      note: [short,
+             alpha ? `${mime} with an alpha channel — the server writes ProRes 4444 too`
+               : `${mime}, recorded from finished frames`,
+             `${dur.toFixed(2)} s at ${fps} fps`,
+             chunked ? `${chunked + 1} runs — the store was chunked to keep memory down` : '',
+      ].filter(Boolean).join(' · '),
     };
   }
 

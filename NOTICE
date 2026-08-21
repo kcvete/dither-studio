@@ -30,6 +30,25 @@ Not committed. setup.sh fetches the npm package and copies two builds into
 web/ort/. A distribution that bundles web/ort/ must carry the MIT notice with it.
 
 --------------------------------------------------------------------------------
+webm-muxer  --  https://github.com/Vanilagy/webm-muxer
+mp4-muxer   --  https://github.com/Vanilagy/mp4-muxer
+Copyright (c) 2022 Vanilagy.
+Licensed under the MIT License.
+
+Vendored, verbatim and committed: web/vendor/webm-muxer.js (v5.1.4) and
+web/vendor/mp4-muxer.js (v5.2.2) are the ESM builds from the npm packages
+(build/*.mjs), each with a four-line provenance header prepended and nothing
+else changed. The full licence texts sit beside them as
+web/vendor/webm-muxer.LICENSE and web/vendor/mp4-muxer.LICENSE; any
+distribution of web/vendor/ must carry them.
+
+They are here because the page has no build step and fetches nothing from a CDN
+at run time. They write the container only -- the video itself is encoded by the
+browser's own WebCodecs VideoEncoder -- and that split is the whole reason the
+tab can now write an H.264 MP4 in ~65 KB of vendored code rather than the ~32 MB
+of ffmpeg.wasm the README used to cite.
+
+--------------------------------------------------------------------------------
 Code in this repository that looks borrowed, and is not
 
 web/vendor/gifenc.js is under vendor/ because it is a self-contained encoder

@@ -47,6 +47,11 @@
  *       every mode, the dot sliders, a palette and the mask polish — changing
  *       item 2 while items 1 and 3 stay byte-identical, through the preview,
  *       the .dots.gz and the server's MP4
+ *   WT  browser · the export is the CLIP'S OWN LENGTH: the render is throttled
+ *       to slower than real time on purpose (?slowrender=N) and every
+ *       container the tab writes -- WebM, MP4, alpha WebM, GIF -- is demuxed
+ *       with ffprobe and asked how long it plays for, along with the matched
+ *       original cut and a sequence's own encode
  *   WD  browser · the DEPLOYMENT mirrored: web/ served statically with the
  *       fp16-only model tree Pages actually ships. 512 and 1024 track; a GPU
  *       with no shader-f16 falls to fp16 on WASM instead of asking for an fp32
@@ -317,6 +322,40 @@ function probe(file) {
     'stream=nb_read_frames,width,height,r_frame_rate,codec_name,pix_fmt:stream_tags=alpha_mode',
     '-of', 'json', file]);
   return JSON.parse(out).streams[0];
+}
+
+/* HOW LONG THE FILE ACTUALLY PLAYS FOR, in seconds.
+ *
+ * This is the number the whole export path exists to get right, so it is
+ * measured rather than trusted. The container's own Duration is used when it
+ * has one; a MediaRecorder WebM often does not (Firefox writes none at all),
+ * so the fallback is the last packet's presentation time plus one frame
+ * interval, which is what a player will do with it.
+ *
+ * `header` is kept beside the answer because the two differ on purpose:
+ * webm-muxer writes Duration as the LAST TIMESTAMP, one frame interval short
+ * of the playable length, and pretending otherwise would hide a real (small,
+ * cosmetic) fact about the file.
+ */
+function playLength(file, fps) {
+  let header = null;
+  try {
+    const j = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries',
+      'format=duration', '-of', 'json', file]));
+    const d = +(j.format || {}).duration;
+    if (isFinite(d) && d > 0) header = d;
+  } catch (e) { /* no duration in the header, which is the case this handles */ }
+  let last = null, packets = 0;
+  try {
+    const out = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'packet=pts_time', '-of', 'csv=p=0', file],
+      { maxBuffer: 1 << 28 }).toString().trim().split('\n').filter(Boolean);
+    packets = out.length;
+    last = +out[out.length - 1];
+  } catch (e) { /* not a container ffprobe reads packet-wise */ }
+  const step = 1 / Math.max(1e-6, fps || 30);
+  const played = last !== null && isFinite(last) ? last + step : header;
+  return { seconds: +(+played).toFixed(3), header, lastPts: last, packets };
 }
 
 /* alpha census of one decoded frame — the only honest way to ask whether a
@@ -684,10 +723,12 @@ async function runOriginalBrowser() {
     check(`the pair agrees on ${k}`, String(r.dithered[k]) === String(r.original[k]),
           `${r.dithered[k]} vs ${r.original[k]}`);
   }
-  /* The rate is the recorder's wall clock, not a number either file was told
-   * to carry -- `MediaRecorder` timestamps each frame as it is handed over, so
-   * two passes over the same 150 frames land a fraction of a percent apart.
-   * The frame COUNT above is the exact one; this is the duration agreeing. */
+  /* The rate used to be the recorder's wall clock -- `MediaRecorder` stamped
+   * each frame as it was handed over, so two passes over the same 150 frames
+   * landed a fraction of a percent apart and a slow render came out slow. Both
+   * files are now written from frame indices, so the rate is the clip's own on
+   * both sides and the tolerance is there for the container's rounding, not
+   * for a race. */
   const rate = (p) => {
     const [a, b] = String(p.r_frame_rate).split('/').map(Number);
     return a / (b || 1);
@@ -697,6 +738,14 @@ async function runOriginalBrowser() {
   check('the pair shares a frame rate', r.rateDriftPct < 3,
         `${r.dithered.r_frame_rate} vs ${r.original.r_frame_rate} `
         + `(${r.rateDriftPct}% apart)`);
+  r.fps = await page.evaluate(() => window.DV.fps);
+  r.expectedS = +(+r.dithered.nb_read_frames / r.fps).toFixed(3);
+  r.plays = { dithered: playLength(dith, r.fps), original: playLength(orig, r.fps) };
+  for (const k of ['dithered', 'original']) {
+    check(`the ${k} half of the pair plays for the clip's own length`,
+          Math.abs(r.plays[k].seconds - r.expectedS) <= 1.5 / r.fps + 1e-6,
+          `${r.plays[k].seconds}s against ${r.expectedS}s`);
+  }
   check('the original cut has every frame',
         +r.original.nb_read_frames === r.nFrames,
         `${r.original.nb_read_frames} != ${r.nFrames}`);
@@ -1009,15 +1058,27 @@ async function runTracked() {
         (await page.evaluate(() => window.DV_polish.get()))[0].polish === 0);
   await openStep(page, 'st5');
 
-  // --- the other containers the tab can write, and the two it cannot
+  // --- the other containers the tab can write, and the one it cannot
   r.offered = await page.evaluate(() => window.DV_formats());
   r.unavailable = r.offered.filter((f) => !f.available).map((f) => f.id);
-  check('the browser engine says plainly that MP4 and ProRes need the server',
-        r.unavailable.includes('mp4') && r.unavailable.includes('prores'),
-        JSON.stringify(r.unavailable));
+  /* MP4 is no longer on this list. It used to be -- "needs the local server,
+   * writing H.264 in the tab means vendoring a ~32 MB encoder" -- and that was
+   * true of an ENCODER and never of a MUXER: the platform has had an H.264
+   * VideoEncoder for years and what was missing was 60 KB of box writer. So
+   * the assertion is now the honest one: ProRes needs the server, and MP4 is
+   * offered exactly when this browser's VideoEncoder will write it. */
+  check('the browser engine says plainly that ProRes needs the server',
+        r.unavailable.includes('prores'), JSON.stringify(r.unavailable));
+  r.encoders = await page.evaluate(() => window.DV.engine.encoders);
+  check('MP4 is offered exactly when WebCodecs can write H.264 or HEVC',
+        r.offered.find((f) => f.id === 'mp4').available === !!(r.encoders || {}).mp4,
+        JSON.stringify(r.encoders));
   check('every unavailable format carries a reason',
         r.offered.filter((f) => !f.available).every((f) => f.note && f.note.length > 10),
         JSON.stringify(r.offered));
+  check('no format still claims the file plays slow',
+        r.offered.every((f) => !/plays slow|paced to wall clock/i.test(f.note || '')),
+        JSON.stringify(r.offered.map((f) => f.note)));
   r.formats = {};
   for (const [id, ext] of [['gif', 'gif'], ['webm-alpha', 'webm']]) {
     const t = Date.now();
@@ -2891,7 +2952,9 @@ async function runOtherBrowsers() {
                      onStream: typeof st.requestFrame === 'function' };
         tr.stop();
         return { webgpu: !!navigator.gpu, adapter, shaderF16: f16, requestFrame: rf,
-                 decode: window.DV.engine.supports.decodePaths };
+                 decode: window.DV.engine.supports.decodePaths,
+                 encoders: window.DV.engine.encoders,
+                 formats: window.DV_formats().map((f) => ({ id: f.id, ok: f.available })) };
       });
       check(`${name} · the page comes up on the browser engine`,
             await page.evaluate(() => window.DV_engine().id === 'browser'));
@@ -2913,32 +2976,46 @@ async function runOtherBrowsers() {
       await loadClip(page, CLIP, 2);
       r.decode = await page.evaluate(() => window.DV.engine.lastDecode);
       r.nFrames = await page.evaluate(() => window.DV.nFrames);
+      r.fps = await page.evaluate(() => window.DV.fps);
       check(`${name} · a clip decodes`, r.nFrames === 60, String(r.nFrames));
       check(`${name} · through WebCodecs, and it says so`,
             r.decode.path === 'webcodecs-worker', r.decode.line);
       await setMode(page, 'ordered');
       await openStep(page, 'st5');
+      /* Slower than real time, on purpose. This is the browser half of the
+       * exportTiming flow: the file has to be the clip's own length on
+       * Firefox and WebKit too, and those two take different roads to it —
+       * whichever codec their VideoEncoder carries, or the recorder. */
+      r.throttleMs = 60;
+      await page.evaluate((ms) => window.DV_slowRender(ms), r.throttleMs);
       await page.evaluate(() => document.querySelector('#bExport').click());
       r.render = await waitText(page, '#rinfo', /rendered|failed/, 900000);
       check(`${name} · and the clip exports`, !/failed/.test(r.render), r.render);
-      const f = path.join(DOCS, `w-${name}-export.webm`);
+      r.export = await page.evaluate(() => window.DV.lastExport);
+      const f = path.join(DOCS, `w-${name}-export.${r.export.format}`);
       r.bytes = await saveDownload(page, f);
       r.probe = probe(f);
-      /* Exactness is only available where `requestFrame` is a method on the
-       * TRACK: that call captures the canvas synchronously. Firefox's
-       * stream-level one queues the grab, and a render slower than real time
-       * loses the odd frame to it — measured, 59 of 60. The export says so in
-       * its own note rather than looking fine, and that saying-so is what is
-       * asserted here. */
-      const exact = r.caps.requestFrame.onTrack;
+      r.plays = playLength(f, r.fps);
+      r.expectedS = +(r.nFrames / r.fps).toFixed(3);
+      check(`${name} · the file plays for the clip's own length, not the render's`,
+            Math.abs(r.plays.seconds - r.expectedS) <= 1.5 / r.fps + 1e-6,
+            `${r.plays.seconds}s against ${r.expectedS}s (${JSON.stringify(r.plays)})`);
+      /* Exactness is owed where the frames are placed by timestamp, which is
+       * the WebCodecs path. On the recorder fallback Firefox's stream-level
+       * requestFrame queues its grab for the next paint and two of them can
+       * collapse into one — measured, 58 of 60. The export says so in its own
+       * note rather than looking fine, and that saying-so is asserted here. */
+      const exact = r.export.paced === 'timestamps' || r.caps.requestFrame.onTrack;
       const got = +r.probe.nb_read_frames;
-      check(`${name} · the export is the clip's own length`,
+      check(`${name} · the export carries every frame`,
             exact ? got === r.nFrames : Math.abs(got - r.nFrames) <= 2,
-            `${got} vs ${r.nFrames}`);
+            `${got} vs ${r.nFrames} (paced: ${r.export.paced})`);
       if (!exact && got !== r.nFrames) {
         check(`${name} · and a short cut says so`,
               /frames reached the file/.test(r.render), r.render);
       }
+      check(`${name} · nothing claims the file plays slow`,
+            !/plays slow|paced to wall clock/i.test(r.render), r.render);
       fs.rmSync(f, { force: true });
       await page.screenshot({ path: path.join(DOCS, `w-${name}-export.png`) });
       await ctx.close();
@@ -2948,37 +3025,77 @@ async function runOtherBrowsers() {
     } finally { await br.close(); out[name] = r; }
   }
 
-  /* --- and the branch no shipping browser takes */
-  const br = await chromium.launch({ headless: true, args: GPU_ARGS });
-  const r = {};
-  try {
-    const { ctx, page } = await newPage(browserPref(), { browser: br,
-      init: () => { try { delete CanvasCaptureMediaStreamTrack.prototype.requestFrame; }
-                    catch (e) { /* already not there */ } } });
-    r.gone = await page.evaluate(() => {
-      const c = document.createElement('canvas'); c.width = 8; c.height = 8;
-      const s = c.captureStream(0), t = s.getVideoTracks()[0];
-      const o = typeof t.requestFrame === 'undefined' && typeof s.requestFrame === 'undefined';
-      t.stop(); return o;
-    });
-    check('no requestFrame · the API really is gone for this page', r.gone);
-    await loadClip(page, CLIP, 2);
-    r.nFrames = await page.evaluate(() => window.DV.nFrames);
-    await setMode(page, 'ordered');
-    await openStep(page, 'st5');
-    await page.evaluate(() => document.querySelector('#bExport').click());
-    r.render = await waitText(page, '#rinfo', /rendered|failed/, 900000);
-    check('no requestFrame · the export still runs', !/failed/.test(r.render), r.render);
-    const f = path.join(DOCS, 'w-nocapture-export.webm');
-    r.bytes = await saveDownload(page, f);
-    r.probe = probe(f);
-    check('no requestFrame · and the compositor path wrote every frame',
-          +r.probe.nb_read_frames === r.nFrames,
-          `${r.probe.nb_read_frames} != ${r.nFrames}`);
-    fs.rmSync(f, { force: true });
-    await ctx.close();
-  } finally { await br.close(); }
-  out.noRequestFrame = r;
+  /* --- and the two branches no shipping browser takes.
+   *
+   * `noWebCodecs` is the one that matters now: take VideoEncoder away and the
+   * export falls back to MediaRecorder, which is the path an alpha WebM takes
+   * on every browser. It has to come out the clip's own length there too, and
+   * the way it gets there is different — render every frame first, then replay
+   * the finished frames to the recorder on the clip's clock — so it is worth a
+   * run of its own, under the same deliberate throttle.
+   *
+   * `noRequestFrame` is the older one: no way to hand a capture stream a
+   * frame at all, so the compositor samples the canvas instead. */
+  for (const [id, drop, label] of [
+    ['noWebCodecs', () => { try { delete window.VideoEncoder; } catch (e) { /* gone */ } },
+     'no VideoEncoder'],
+    ['noRequestFrame',
+     () => { try { delete CanvasCaptureMediaStreamTrack.prototype.requestFrame; }
+             catch (e) { /* already not there */ } }, 'no requestFrame'],
+  ]) {
+    const br = await chromium.launch({ headless: true, args: GPU_ARGS });
+    const r = {};
+    try {
+      const { ctx, page } = await newPage(browserPref(), { browser: br, init: drop });
+      r.gone = await page.evaluate((which) => (which === 'noWebCodecs'
+        ? typeof window.VideoEncoder === 'undefined'
+        : (() => {
+          const c = document.createElement('canvas'); c.width = 8; c.height = 8;
+          const s = c.captureStream(0), t = s.getVideoTracks()[0];
+          const o = typeof t.requestFrame === 'undefined'
+            && typeof s.requestFrame === 'undefined';
+          t.stop(); return o;
+        })()), id);
+      check(`${label} · the API really is gone for this page`, r.gone);
+      r.formats = await page.evaluate(() => window.DV_formats()
+        .map((f) => ({ id: f.id, ok: f.available })));
+      if (id === 'noWebCodecs') {
+        check('no VideoEncoder · MP4 goes back to needing the server',
+              !r.formats.find((f) => f.id === 'mp4').ok, JSON.stringify(r.formats));
+        check('no VideoEncoder · WebM is still on offer, through the recorder',
+              !!r.formats.find((f) => f.id === 'webm').ok, JSON.stringify(r.formats));
+      }
+      await loadClip(page, CLIP, 2);
+      r.nFrames = await page.evaluate(() => window.DV.nFrames);
+      r.fps = await page.evaluate(() => window.DV.fps);
+      r.expectedS = +(r.nFrames / r.fps).toFixed(3);
+      await setMode(page, 'ordered');
+      await openStep(page, 'st5');
+      r.throttleMs = 60;
+      await page.evaluate((ms) => window.DV_slowRender(ms), r.throttleMs);
+      await page.evaluate(() => document.querySelector('#bExport').click());
+      r.render = await waitText(page, '#rinfo', /rendered|failed/, 900000);
+      check(`${label} · the export still runs`, !/failed/.test(r.render), r.render);
+      r.export = await page.evaluate(() => window.DV.lastExport);
+      const f = path.join(DOCS, `w-${id}-export.${r.export.format}`);
+      r.bytes = await saveDownload(page, f);
+      r.probe = probe(f);
+      r.plays = playLength(f, r.fps);
+      check(`${label} · and every frame is in the file`,
+            +r.probe.nb_read_frames === r.nFrames,
+            `${r.probe.nb_read_frames} != ${r.nFrames}`);
+      check(`${label} · and it plays for the clip's own length`,
+            Math.abs(r.plays.seconds - r.expectedS) <= 1.5 / r.fps + 1e-6,
+            `${r.plays.seconds}s against ${r.expectedS}s (${JSON.stringify(r.plays)})`);
+      if (id === 'noWebCodecs') {
+        check('no VideoEncoder · the recorder path is what ran',
+              r.export.paced !== 'timestamps', JSON.stringify(r.export));
+      }
+      fs.rmSync(f, { force: true });
+      await ctx.close();
+    } finally { await br.close(); }
+    out[id] = r;
+  }
   return out;
 }
 
@@ -3595,6 +3712,161 @@ async function runSubjectsBrowser() {
   return r;
 }
 
+/* ====== WT: the export is the CLIP'S OWN LENGTH, however slow the render ===
+ *
+ * The defect this flow exists for: a 3.0 s clip whose dots took 84 s to draw
+ * came out as an 84 s file. The old export was MediaRecorder over a canvas
+ * capture stream, a recorder stamps a frame with the moment it arrives, and
+ * the page's own progress line admitted the file "plays slow". That is not a
+ * caveat, it is wrong output.
+ *
+ * So the render is made slower than real time ON PURPOSE — ?slowrender=N
+ * sleeps N ms after every frame the export dithers, and nothing else — and the
+ * finished file is demuxed with ffprobe and asked how long it plays for. The
+ * answer has to be frames / fps whatever the render cost, in every container
+ * the tab can write, for the dithered render AND for the matched original cut
+ * beside it, and for a sequence's own encode, which goes out through the same
+ * call with a `source` override.
+ */
+async function runExportTiming() {
+  const SLOW_MS = +(process.env.DV_SLOW_MS || 100);
+  const r = { throttleMs: SLOW_MS, formats: {} };
+  const { ctx, page } = await newPage(browserPref());
+  await page.evaluate((ms) => window.DV_slowRender(ms), SLOW_MS);
+  check('timing · the throttle is armed',
+        await page.evaluate(() => window.DV_SLOW_RENDER_MS) === SLOW_MS);
+
+  await loadClip(page, CLIP, 2);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  r.fps = await page.evaluate(() => window.DV.fps);
+  r.expectedS = +(r.nFrames / r.fps).toFixed(3);
+  const step = 1 / r.fps;
+  await setMode(page, 'dots');
+  await openStep(page, 'st5');
+
+  r.offered = await page.evaluate(() => window.DV_formats()
+    .filter((f) => f.available).map((f) => ({ id: f.id, ext: f.ext })));
+  for (const f of r.offered) {
+    const t0 = Date.now();
+    await page.evaluate((x) => window.DV_setFormat(x), f.id);
+    await page.click('#bExport');
+    const info = await waitText(page, '#rinfo', /rendered|failed/, 900000);
+    check(`timing · ${f.id} exports`, !/failed/.test(info), info);
+    const file = path.join(DOCS, `w-timing-${f.id}.${f.ext}`);
+    const bytes = await saveDownload(page, file);
+    const p = probe(file);
+    // a GIF is decimated to gif_fps and its delays are whole hundredths of a
+    // second, so its own arithmetic is the one to check it against
+    const gif = f.id === 'gif';
+    const gfps = gif ? r.fps / Math.max(1, Math.round(r.fps / 15)) : r.fps;
+    const want = gif
+      ? +(Math.round(r.nFrames / (r.fps / gfps))
+          * Math.max(2, Math.round(100 / gfps)) / 100).toFixed(3)
+      : r.expectedS;
+    const len = playLength(file, gif ? 100 / Math.max(2, Math.round(100 / gfps)) : r.fps);
+    const got = +p.nb_read_frames;
+    const last = await page.evaluate(() => window.DV.lastExport || null);
+    const paced = last && last.paced;
+    r.formats[f.id] = {
+      wallSeconds: +((Date.now() - t0) / 1000).toFixed(1), bytes,
+      codec: p.codec_name, frames: got, expectedFrames: gif ? null : r.nFrames,
+      expectedS: want, plays: len, reported: last, info: info.trim(),
+    };
+    check(`timing · ${f.id} plays for the clip's own length, not the render's`,
+          Math.abs(len.seconds - want) <= 1.5 * (gif ? 0.01 : step) + 1e-6,
+          `${len.seconds}s against ${want}s — ${JSON.stringify(len)}`);
+    if (!gif) {
+      /* Exactness is only owed where the frames are placed by timestamp. The
+       * recorder fallback hands them over on a wall clock and Firefox's
+       * stream-level requestFrame collapses two grabs into one paint; the
+       * export says so in its own note, and that saying-so is asserted. */
+      const exact = paced === 'timestamps';
+      check(`timing · ${f.id} carries every frame`,
+            exact ? got === r.nFrames : Math.abs(got - r.nFrames) <= 2,
+            `${got} of ${r.nFrames} (paced: ${paced})`);
+      if (!exact && got !== r.nFrames) {
+        check(`timing · ${f.id} says a frame did not make it`,
+              /frames reached the file/.test(info), info);
+      }
+    }
+    check(`timing · ${f.id} states the length it will play for`,
+          /plays for [\d.]+ s/.test(info), info);
+    check(`timing · ${f.id} does not claim the file plays slow`,
+          !/plays slow|paced to wall clock/i.test(info), info);
+    fs.rmSync(file, { force: true });
+  }
+  // the throttle really did make the render slower than real time -- otherwise
+  // every assertion above is vacuous
+  r.renderSeconds = +(r.formats.webm || r.formats.mp4 || {}).wallSeconds;
+  check('timing · the render really was slower than real time',
+        r.renderSeconds > r.expectedS * 2,
+        `${r.renderSeconds}s of work for a ${r.expectedS}s clip`);
+  await page.screenshot({ path: path.join(DOCS, 'w-timing-export.png') });
+
+  /* --- the PAIR, under the same throttle: same length, same frames --- */
+  await page.evaluate(() => window.DV_setFormat('webm'));
+  await page.check('#cOrig');
+  await page.click('#bExport');
+  r.pairInfo = await waitText(page, '#rinfo', /original cut|failed/, 900000);
+  check('timing · the pair exports', !/failed/.test(r.pairInfo), r.pairInfo);
+  const dith = path.join(DOCS, 'w-timing-pair-dithered.webm');
+  const orig = path.join(DOCS, 'w-timing-pair-original.webm');
+  await saveDownload(page, dith);
+  const [d2] = await Promise.all([
+    page.waitForEvent('download', { timeout: 60000 }), page.click('#dlorig'),
+  ]);
+  await d2.saveAs(orig);
+  r.pair = { dithered: playLength(dith, r.fps), original: playLength(orig, r.fps),
+             ditheredFrames: +probe(dith).nb_read_frames,
+             originalFrames: +probe(orig).nb_read_frames };
+  for (const k of ['dithered', 'original']) {
+    check(`timing · the ${k} half of the pair is the clip's own length`,
+          Math.abs(r.pair[k].seconds - r.expectedS) <= 1.5 * step + 1e-6,
+          `${r.pair[k].seconds}s against ${r.expectedS}s`);
+  }
+  check('timing · the pair is frame for frame',
+        r.pair.ditheredFrames === r.nFrames
+        && r.pair.originalFrames === r.nFrames,
+        JSON.stringify(r.pair));
+  fs.rmSync(dith, { force: true }); fs.rmSync(orig, { force: true });
+  await page.uncheck('#cOrig');
+
+  /* --- a SEQUENCE's encode: the same call with a `source` override, which is
+   * exactly what seqExportVideo does in the tab when there is no server. The
+   * frames here are painted by the test rather than by the strip, because what
+   * is under test is the encoder's time base and not the morph. */
+  r.sequence = await page.evaluate(async (ms) => {
+    const eng = window.DV.engine;
+    const w = 640, h = 360, fps = 24, n = 48;
+    const img = new ImageData(w, h);
+    const t0 = performance.now();
+    const out = await eng.exportClip(
+      { format: 'webm', fps, bg: '#000000', palette: [], subjects: [],
+        source: { w, h, nFrames: n, fps } },
+      null,
+      async (i) => {
+        for (let q = 0; q < img.data.length; q += 4) {
+          img.data[q] = (i * 5) % 255; img.data[q + 1] = 40;
+          img.data[q + 2] = 200; img.data[q + 3] = 255;
+        }
+        await new Promise((r2) => setTimeout(r2, ms));
+        return img;
+      });
+    URL.revokeObjectURL(out.url);
+    return { frames: out.frames, durationS: out.durationS, paced: out.paced,
+             expectedS: n / fps, renderS: +((performance.now() - t0) / 1000).toFixed(2) };
+  }, SLOW_MS);
+  check('timing · a sequence encode is its own length too',
+        Math.abs(r.sequence.durationS - r.sequence.expectedS) < 1e-6,
+        JSON.stringify(r.sequence));
+  check('timing · and that sequence render really was slower than real time',
+        r.sequence.renderS > r.sequence.expectedS * 1.5,
+        JSON.stringify(r.sequence));
+
+  await ctx.close();
+  return r;
+}
+
 /* DV_ONLY=tracked,sequence runs a subset. Unset runs all of it, which is what
  * the README's numbers were measured with. */
 const ONLY = (process.env.DV_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -3630,6 +3902,7 @@ try {
   await run('entryRemote', runEntry, 'remote');
   await run('trackTiers', runTrackTiers);
   await run('deployMirror', runDeployMirror);
+  await run('exportTiming', runExportTiming);
   await run('otherBrowsers', runOtherBrowsers);
   await run('noAdapter', runNoAdapter);
   await run('apiKey', runApiKey);
