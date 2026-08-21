@@ -1234,8 +1234,9 @@ async function runCamera(engineId, deep) {
           JSON.stringify({ strip: r.strip, spread: r.photoSpread }));
     await page.screenshot({ path: path.join(DOCS, `w-camera-trim-${engineId}.png`) });
 
-    // trim to the middle two seconds and re-open. Loading a clip hands the
-    // panel to step 2, so the trim bar is behind its own header again.
+    // trim to the middle two seconds and re-open. The trim bar lives under
+    // the stage now, so it is already on screen; opening the Source step just
+    // keeps the panel showing the clip facts for the screenshot.
     await openStep(page, 'st1');
     const mid = r.srcDuration / 2;
     r.range = await page.evaluate(([a, b]) => window.DV_trim(a, b),
@@ -2378,5 +2379,10 @@ try {
 R.checksPassed = R.checks.filter((c) => c.ok).length;
 R.checksTotal = R.checks.length;
 console.log(JSON.stringify(R, null, 1));
-fs.writeFileSync(path.join(DOCS, 'verify-web-report.json'), JSON.stringify(R, null, 1));
+// The report is committed as evidence, so it must not carry this machine's
+// home directory around in it: every absolute path under the checkout is
+// rewritten to a repo-relative one on the way out.
+fs.writeFileSync(path.join(DOCS, 'verify-web-report.json'),
+  JSON.stringify(R, null, 1).split('file://' + HERE + '/').join('')
+                             .split(HERE + '/').join(''));
 process.exit(R.fatal || R.consoleErrors.length || R.pageErrors.length ? 1 : 0);

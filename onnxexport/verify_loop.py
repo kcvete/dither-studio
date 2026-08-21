@@ -105,9 +105,10 @@ class Bank:
 def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ap.add_argument('--clip', default='/private/tmp/claude-501/'
-                    '-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/'
-                    'scratchpad/parkour')
+    # a fixture directory: frames/*.png + prompt.json + masks_edgetam/.
+    # None ships in git; pass your own, or set DV_BENCH_CLIP.
+    ap.add_argument('--clip', default=os.environ.get(
+        'DV_BENCH_CLIP', os.path.join(here, 'bench', '_res', 'clip')))
     ap.add_argument('--models', default=os.path.join(here, 'web', 'models'))
     ap.add_argument('--fp16', action='store_true')
     ap.add_argument('--limit', type=int, default=0)

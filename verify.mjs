@@ -1896,5 +1896,10 @@ try {
   await browser.close();
 }
 console.log(JSON.stringify(R, null, 1));
-fs.writeFileSync(path.join(DOCS, 'verify-report.json'), JSON.stringify(R, null, 1));
+// The report is committed as evidence, so it must not carry this machine's
+// home directory around in it: every absolute path under the checkout is
+// rewritten to a repo-relative one on the way out.
+fs.writeFileSync(path.join(DOCS, 'verify-report.json'),
+  JSON.stringify(R, null, 1).split('file://' + HERE + '/').join('')
+                             .split(HERE + '/').join(''));
 process.exit(R.fatal || R.consoleErrors.length || R.pageErrors.length ? 1 : 0);

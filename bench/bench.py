@@ -29,10 +29,13 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 import numpy as np
 from PIL import Image
 
-REF = os.environ.get(
-    "DV_BENCH_CLIP",
-    "/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82"
-    "/scratchpad/parkour")
+# A tracking fixture directory, not a video file. It holds
+#     frames/0000.png ...   the clip decoded to stills
+#     prompt.json           the click(s) that start the track
+#     masks_edgetam/        reference masks to score against
+# Nothing in git ships one -- point DV_BENCH_CLIP at your own, or build one
+# from sample.mp4 with ffmpeg + one click through the UI.
+REF = os.environ.get("DV_BENCH_CLIP", os.path.join(ROOT, "bench", "_res", "clip"))
 CKPT = os.path.join(ROOT, "env", "EdgeTAM", "checkpoints", "edgetam.pt")
 CFG = "configs/edgetam.yaml"
 

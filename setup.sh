@@ -60,10 +60,11 @@ fi
 
 if [ ! -f "$CKPT" ]; then
   mkdir -p "$(dirname "$CKPT")"
-  SRC="/private/tmp/claude-501/-Users-kevincvetezar/012258e2-fe5c-46ee-8648-eeafdcc38f82/scratchpad/parkour/env/EdgeTAM/checkpoints/edgetam.pt"
-  if [ -f "$SRC" ]; then
-    echo "[setup] copying checkpoint from local cache"
-    cp "$SRC" "$CKPT"
+  # DV_EDGETAM_CKPT lets a second checkout reuse a copy you already have
+  # instead of pulling 100 MB again.
+  if [ -n "${DV_EDGETAM_CKPT:-}" ] && [ -f "$DV_EDGETAM_CKPT" ]; then
+    echo "[setup] copying checkpoint from \$DV_EDGETAM_CKPT"
+    cp "$DV_EDGETAM_CKPT" "$CKPT"
   else
     echo "[setup] downloading checkpoint"
     curl -fsSL -o "$CKPT" https://huggingface.co/spaces/facebook/EdgeTAM/resolve/main/checkpoints/edgetam.pt
