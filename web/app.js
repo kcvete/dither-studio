@@ -290,8 +290,14 @@ async function takeClip(f) {
   const e = clipEstimate();
   S.awaitingChoice = true;
   box.textContent = `${f.name} · ${dur.toFixed(1)} s · ${e.n} frames · tracking `
-    + `≈ ${fmtDur(e.trackS)} — press “use this range” for the trim below, `
-    + 'or “whole clip”.';
+    + `≈ ${fmtDur(e.trackS)} — press “use this range” on the trim bar under `
+    + 'the stage, or “whole clip”.';
+  // the gate's controls are on the trim bar: on a phone, get the sheet out of
+  // its way and say where the answer is
+  if (window.DV_sheet && window.matchMedia('(max-width: 767px)').matches) {
+    window.DV_sheet('collapsed');
+    toast(`${dur.toFixed(0)} s clip — set the range on the trim bar, or press “whole clip”`);
+  }
   await strip;
 }
 
@@ -313,19 +319,26 @@ function probeFile(f) {
 }
 
 /* ======================================================= trim: filmstrip
- * Twelve thumbnails, two handles, and a "use this range" that re-opens the
+ * A row of thumbnails, two handles, and a "use this range" that re-opens the
  * same file over the chosen seconds. The browser engine decodes only that
  * range; the server engine hands ffmpeg -ss/-t. Nothing else in the app
  * knows a trim happened — the clip that comes back is just shorter.
  */
-const STRIP_N = 12;
 let stripSeq = 0;
 
 async function buildStrip(file) {
   const seq = ++stripSeq;
   const cv = $('#stripcv'), g = cv.getContext('2d');
-  g.fillStyle = '#0a1310'; g.fillRect(0, 0, cv.width, cv.height);
   $('#trimui').hidden = false;
+  /* Size the backing store to the bar as laid out — the bar is as wide as the
+   * stage now, and a fixed store under object-fit:cover would crop the
+   * timeline so a thumbnail no longer sits at the time it stands for. The
+   * thumbnail count follows the width: a phone gets 6, a desktop 16. */
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const cw = cv.clientWidth || 960, ch = cv.clientHeight || 72;
+  const nThumbs = clamp(Math.round(cw / 76), 6, 16);
+  cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+  g.fillStyle = '#0a1310'; g.fillRect(0, 0, cv.width, cv.height);
   $('#trimnote').textContent = 'reading the clip…';
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
@@ -343,12 +356,12 @@ async function buildStrip(file) {
       dur = await probeDuration(v);
     }
     // takeClip() owns S.trim -- it read the same header first. The strip only
-    // needs the duration to space its twelve thumbnails.
+    // needs the duration to space its thumbnails.
     if (!S.srcDuration) { S.srcDuration = dur; paintTrim(); paintEstimate(); }
-    const tw = Math.floor(cv.width / STRIP_N), th = cv.height;
-    for (let i = 0; i < STRIP_N; i++) {
+    const tw = Math.floor(cv.width / nThumbs), th = cv.height;
+    for (let i = 0; i < nThumbs; i++) {
       if (seq !== stripSeq) return;
-      const t = (i + 0.5) / STRIP_N * dur;
+      const t = (i + 0.5) / nThumbs * dur;
       try { await seekTo(v, Math.min(t, Math.max(0, dur - 0.05))); } catch (e) { break; }
       const vw = v.videoWidth || 16, vh = v.videoHeight || 9;
       const k = Math.max(tw / vw, th / vh);
@@ -393,8 +406,19 @@ function paintTrim() {
   const a = clamp(start / dur, 0, 1), b = clamp(end / dur, 0, 1);
   $('#trimdim').style.left = '0'; $('#trimdim').style.width = (a * 100) + '%';
   $('#trimdim2').style.right = '0'; $('#trimdim2').style.width = ((1 - b) * 100) + '%';
+  $('#trimsel').style.left = (a * 100) + '%';
+  $('#trimsel').style.width = (Math.max(0, b - a) * 100) + '%';
   $('#hIn').style.left = (a * 100) + '%';
   $('#hOut').style.left = (b * 100) + '%';
+  // time + frame at each handle. 30 fps is what clips are decoded to, so the
+  // frame number is honest before extraction and exact after it.
+  const fps = S.fps || 30;
+  $('#hInLbl').textContent = `${start.toFixed(1)}s · f${Math.round(start * fps)}`;
+  $('#hOutLbl').textContent = `${end.toFixed(1)}s · f${Math.round(end * fps)}`;
+  // the two readouts sit on their own rows, but a narrow selection on a phone
+  // is not wide enough for even one of them: turn them outward instead
+  const px = (b - a) * ($('#strip').clientWidth || 0);
+  $('#strip').classList.toggle('tight', px > 0 && px < 190);
   $('#vTrim').textContent = `${start.toFixed(1)} – ${end.toFixed(1)} s · `
     + `${(end - start).toFixed(1)} s`;
   paintEstimate();
@@ -403,6 +427,10 @@ function paintTrim() {
 function dragHandle(el, which) {
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    // a handle drag is a handle drag: the mobile sheet's stage-wide
+    // "you touched the picture, get out of the way" listener must not
+    // re-lay the page out from under a pointer that is already captured
+    e.stopPropagation();
     el.setPointerCapture(e.pointerId);
     const strip = $('#strip');
     const move = (ev) => {
@@ -423,6 +451,31 @@ function dragHandle(el, which) {
 }
 dragHandle($('#hIn'), 'in');
 dragHandle($('#hOut'), 'out');
+
+/* Hovering the filmstrip scrubs the stage preview — a peek, not a commitment:
+ * the pointer leaving puts the frame that was showing back. Only frames that
+ * are already extracted can be peeked at, and each step costs one cached
+ * frameAt() (a decode on the browser engine, a small fetch on a server one),
+ * throttled and guarded by draw()'s own sequence counter. */
+let hoverBack = -1, hoverT = 0;
+$('#strip').addEventListener('pointermove', (e) => {
+  if (e.buttons || e.pointerType === 'touch') return;   // dragging, or a phone
+  if (S.playing || S.kind !== 'video' || !S.nFrames || $('#vwrap').hidden) return;
+  const now = performance.now();
+  if (now - hoverT < 90) return;
+  hoverT = now;
+  const r = $('#strip').getBoundingClientRect();
+  const t = clamp((e.clientX - r.left) / r.width, 0, 1) * (S.srcDuration || 1);
+  const f = clamp(Math.round((t - jobWindow().start) * S.fps), 0, S.nFrames - 1);
+  if (hoverBack < 0) hoverBack = S.cur;
+  if (f !== S.cur) Promise.resolve(draw(f)).catch(() => {});
+});
+$('#strip').addEventListener('pointerleave', () => {
+  if (hoverBack >= 0 && !S.playing && S.kind === 'video') {
+    Promise.resolve(draw(hoverBack)).catch(() => {});
+  }
+  hoverBack = -1;
+});
 
 /* ============================================ the range, after the track ===
  * The frames of a clip are extracted once, and the tracker writes one mask
@@ -533,9 +586,7 @@ function applyTrim(t0) {
   }
   S.extend = Object.assign({ trim: { start: t.start, end: t.end } }, plan);
   paintTrimOffer();
-  // the offer lives next to the trim bar, so make sure that step is open --
-  // a panel nobody can see is the same as no panel
-  openStep(1);
+  // the offer hangs off the trim bar under the stage; make sure the bar is up
   $('#trimui').hidden = false;
   return Promise.resolve(null);
 }
@@ -724,7 +775,7 @@ function camStart() {
     camClose();
     $('#upstat').hidden = false;
     $('#upstat').textContent = `recorded ${secs.toFixed(1)} s · `
-      + `${(blob.size / 1e6).toFixed(1)} MB · trim it below`;
+      + `${(blob.size / 1e6).toFixed(1)} MB · trim it under the video`;
     S.recordedS = +secs.toFixed(2);
     take(f);
   };
@@ -878,6 +929,12 @@ async function uploadClip(f, trim, opts = {}) {
     showSteps('video'); setScope(S.scope);
     buildTargets(); renderModes(); renderSubjects(); paintRange(); paintTrimOffer();
     openStep(2);
+    // on a phone the sheet drops to its peek: the clip that just loaded and
+    // the trim bar under it are the next thing to look at, and every step is
+    // one tab-tap away (same move track() makes when it starts)
+    if (window.DV_sheet && window.matchMedia('(max-width: 767px)').matches) {
+      window.DV_sheet('collapsed');
+    }
     await draw();
   } catch (err) {
     box.classList.add('err');
@@ -2828,7 +2885,8 @@ async function draw(i) {
 }
 
 /* ------------------------------------------------------------- transport */
-/** The active range, stated beside the frame counter. `full clip ↺` only
+/** The active range, stated on the trim bar itself — the post-track half of
+ *  the one control ("frames 15–44 of 300 · full clip ↺"). `full clip ↺` only
  *  appears when there is something to go back to. */
 function paintRange() {
   const lbl = $('#rangelbl'), btn = $('#bRangeAll');
@@ -2837,6 +2895,9 @@ function paintRange() {
     lbl.hidden = true; btn.hidden = true; return;
   }
   const r = activeRange();
+  // the window reads out on the trim bar, so the bar has to be up: pre-track
+  // trimming and post-track windowing are the same control (ux-spec §2.1.1)
+  if (S.job) $('#trimui').hidden = false;
   lbl.hidden = false;
   lbl.textContent = `frames ${r.in}–${r.out} of ${S.nFrames}`;
   lbl.classList.toggle('on', !r.whole);
@@ -6081,8 +6142,11 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
   /* touching the picture asks for the picture: the sheet gets out of the way */
   $('#stage').addEventListener('pointerdown', (e) => {
     if (!mq.matches) return;
+    // the trim bar is a control that lives in the stage, not the picture:
+    // collapsing the sheet under a trim drag would move the bar mid-gesture
     if (e.target.closest('#transport') || e.target.closest('#strip2')
-        || e.target.closest('#toast') || e.target.closest('#pathbtns')) return;
+        || e.target.closest('#trimui') || e.target.closest('#toast')
+        || e.target.closest('#pathbtns')) return;
     if (document.body.dataset.sheet !== 'collapsed') setSheet('collapsed');
   }, { capture: true, passive: true });
 
