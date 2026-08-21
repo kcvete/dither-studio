@@ -369,7 +369,7 @@ M-series laptop, CoreML backend:
 
 | | server engine | browser engine |
 |---|---|---|
-| open it (upload + decode, through the UI) | **2.8 s** | **16.5 s** (was 344 s) |
+| open it (upload + decode, through the UI) | **2.8 s** | **16.5 s** (was 344 s here, 92–192 s headless) |
 | all 2,700 frames arrived | yes | yes |
 | frames kept | 137 MB on disk, 51 KB/frame | 290 MB of JPEG blobs in the tab |
 | JS heap after the decode | — | 11 MB (the blobs are not on the heap) |
@@ -412,7 +412,7 @@ duration in its header until it has been seeked past its end, so both the
 filmstrip and the browser decoder ask for it that way before deciding how many
 frames there are. It is also the file the old seek loop was worst on — no Cues
 either, so every seek was a scan — and correspondingly the file the WebCodecs
-path helps most: **16.0 s → 1.26 s** for 149 frames of VP8.
+path helps most: **15.5 s → 1.29 s** for 149 frames of VP8.
 
 ### 2 · Subjects
 Two choices, and they read differently depending on what you dropped:
@@ -1295,11 +1295,36 @@ filter instead of bilinear moves it to 0.9295 with the model untouched.
 
 | | tracking | first-frame preview | video export |
 |---|---|---|---|
-| **browser** (WebGPU fp16) | **12.4 fps** (80.7 ms/frame) | 0.14 s | 29 fps → WebM |
+| **browser** (WebGPU fp16, 768 px) | **8.9 fps** end to end | 0.04 s | 29 fps → WebM |
 | **browser** (WASM, 8 threads) | 2.05 fps | — | — |
+| **browser** (WASM, 1 thread — no COOP/COEP) | 0.5 fps | 1.3 s | — |
 | **local server** (CoreML) | **20.9 fps** | 0.13 s | 14.5 fps → MP4 |
 | local server (torch MPS) | 15.4 fps | — | — |
 | **A100** (EdgeTAM's own figure) | **~150 fps** | — | — |
+
+The browser row is **end to end through the UI**: press Track, wait for the
+line to say *tracked*, with the streaming preview painting and the progress bar
+moving. That is what a person waits through, and it is the number the estimate
+under the button quotes. The graphs run faster than that in isolation — the
+per-stage table below sums to 88.7 ms a frame, and an older figure of 12.4 fps
+for the same clip and the same square is in this repository's history; it is not
+reproduced by this measurement, so what the app quotes is the one above.
+
+#### Tracking quality — three squares
+
+Same clip, same subject, same machine, measured the same end-to-end way:
+
+| | tracking | 150 frames | logit grid | download |
+|---|---|---|---|---|
+| **fast** · 512 px | **15.4 fps** | 9.7 s | 128² | 51 MB |
+| **balanced** · 768 px | **8.9 fps** | 16.9 s | 192² | 53 MB |
+| **best** · 1024 px | **5.4 fps** | 27.8 s | 256² | 55 MB |
+
+The mask logit grid is `image_size / 4`, so a smaller square is a coarser
+outline as well as a faster one — that is the trade the chip is making, and it
+is why the masks are compared rather than assumed: against the 768 px masks on
+the same frames, **512 px scores IoU 0.955–0.962 and 1024 px 0.938–0.979**
+(`verify-web.mjs`, flow WQ). Only 768 px is downloaded on a first visit.
 
 The A100 row is EdgeTAM's published number, *"obtained with torch compile"* — not
 measured here. It is in the table because it is the reason the third tier is
@@ -1341,10 +1366,15 @@ both paths, `DV_DECODE_SLOW=1 node verify-web.mjs`:
 
 | clip | `<video>` seek | WebCodecs · worker | |
 |---|---|---|---|
-| `sample.mp4` — 150 frames, H.264 720p | 4.43 s | **0.97 s** | 4.6× |
-| `docs/entry-clip.mp4` — 149 frames, H.264 | 5.59 s | **1.23 s** | 4.5× |
-| VP8 WebM, no Cues, no Duration (a camera recording) | 16.05 s | **1.26 s** | 12.8× |
-| `sample.mp4` looped to 90 s — 2,700 frames | 192.5 s | **16.5 s** | 11.7× |
+| `sample.mp4` — 150 frames, H.264 720p | 4.72 s | **1.00 s** | 4.7× |
+| `docs/entry-clip.mp4` — 149 frames, H.264 | 5.74 s | **1.24 s** | 4.6× |
+| VP8 WebM, no Cues, no Duration (a camera recording) | 15.51 s | **1.29 s** | 12.1× |
+| `sample.mp4` looped to 90 s — 2,700 frames | 92.4 s | **16.5 s** | 5.6× |
+
+The seek column is the noisy one: a standalone run of that last comparison
+measured **192.5 s** for the same file on the same machine. Which frames the
+browser still has decoded when a seek lands changes the answer by a factor of
+two. The WebCodecs column does not move, because it decodes the stream once.
 
 The frames are not merely equivalent, they are **byte-identical**: same JPEG
 bytes, same total, same FNV hash on the first and last frame of every clip in
@@ -1361,7 +1391,7 @@ Where the remaining time goes, for the 150-frame H.264 row:
 | the worker booting (its whole module graph) | 6 ms |
 | demuxing 150 samples | 1 ms |
 | `drawImage(VideoFrame)` — all 150 | 15 ms |
-| decode + JPEG, six canvases deep | 957 ms |
+| decode + JPEG, six canvases deep | ~980 ms |
 
 So it is now the JPEG encoder, not the decoder: 4.9 s of `convertToBlob` across
 six parallel canvases. The blobs are what everything downstream is built on —
@@ -1385,8 +1415,9 @@ sessions into a worker would mean moving frame access, the preview path and
 down as a plan in `docs/track-web.md` rather than done.
 
 **Download.** The page itself is ~200 KB. The first time you track something, the
-browser engine pulls **83 MB** — 55.3 MB of fp16 ONNX graphs and 27.7 MB of
-onnxruntime-web — and caches it. Nothing comes from a CDN.
+browser engine pulls **83 MB** — 55.3 MB of fp16 ONNX graphs at 768 px and
+27.7 MB of onnxruntime-web — and caches it. Picking another quality chip pulls
+that square's set (~50 MB) once. Nothing comes from a CDN.
 
 **Multiple subjects.** The server batches every subject through one propagate
 pass. The browser tracks them one at a time, because a `WebTracker` is a
@@ -2008,8 +2039,13 @@ its decode and its export are.
   emulating half floats or dropping to WASM.
 * **83 MB before the first track.** Cached afterwards, but it is a real cost on a
   first visit, and the weights are not in git (see `web/README.md`).
-* **One tracker resolution.** 768 px only. 512 and 1024 would triple the
-  download.
+* **Three tracker resolutions, one at a time.** 512, 768 and 1024 px, the same
+  squares and the same names the server offers. Only the 768 px set is
+  downloaded on a first visit; the others (~50 MB each) arrive when their chip
+  is picked, and loading one releases the one before it — three model sets held
+  at once is the wrong trade in a tab, so switching costs the 0.4–1.0 s reload.
+  A deployment that installed only the default tarball tracks at 768 px and
+  says why.
 * **Subjects cost linearly.** One full pass each: N subjects, N × the time. The
   server batches them into one.
 * **WebM, GIF and alpha-WebM — no MP4, no ProRes.** `MediaRecorder` gives VP9

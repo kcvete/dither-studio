@@ -20,12 +20,22 @@ bench/_res/
 #   web/models/*.onnx  <- onnxexport/export_onnx.py   (~130 MB)
 #   web/ort/           <- npm i onnxruntime-web       (~41 MB)
 # web/models/manifest.json and web/models/consts.bin ARE committed: they are
-# small and the page needs them to know what it is missing.
+# small and the page needs them to know what it is missing. The same holds for
+# the other two tracker resolutions under web/models/512/ and web/models/1024/
+# -- their manifests are committed, their graphs are not.
 web/models/*.onnx
+web/models/*/*.onnx
 web/ort/
+
+# release tarballs built by tools/build-models-release.sh
+dist/
 
 # verify-web.mjs re-exports these on every run; the screenshots are the evidence
 docs/w-*-export.*
+# the decode flow builds a cue-less WebM and a 90 s MP4 with ffmpeg and removes
+# them again; they are here so an interrupted run does not leave them tracked
+docs/w-decode-camera-like.webm
+docs/w-decode-long.mp4
 # the matched-cut runs write both halves of the pair and the frames they were
 # checked against. Regenerable, and the numbers live in the reports.
 docs/o-original-cut.mp4

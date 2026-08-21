@@ -1,7 +1,7 @@
 {
-  "image_size": 768,
-  "grid": 48,
-  "tokens": 2304,
+  "image_size": 1024,
+  "grid": 64,
+  "tokens": 4096,
   "nspat": 7,
   "nptr": 64,
   "memlen": 3648,
@@ -10,22 +10,22 @@
   "ptr_tokens": 4,
   "max_obj_ptrs": 16,
   "sizes_mb": {
-    "encoder_fp32": 19.75287,
-    "memattn_fp32": 18.438014,
-    "heads_fp32": 20.613891,
-    "heads_prompt_fp32": 20.142445,
-    "heads_mask_fp32": 17.116827,
-    "memenc_fp32": 6.711575,
-    "memenc_f16in": 6.729636,
-    "encoder_fp16": 10.000625,
-    "memattn_fp16": 9.256148,
-    "heads_fp16": 10.396892,
-    "heads_prompt_fp16": 10.26742,
-    "heads_mask_fp16": 8.641834
+    "encoder_fp32": 19.752872,
+    "memattn_fp32": 22.108034,
+    "heads_fp32": 22.907653,
+    "heads_prompt_fp32": 21.977455,
+    "heads_mask_fp32": 19.066523,
+    "memenc_fp32": 6.711703,
+    "memenc_f16in": 6.729764,
+    "encoder_fp16": 10.000723,
+    "memattn_fp16": 11.091158,
+    "heads_fp16": 11.543808,
+    "heads_prompt_fp16": 11.184958,
+    "heads_mask_fp16": 9.616714
   },
   "checks": {
-    "memattn_rewrite_max_abs": 1.1473894119262695e-06,
-    "memattn_ref_std": 0.5777642726898193,
+    "memattn_rewrite_max_abs": 9.5367431640625e-07,
+    "memattn_ref_std": 0.5763000845909119,
     "mask_down4_max_abs": 7.152557373046875e-07
   },
   "heads_mask_inputs": [
@@ -53,7 +53,6 @@
     }
   },
   "consts_bytes": 2816,
-  "tiers": [512, 768, 1024],
   "sigmoid_scale_for_mem_enc": 20.0,
   "sigmoid_bias_for_mem_enc": -10.0,
   "mean": [

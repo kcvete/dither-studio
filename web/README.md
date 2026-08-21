@@ -114,7 +114,23 @@ does). See *Browsers* in the root README for the measured table.
 
 `models/manifest.json` and `models/consts.bin` **are** committed: they are small,
 and they are what tells the page what the model set can do (`image_size`, the
-memory-bank shapes, `has_mask_prompt`). The weights are not.
+memory-bank shapes, `has_mask_prompt`, and `tiers` — which tracker squares this
+deployment carries). The weights are not.
+
+Three squares, three directories:
+
+```
+models/          768 px, the default and the only one a first visit downloads
+models/512/      512 px, "fast"
+models/1024/    1024 px, "best"
+```
+
+Each has its own `manifest.json` and `consts.bin`, both committed, and its own
+graphs, which are not. The page reads `tiers` out of the default manifest and
+offers exactly those chips — it does not probe, because probing would mean a
+404 per absent square in the console of every page that only has the default
+set. If a square is listed and its files are missing, the track happens at
+768 px and the line says so.
 
 Two ways to get them.
 
@@ -130,30 +146,47 @@ DV_SKIP_WEB_MODELS=1 ./setup.sh # skip both, server-only install
 Or just the ONNX half, if the rest is already built:
 
 ```sh
-env/venv/bin/python onnxexport/export_onnx.py --image-size 768
+env/venv/bin/python onnxexport/export_onnx.py --image-size 768 \
+  --tiers 512,768,1024                       # -> web/models/
+env/venv/bin/python onnxexport/export_onnx.py --image-size 512 \
+  --out web/models/512
+env/venv/bin/python onnxexport/export_onnx.py --image-size 1024 \
+  --out web/models/1024
 ```
 
+`--tiers` only records a list in the default manifest; it exports nothing extra.
+`DV_MODELS_TIERS=0 ./setup.sh` keeps the install to the default square.
+
 **Download them.** For anyone who is not going to run PyTorch, the graphs are
-attached to the [`models-v1`](https://github.com/kcvete/dither-studio/releases/tag/models-v1)
+attached to the [`models-v1.1`](https://github.com/kcvete/dither-studio/releases/tag/models-v1.1)
 release. One command from the repo root, and no python at all:
 
 ```sh
 ./setup.sh --page-only          # models + onnxruntime-web, nothing else
+DV_MODELS_TIERS=0 ./setup.sh --page-only   # just the default 768 px square
 ```
 
 Or by hand:
 
 ```sh
-curl -fL https://github.com/kcvete/dither-studio/releases/download/models-v1/dither-studio-models-v1.tar.gz \
-  | tar xz -C web/              # -> web/models/*.fp16.onnx + memenc + consts
+B=https://github.com/kcvete/dither-studio/releases/download/models-v1.1
+curl -fL $B/dither-studio-models-v1.1.tar.gz      | tar xz -C web/  # 768 px
+curl -fL $B/dither-studio-models-v1.1-512.tar.gz  | tar xz -C web/  # 512 px
+curl -fL $B/dither-studio-models-v1.1-1024.tar.gz | tar xz -C web/  # 1024 px
 npm pack onnxruntime-web@1.27   # -> web/ort/, see setup.sh for which files
 ```
 
-`dither-studio-models-v1.tar.gz` (53 MB) is the fp16 set the page loads by
-default plus both memory-encoder builds. `dither-studio-models-fp32-v1.tar.gz`
-(83 MB) is the fp32 graphs, which nothing in the UI asks for — they exist for
-a machine whose WebGPU fp16 is broken and which sets `fp16:false` on the saved
-engine preference by hand. `SHA256SUMS.txt` is on the release beside them.
+| tarball | | |
+|---|---|---|
+| `dither-studio-models-v1.1.tar.gz` | 53 MB | 768 px fp16 + both memory encoders — the default, and the only one a first visit needs |
+| `dither-studio-models-v1.1-512.tar.gz` | 51 MB | 512 px fp16, into `models/512/` |
+| `dither-studio-models-v1.1-1024.tar.gz` | 55 MB | 1024 px fp16, into `models/1024/` |
+| `dither-studio-models-v1.1-fp32.tar.gz` | 89 MB | 768 px fp32, for a GPU with no `shader-f16` |
+
+`SHA256SUMS` is on the release beside them. The fp32 set is the one the page
+asks for when the adapter reports no `shader-f16`; if it is not deployed, that
+machine runs fp16 on WASM instead and says so. `tools/build-models-release.sh`
+is what builds all four out of a checkout that has exported them.
 
 A full `./setup.sh` can pull the same tarball instead of exporting:
 

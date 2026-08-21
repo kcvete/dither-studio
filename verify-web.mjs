@@ -906,8 +906,21 @@ async function runTracked() {
   r.chips = await page.$$eval('#subs .chip', (n) => n.map((e) => e.textContent));
   check('the subject chip records its prompt frame', /@ 0/.test(r.chips[0]), r.chips[0]);
   r.qualityChips = await page.$$eval('#tq .chip', (n) => n.map((e) => e.textContent.trim()));
-  check('the browser engine offers the resolution it shipped models for',
-        r.qualityChips.length === 1, JSON.stringify(r.qualityChips));
+  /* One chip per tracker square this deployment carries. It used to be exactly
+   * one, because the browser engine only ever exported 768 px; there are three
+   * graph sets now and the chips are built from meta().track_sizes either way,
+   * so what is asserted is that the list is not empty and that the default is
+   * the one selected -- flow WQ is where each square is actually tracked. */
+  r.qualityDefault = await page.evaluate(() => ({
+    picked: window.DV.trackSize, offered: window.DV.meta.default_track_size }));
+  check('the browser engine offers the squares it shipped models for',
+        r.qualityChips.length >= 1
+        && r.qualityChips.length === (await page.evaluate(
+          () => (window.DV.meta.track_sizes || []).length)),
+        JSON.stringify(r.qualityChips));
+  check('and starts on the one a first visit downloads',
+        r.qualityDefault.picked === r.qualityDefault.offered,
+        JSON.stringify(r.qualityDefault));
 
   let t0 = Date.now();
   await page.click('#bPrev');
@@ -2739,6 +2752,128 @@ async function runNoAdapter() {
   return r;
 }
 
+/* ====== WQ: the three tracker squares, in the tab ==========================
+ * The browser engine used to export one resolution and say so as a limit: 768
+ * px only, because 512 and 1024 would triple the download. They are separate
+ * graph sets under models/512 and models/1024 now, listed in the default
+ * manifest's `tiers` so the page knows what this deployment carries without
+ * probing for it, and loaded one at a time when their chip is picked.
+ *
+ * What has to hold: the chips appear and are the server's own ids; each one
+ * loads its own set and tracks; the mask logit grid follows the square
+ * (128/192/256, which is grid*4); the frame count does not move; and the masks
+ * agree with the 768 px ones well enough to be the same subject.
+ */
+const tierMasks = (page, frames) => page.evaluate(async (fr) => {
+  // one binary mask per asked-for frame, at 128x128, as a plain array
+  const cv = document.createElement('canvas');
+  cv.width = 128; cv.height = 128;
+  const g = cv.getContext('2d', { willReadFrequently: true });
+  const id = String(window.DV.subjects[0].id);
+  const out = {};
+  for (const n of fr) {
+    const bmp = await window.DV.engine.mask(id, n);
+    g.clearRect(0, 0, 128, 128);
+    g.drawImage(bmp, 0, 0, 128, 128);
+    bmp.close && bmp.close();
+    const d = g.getImageData(0, 0, 128, 128).data;
+    const a = new Array(128 * 128);
+    for (let i = 0, q = 0; i < d.length; i += 4, q++) a[q] = d[i] > 127 ? 1 : 0;
+    out[n] = a;
+  }
+  return out;
+}, frames);
+
+const iou = (a, b) => {
+  let inter = 0, uni = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] && b[i]) inter++;
+    if (a[i] || b[i]) uni++;
+  }
+  return uni ? inter / uni : 1;
+};
+
+async function runTrackTiers() {
+  const r = { tiers: {} };
+  const runs = {};
+  for (const size of [512, 768, 1024]) {
+    const { ctx, page } = await newPage(browserPref());
+    const t = { size };
+    r.offered = await page.evaluate(() => (window.DV.meta || {}).track_sizes);
+    await loadClip(page, CLIP, 2);
+    t.nFrames = await page.evaluate(() => window.DV.nFrames);
+    t.picked = await page.evaluate((s) => {
+      const b = [...document.querySelectorAll('#tq .chip')]
+        .find((c) => +c.dataset.size === s);
+      if (!b) return 0;
+      b.click();
+      return window.DV.trackSize;
+    }, size);
+    check(`tiers · ${size} px has a chip and it selects`, t.picked === size,
+          String(t.picked));
+    await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+    await promptBoxPoint(page, SUBJECT_A);
+    t.preview = await waitText(page, '#pvinfo',
+      /^(?!.*(reading|loading|\.onnx)).*(px|failed)/, 600000);
+    check(`tiers · ${size} px previews`, !/failed/.test(t.preview), t.preview);
+    check(`tiers · the preview says which square it used`,
+          new RegExp(`\\(${size} px\\)`).test(t.preview), t.preview);
+    const t0 = Date.now();
+    await page.click('#bTrack');
+    t.track = await waitText(page, '#tinfo', /tracked|failed/, 1800000);
+    t.seconds = +((Date.now() - t0) / 1000).toFixed(1);
+    check(`tiers · ${size} px tracks`, !/failed/.test(t.track), t.track);
+    t.state = await page.evaluate(() => {
+      const e = window.DV.engine;
+      const m = e.masks.get(String(window.DV.subjects[0].id));
+      return { loaded: e.trackerSize, frames: m ? m.length : 0,
+               logitGrid: m && m[0] ? Math.round(Math.sqrt(m[0].length)) : 0,
+               backend: e.backendLine() };
+    });
+    check(`tiers · ${size} px loaded its own graph set`,
+          t.state.loaded === size, JSON.stringify(t.state));
+    check(`tiers · ${size} px writes a ${size / 4} logit grid`,
+          t.state.logitGrid === size / 4, JSON.stringify(t.state));
+    check(`tiers · ${size} px covers every frame`,
+          t.state.frames === t.nFrames,
+          `${t.state.frames} vs ${t.nFrames}`);
+    check(`tiers · the stats line names the square`,
+          t.state.backend.includes(`${size} px`), t.state.backend);
+    const frames = [0, t.nFrames >> 1, t.nFrames - 1];
+    runs[size] = await tierMasks(page, frames);
+    t.areas = frames.map((n) => runs[size][n].reduce((a, b) => a + b, 0));
+    check(`tiers · ${size} px found the subject on every sampled frame`,
+          t.areas.every((a) => a > 50), JSON.stringify(t.areas));
+    r.tiers[size] = t;
+    await page.screenshot({ path: path.join(DOCS, `w-tier-${size}.png`) });
+    await ctx.close();
+  }
+  check('tiers · all three squares are offered',
+        (r.offered || []).map((x) => x.size).join(',') === '512,768,1024',
+        JSON.stringify(r.offered));
+  check('tiers · with the ids the server uses',
+        (r.offered || []).map((x) => x.id).join(',') === 'fast,balanced,best',
+        JSON.stringify((r.offered || []).map((x) => x.id)));
+  check('tiers · and each carries a measured fps',
+        (r.offered || []).every((x) => x.fps > 0),
+        JSON.stringify(r.offered));
+
+  r.iou = {};
+  for (const size of [512, 1024]) {
+    const per = Object.keys(runs[768]).map((n) => +iou(runs[size][n], runs[768][n]).toFixed(4));
+    r.iou[size] = per;
+    check(`tiers · ${size} px masks agree with 768 px`,
+          per.every((v) => v > 0.7), `${size}: ${per.join(', ')}`);
+  }
+  r.faster = +(r.tiers[1024].seconds / Math.max(0.1, r.tiers[512].seconds)).toFixed(2);
+  check('tiers · a smaller square really is faster',
+        r.tiers[512].seconds < r.tiers[768].seconds
+        && r.tiers[768].seconds < r.tiers[1024].seconds,
+        JSON.stringify({ 512: r.tiers[512].seconds, 768: r.tiers[768].seconds,
+                         1024: r.tiers[1024].seconds }));
+  return r;
+}
+
 /* --------------------------------------------------------------------- main */
 BR = await pickBrowser();
 R.browser = { how: BR.how, executionProvider: BR.ep, webgpu: BR.gpu,
@@ -2781,6 +2916,7 @@ try {
   await run('seqPixel', runSeqPixel);
   await run('entryBrowser', runEntry, 'browser');
   await run('entryRemote', runEntry, 'remote');
+  await run('trackTiers', runTrackTiers);
   await run('otherBrowsers', runOtherBrowsers);
   await run('noAdapter', runNoAdapter);
   await run('apiKey', runApiKey);

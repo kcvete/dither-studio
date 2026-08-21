@@ -19,9 +19,16 @@ REPO="$ENVD/EdgeTAM"
 CKPT="$REPO/checkpoints/edgetam.pt"
 EDGETAM_COMMIT="7711e012a30a2402c4eaab637bdb00a521302c91"
 ORT_VERSION="1.27"
-# where the pre-exported browser-engine graphs live, for DV_MODELS=download
-MODELS_RELEASE="${DV_MODELS_RELEASE:-models-v1}"
-MODELS_URL="https://github.com/kcvete/dither-studio/releases/download/$MODELS_RELEASE/dither-studio-models-v1.tar.gz"
+# where the pre-exported browser-engine graphs live, for DV_MODELS=download.
+# Three tarballs now, one per tracker square: the default 768 px set is what a
+# first visit downloads, and 512/1024 land under web/models/512 and
+# web/models/1024 so their chips have something to load. All extract into web/.
+MODELS_RELEASE="${DV_MODELS_RELEASE:-models-v1.1}"
+MODELS_VER="${MODELS_RELEASE#models-}"
+MODELS_BASE="https://github.com/kcvete/dither-studio/releases/download/$MODELS_RELEASE"
+MODELS_URL="$MODELS_BASE/dither-studio-models-$MODELS_VER.tar.gz"
+# the other two squares; DV_MODELS_TIERS=0 keeps the download to the default set
+MODELS_TIERS="${DV_MODELS_TIERS:-512 1024}"
 PY="${DV_PYTHON:-/opt/homebrew/opt/python@3.13/bin/python3.13}"
 [ -x "$PY" ] || PY="$(command -v python3.13)"
 
@@ -69,6 +76,17 @@ if [ "${1:-}" = "--page-only" ] || [ "${DV_PAGE_ONLY:-0}" = "1" ]; then
       || { echo "[setup] model download failed: $MODELS_URL"; exit 1; }
     echo "[setup] models ok"
   fi
+  for S in $MODELS_TIERS; do
+    [ "$S" = "0" ] && continue
+    if [ -f "$HERE/web/models/$S/encoder.fp16.onnx" ]; then
+      echo "[setup] ${S}px models already there"
+    else
+      echo "[setup] the ${S}px tracker set"
+      curl -fL --progress-bar "$MODELS_BASE/dither-studio-models-$MODELS_VER-$S.tar.gz" \
+        | tar xz -C "$HERE/web" \
+        || echo "[setup] ${S}px download failed - that chip will track at 768 instead"
+    fi
+  done
   vendor_ort
   echo "[setup] ok - now serve web/ with any static server"
   exit 0
@@ -175,6 +193,13 @@ if [ "${DV_SKIP_WEB_MODELS:-0}" != "1" ]; then
     echo "[setup] downloading the ONNX graphs from $MODELS_RELEASE (~53 MB)"
     if curl -fL --progress-bar "$MODELS_URL" | tar xz -C "$HERE/web"; then
       echo "[setup] models ok"; NEED=0
+      for S in $MODELS_TIERS; do
+        [ "$S" = "0" ] && continue
+        [ -f "$HERE/web/models/$S/encoder.fp16.onnx" ] && continue
+        curl -fL --progress-bar "$MODELS_BASE/dither-studio-models-$MODELS_VER-$S.tar.gz" \
+          | tar xz -C "$HERE/web" \
+          || echo "[setup] ${S}px download failed - that chip will track at 768 instead"
+      done
     else
       echo "[setup] model download failed - falling back to the export"
     fi
@@ -186,10 +211,23 @@ if [ "${DV_SKIP_WEB_MODELS:-0}" != "1" ]; then
     fi
     if "$VENV/bin/python" -c "import onnx, onnxruntime" >/dev/null 2>&1; then
       echo "[setup] exporting the ONNX graphs for the browser engine (once, ~90 s)"
+      # --tiers records in the default manifest which squares this checkout
+      # carries, so the page offers exactly those chips and probes for nothing
       "$VENV/bin/python" "$HERE/onnxexport/export_onnx.py" --image-size 768 \
-        >/dev/null 2>&1 \
+        --tiers "$(echo 768 $MODELS_TIERS | tr ' ' ,)" >/dev/null 2>&1 \
         && echo "[setup] ONNX export ok" \
         || echo "[setup] ONNX export failed - the browser engine will say so in the UI"
+      # the other squares, exported the same way into their own directories.
+      # DV_MODELS_TIERS=0 skips them; they are ~140 MB each.
+      for S in $MODELS_TIERS; do
+        [ "$S" = "0" ] && continue
+        [ -f "$HERE/web/models/$S/encoder.fp16.onnx" ] && continue
+        echo "[setup] exporting the ${S}px graphs (once, ~90 s)"
+        "$VENV/bin/python" "$HERE/onnxexport/export_onnx.py" --image-size "$S" \
+          --out "$HERE/web/models/$S" >/dev/null 2>&1 \
+          && echo "[setup] ${S}px export ok" \
+          || echo "[setup] ${S}px export failed - that chip will track at 768 instead"
+      done
     else
       echo "[setup] no onnx/onnxruntime - skipping the browser engine models"
     fi

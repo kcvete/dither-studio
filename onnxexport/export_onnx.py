@@ -87,6 +87,14 @@ def main():
     ap.add_argument('--image-size', type=int, default=768)
     ap.add_argument('--out', default=os.path.join(ROOT, 'web', 'models'))
     ap.add_argument('--fp16', action='store_true', default=True)
+    # Which tracker squares this DEPLOYMENT carries, recorded in the manifest so
+    # the page knows what to offer without probing for it. A probe would mean a
+    # 404 per absent resolution in the console of every page that only has the
+    # default set, which is most of them. Only meaningful in the default set's
+    # manifest -- that is the one the page reads first.
+    ap.add_argument('--tiers', default='',
+                    help='comma-separated image sizes present beside this one, '
+                         'e.g. 512,768,1024')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
@@ -266,6 +274,9 @@ def main():
         f.write(bytes(buf))
     man['consts'] = entries
     man['consts_bytes'] = off
+    tiers = sorted({int(x) for x in a.tiers.replace(',', ' ').split()} | {S}) \
+        if a.tiers else [S]
+    man['tiers'] = tiers
     man['sigmoid_scale_for_mem_enc'] = m.sigmoid_scale_for_mem_enc
     man['sigmoid_bias_for_mem_enc'] = m.sigmoid_bias_for_mem_enc
     man['mean'] = [0.485, 0.456, 0.406]

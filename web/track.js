@@ -320,6 +320,17 @@ export class WebTracker {
   }
 }
 
+/** Hand the sessions back. A model set is ~50 MB of fp16 weights plus its GPU
+ *  buffers, and the caller keeps one resolution alive at a time, so switching
+ *  the quality chip has to actually free the one before it. */
+WebTracker.prototype.release = async function release() {
+  for (const s of [this.enc, this.mat, this.hds, this.hpr, this.hmk, this.mec]) {
+    if (s && s.release) { try { await s.release(); } catch (e) { /* already gone */ } }
+  }
+  this.enc = this.mat = this.hds = this.hpr = this.hmk = this.mec = null;
+  this.bank = null;
+};
+
 /** Chained sessions return before the GPU has finished, so per-stage numbers
  *  from `step` are only a split of the wall clock. This runs one stage in
  *  isolation with a CPU output, which forces a fence, N times. */

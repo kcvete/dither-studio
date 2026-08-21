@@ -20,13 +20,34 @@ these are the individual steps.
 ```sh
 # the five graphs (needs the EdgeTAM checkpoint under env/)
 env/venv/bin/pip install onnx onnxruntime
-env/venv/bin/python onnxexport/export_onnx.py --image-size 768   # -> web/models/
+env/venv/bin/python onnxexport/export_onnx.py --image-size 768 \
+  --tiers 512,768,1024                                           # -> web/models/
+env/venv/bin/python onnxexport/export_onnx.py --image-size 512  --out web/models/512
+env/venv/bin/python onnxexport/export_onnx.py --image-size 1024 --out web/models/1024
 
 # the runtime
 npm install onnxruntime-web@1.27
 cp node_modules/onnxruntime-web/dist/ort.all.bundle.min.mjs web/ort/
 cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded{,.jsep}.{mjs,wasm} web/ort/
 ```
+
+The graphs are fixed-shape per `image_size`, so a tracker square is a whole
+model set and not a parameter — which is why there are three directories rather
+than three flags. `--tiers` writes the list of squares a deployment carries into
+the default manifest; the page offers exactly those chips and probes for
+nothing. `web/engines/browser.js` keeps one set loaded at a time and releases it
+when another square is picked (`WebTracker.release()`): three sets is ~150 MB of
+weights plus their GPU buffers, and the 0.4-1.0 s reload is the better trade.
+
+| square | grid | logits | end-to-end | fp16 download |
+|---|---|---|---|---|
+| 512 | 32 | 128² | 15.4 fps | 51 MB |
+| 768 | 48 | 192² | 8.9 fps | 53 MB |
+| 1024 | 64 | 256² | 5.4 fps | 55 MB |
+
+The logit grid is `image_size / 4`, so the mask that comes back to JS is a
+different size per square; everything downstream reads it off the array rather
+than assuming 192.
 
 `onnxexport/verify_loop.py` is the same loop in Python against the CPU execution
 provider — the reference this port is checked against, and the place to debug a

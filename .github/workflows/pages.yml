@@ -4,8 +4,12 @@
 # web/ is the whole product and there is no build step, so this workflow is
 # almost entirely about the two things that are deliberately NOT in git:
 #
-#   web/models/*.onnx   ~53 MB of EdgeTAM graphs, downloaded from the models-v1
-#                       release (built by onnxexport/export_onnx.py)
+#   web/models/*.onnx   ~53 MB of EdgeTAM graphs, downloaded from the
+#                       models-v1.1 release (built by onnxexport/export_onnx.py),
+#                       plus the 512 px and 1024 px sets under models/512 and
+#                       models/1024. Only the 768 px one is fetched by a
+#                       visitor's first track; the others load if their quality
+#                       chip is picked.
 #   web/ort/            ~39 MB of onnxruntime-web, taken from npm at the same
 #                       version setup.sh pins, so the deployed page and a local
 #                       checkout run identical binaries
@@ -51,16 +55,27 @@ jobs:
         with:
           node-version: '22'
 
-      - name: The ONNX graphs, from the models-v1 release
+      - name: The ONNX graphs, from the models-v1.1 release
         run: |
           set -euo pipefail
-          URL=https://github.com/${{ github.repository }}/releases/download/models-v1/dither-studio-models-v1.tar.gz
-          curl -fL --retry 3 --retry-delay 2 "$URL" | tar xz -C web
-          # the fp32 set is not deployed: nothing in the UI asks for it and it
-          # would add 83 MB to every visitor's mirror of the release.
+          BASE=https://github.com/${{ github.repository }}/releases/download/models-v1.1
+          curl -fL --retry 3 --retry-delay 2 "$BASE/dither-studio-models-v1.1.tar.gz" | tar xz -C web
+          # the other two tracker squares. They are separate files on purpose:
+          # nothing downloads them until a visitor picks that quality chip.
+          for S in 512 1024; do
+            curl -fL --retry 3 --retry-delay 2 \
+              "$BASE/dither-studio-models-v1.1-$S.tar.gz" | tar xz -C web
+            test -f "web/models/$S/encoder.fp16.onnx"
+            test -f "web/models/$S/manifest.json"
+          done
+          # the fp32 set is not deployed: it is 83 MB for the case of a GPU
+          # with no shader-f16, and that machine falls to fp16 on WASM and says
+          # so rather than failing.
           test -f web/models/encoder.fp16.onnx
           test -f web/models/memenc.f16in.onnx
-          ls -la web/models
+          # the tier list the page reads has to match what is actually here
+          grep -q '"tiers"' web/models/manifest.json
+          du -sh web/models web/models/512 web/models/1024
 
       - name: onnxruntime-web, at the version setup.sh pins
         run: |

@@ -99,17 +99,20 @@ export function blueNoiseTile(n = 64, seed = 7, iters = 40, sigma = 1.6) {
  */
 export const BITMAP_BUDGET = 48e6;       // bytes of RGBA the engine caches
 
-export function clipMemoryEstimate(nFrames, w, h, subjects = 1) {
+export function clipMemoryEstimate(nFrames, w, h, subjects = 1,
+                                   trackSize = 768) {
   // What a decoded clip actually costs this tab:
   //   the JPEG blobs it keeps           ~90 KB a frame at 1280x720
   //   this engine's bitmap LRU           48 MB, or fewer frames' worth
   //   the 40-frame bitmap LRU in app.js  w*h*4 each
-  //   one 192x192 float32 mask logit per frame per subject, once tracked
+  //   one float32 mask logit grid per frame per subject, once tracked, at
+  //   grid*4 squared: 128 at the 512 px tracker, 192 at 768, 256 at 1024
   const px = Math.max(1, w * h);
   const jpeg = nFrames * 90e3 * px / (1280 * 720);
   const bitmaps = Math.min(BITMAP_BUDGET, nFrames * px * 4);
   const lru = 40 * px * 4;
-  const masks = nFrames * 192 * 192 * 4 * Math.max(1, subjects);
+  const P = Math.max(64, Math.round((trackSize || 768) / 4));
+  const masks = nFrames * P * P * 4 * Math.max(1, subjects);
   return { jpeg, bitmaps, lru, masks, total: jpeg + bitmaps + lru + masks };
 }
 
@@ -158,15 +161,34 @@ function gifPalette(params) {
   return out;
 }
 
+/* The three tracker squares, named as the server names them so the quality
+ * chips in app.js need to know nothing about which engine is running.
+ *
+ * `fps` is measured END TO END through the UI — Chrome on an M4 Pro / 24 GB,
+ * 150 frames of 1280x720, one subject, WebGPU fp16, with the streaming preview
+ * painting and the progress bar moving, which is what a person actually waits
+ * through. It is what the estimate under the Track button quotes, so it is a
+ * median on the reference clip and not a promise. The graphs run faster than
+ * this in isolation; see README, Performance. */
+export const TRACK_TIERS = {
+  512: { id: 'fast', label: 'fast · prototyping', fps: 15.4 },
+  768: { id: 'balanced', label: 'balanced · default', fps: 8.9 },
+  1024: { id: 'best', label: 'best · production', fps: 5.4 },
+};
+
 /* ============================================================= the engine === */
 /* The tracker's output is 192x192 logits. The server upsamples logits to the
  * clip's resolution and THEN takes the sigmoid; doing it the other way round
  * widens the soft edge by a pixel or two, so this does it in the same order,
  * carrying the logit through the canvas resampler as a clamped +/-20 ramp.
  * `cache` is any object to hang the two scratch canvases off. */
-function upsampleMask(low, w, h, cache) {
-  const P = 192;
-  const small = cache._msk || (cache._msk = new OffscreenCanvas(P, P));
+function upsampleMask(low, w, h, cache, size) {
+  // grid*4: 128 at the 512 px tracker, 192 at 768, 256 at 1024. Taking it from
+  // the logits themselves means a sequence item drawn long after its clip can
+  // carry a different tracker resolution than whatever is loaded now.
+  const P = size || (low ? Math.round(Math.sqrt(low.length)) : 192);
+  const small = cache._msk && cache._msk.width === P ? cache._msk
+    : (cache._msk = new OffscreenCanvas(P, P));
   const sg = small.getContext('2d', { willReadFrequently: true });
   const id = sg.createImageData(P, P);
   for (let q = 0; q < P * P; q++) {
@@ -223,6 +245,8 @@ export class BrowserEngine {
     this.sublabel = 'free';
     this.dir = opts.dir || './models/';
     this.ortDir = opts.ortDir || './ort/';
+    this.manifests = new Map();          // image size -> manifest.json
+    this.trackerSize = 0;                // which one the loaded tracker is
     this.fp16 = opts.fp16 !== false;
     this.ep = opts.ep || 'webgpu';
     this.clip = null;
@@ -257,19 +281,45 @@ export class BrowserEngine {
    * Two steps, deliberately separate. manifest.json is small and committed, so
    * it is what tells the page what the model set can do; the weights are ~130 MB
    * and are not, so a page can perfectly well render stills and whole-frame
-   * clips without them. `meta()` needs only the first, `init()` needs both. */
-  async manifestOf() {
-    if (this.manifest) return this.manifest;
+   * clips without them. `meta()` needs only the first, `init()` needs both.
+   *
+   * `size` picks a tracker square. Omitted is the default set at the root of
+   * models/ -- the layout the release and the Pages build already have, and
+   * the only one most visitors ever download; the other squares live in a
+   * subdirectory named after themselves. */
+  sizeDir(size) {
+    return !size || size === this.baseSize ? this.dir : `${this.dir}${size}/`;
+  }
+
+  async manifestOf(size) {
+    // the default set names itself, and is what says which others exist, so it
+    // is always read first
+    if (size && !this.baseSize) await this.manifestOf();
+    const key = size && size !== this.baseSize ? size : 0;
+    if (this.manifests.has(key)) return this.manifests.get(key);
     let man;
     try {
-      const r = await fetch(this.dir + 'manifest.json');
+      const r = await fetch(this.sizeDir(size) + 'manifest.json');
       if (!r.ok) throw new Error('HTTP ' + r.status);
       man = await r.json();
     } catch (e) {
-      throw new modelsMissing('models/manifest.json is not there (' + e.message + ')');
+      throw new modelsMissing(`models/${size && size !== this.baseSize
+        ? size + '/' : ''}manifest.json is not there (${e.message})`);
     }
-    this.manifest = man;
-    this.supports.maskPrompt = !!man.has_mask_prompt;
+    this.manifests.set(key, man);
+    if (!key) {
+      this.manifest = man;
+      this.baseSize = man.image_size;
+      this.manifests.set(man.image_size, man);
+      this.supports.maskPrompt = !!man.has_mask_prompt;
+      /* Which resolutions this deployment actually carries. It is written into
+       * the default manifest at export time rather than probed, because probing
+       * means a 404 per absent tier in the console of every page that only has
+       * the default set — which is most of them. A manifest with no `tiers` is
+       * the one-resolution build this used to be. */
+      this.tiers = Array.isArray(man.tiers) && man.tiers.length
+        ? man.tiers.slice().sort((a, b) => a - b) : [man.image_size];
+    }
     return man;
   }
 
@@ -278,10 +328,11 @@ export class BrowserEngine {
    * hardware rather than by assuming Chrome. Three answers:
    *
    *   webgpu + fp16   the adapter reports `shader-f16`
-   *   webgpu + fp32   it does not. The fp32 graphs are committed beside the
+   *   webgpu + fp32   it does not. The fp32 graphs are exported beside the
    *                   fp16 ones and are ~20% slower, which is a far better
    *                   answer than emulating half floats in a shader or
-   *                   dropping to WASM
+   *                   dropping to WASM. They are a separate download and a
+   *                   deployment without them falls to fp16 on WASM, saying so
    *   wasm            no navigator.gpu, or no adapter at all
    *
    * Idempotent and cheap, so `meta()` can call it before any weights exist —
@@ -341,8 +392,30 @@ export class BrowserEngine {
     return this;
   }
 
-  async loadTracker(log) {
-    if (this.tracker) return this.tracker;
+  /** The tracker for one resolution. One is kept alive at a time on purpose:
+   *  a model set is ~50 MB of fp16 weights plus its GPU buffers, and holding
+   *  three of them so that switching a chip is instant is the wrong trade in a
+   *  tab. Switching costs the reload, which is 0.4-1.0 s. */
+  async loadTracker(log, size) {
+    await this.manifestOf();                 // settles baseSize and tiers
+    let want = size && this.tiers.includes(+size) ? +size : this.baseSize;
+    /* `tiers` says what the deployment SHOULD carry; this is the check that it
+     * does. Someone who installed only the default tarball has a manifest
+     * listing three squares and the files for one, and the answer to that is a
+     * track at the default square with a sentence saying why — not a 404 in
+     * the middle of a job. */
+    if (want !== this.baseSize) {
+      try { await this.manifestOf(want); } catch (e) {
+        this.tierNote = `the ${want} px graphs are not in this deployment — `
+          + `tracking at ${this.baseSize} px instead (see web/README.md)`;
+        want = this.baseSize;
+      }
+    }
+    if (want === this.baseSize && this.tierNote && size === this.baseSize) {
+      this.tierNote = '';
+    }
+    if (this.tracker && this.trackerSize === want) return this.tracker;
+    if (this.tracker) { await this.releaseTracker(); }
     await this.init();                       // settles ep and fp16 first
     // `fetch('./x')` resolves against the DOCUMENT, but `import('./x')` resolves
     // against this module — which lives one directory deeper. Resolve both the
@@ -363,24 +436,46 @@ export class BrowserEngine {
     ort.env.logLevel = 'error';
     this.ort = ort;
     const t = new WebTracker(ort, { ep: this.ep, fp16: this.fp16,
-                                    chain: this.ep === 'webgpu', dir: this.dir });
+                                    chain: this.ep === 'webgpu',
+                                    dir: this.sizeDir(want) });
     try {
       await t.load(log || (() => {}));
     } catch (e) {
+      /* One retry, for one specific case: this GPU has no shader-f16, so the
+       * fp32 graphs were asked for, and this deployment does not carry them —
+       * the release ships fp16 by default and the fp32 set is a separate
+       * download. WASM does have fp16, so that is where this goes rather than
+       * into a 404 the visitor cannot act on. */
+      if (this.ep === 'webgpu' && !this.fp16) {
+        this.ep = 'wasm'; this.fp16 = true;
+        this.epNote = 'this GPU has no shader-f16 and the fp32 graphs are not '
+          + 'in this deployment — running fp16 on WASM instead, which is much '
+          + 'slower. See web/README.md for the fp32 bundle';
+        return this.loadTracker(log, want);
+      }
       // ORT's own message for this is "no available backend found", which tells
       // a visitor nothing. Say which backend was tried and what to do.
-      throw new Error(`${this.backendLine()} could not start — ${e.message}`
-        + (this.epNote ? ' · ' + this.epNote : ''));
+      throw new Error(`${this.backendLine()} at ${want} px could not start — `
+        + e.message + (this.epNote ? ' · ' + this.epNote : ''));
     }
     this.tracker = t;
+    this.trackerSize = want;
     return t;
+  }
+
+  /** Give the sessions back before loading another resolution's. */
+  async releaseTracker() {
+    const t = this.tracker;
+    this.tracker = null; this.trackerSize = 0;
+    if (t && t.release) { try { await t.release(); } catch (e) { /* gone anyway */ } }
   }
 
   /** The backend, in the words the stats line uses. */
   backendLine() {
+    const px = this.trackerSize ? ` \u00b7 ${this.trackerSize} px` : '';
     return this.ep === 'webgpu'
-      ? `WebGPU ${this.fp16 ? 'fp16' : 'fp32'}`
-      : `WASM ${this.fp16 ? 'fp16' : 'fp32'}`
+      ? `WebGPU ${this.fp16 ? 'fp16' : 'fp32'}${px}`
+      : `WASM ${this.fp16 ? 'fp16' : 'fp32'}${px}`
         + (this.threads ? ` \u00b7 ${this.threads} thread`
           + (this.threads > 1 ? 's' : '') : '')
         + ' \u00b7 slow';
@@ -394,6 +489,9 @@ export class BrowserEngine {
     try { S = (await this.manifestOf()).image_size; } catch (e) { /* reported later */ }
     // ask the GPU what it can do before claiming a backend on the chip
     await this.pickBackend();
+    const tiers = (this.tiers || [S]).map((size) => Object.assign(
+      { size }, TRACK_TIERS[size]
+        || { id: String(size), label: `${size} px`, fps: 0 }));
     return {
       palettes: Dither.PALETTES,
       modes: Dither.MODES,
@@ -403,10 +501,15 @@ export class BrowserEngine {
       device: this.ep === 'webgpu' ? 'webgpu' : 'wasm',
       backend: this.fp16 ? 'fp16' : 'fp32',
       max_objects: 6,
-      // One exported resolution, so one chip. Exporting 512 and 1024 as well
-      // would triple the download for a knob that mostly matters when you are
-      // waiting on a server.
-      track_sizes: [{ size: S, id: 'balanced', label: 'balanced', fps: 12.4 }],
+      /* The same three tiers the server offers, with the same ids, so the
+       * quality chips in app.js need to know nothing about which engine is
+       * running. Only the ones this deployment actually carries are listed:
+       * `tiers` comes out of the default manifest, so a page with just the
+       * 768 px set advertises one chip and is telling the truth.
+       *
+       * 768 stays the default and the only set the first visit downloads. The
+       * others load when their chip is picked and replace it, one at a time. */
+      track_sizes: tiers,
       default_track_size: S,
       engine: 'browser',
     };
@@ -480,9 +583,9 @@ export class BrowserEngine {
    *  under this.masks so `mask(id, 0)` hands back the same full-resolution
    *  upsample the tracked flow uses -- the still and the clip compose through
    *  identical pixels. */
-  async segmentImage({ objects }, onLog) {
+  async segmentImage({ objects, imageSize }, onLog) {
     if (!this.clip || !this.clip.still) throw new Error('no still is open');
-    const t = await this.loadTracker(onLog);
+    const t = await this.loadTracker(onLog, imageSize);
     const S = t.man.image_size;
     const t0 = performance.now();
     const rgba = await this.trackerInput(0, S);
@@ -500,7 +603,8 @@ export class BrowserEngine {
     return { objects: out, elapsedS: (performance.now() - t0) / 1000,
              imageSize: S, backend: this.ep, backendLine: this.backendLine(),
              frameIdx: 0,
-             note: [notes.join(' · '), this.epNote || ''].filter(Boolean).join(' · ') };
+             note: [notes.join(' · '), this.tierNote || '',
+                    this.epNote || ''].filter(Boolean).join(' · ') };
   }
 
   /* ------------------------------------------------------ the bitmap LRU
@@ -640,8 +744,8 @@ export class BrowserEngine {
   }
 
   /* ------------------------------------------------- one-frame preview */
-  async previewFrame({ frameIdx, objects }, onLog) {
-    const t = await this.loadTracker(onLog);
+  async previewFrame({ frameIdx, objects, imageSize }, onLog) {
+    const t = await this.loadTracker(onLog, imageSize);
     const S = t.man.image_size;
     const t0 = performance.now();
     const rgba = await this.trackerInput(frameIdx, S);
@@ -658,7 +762,8 @@ export class BrowserEngine {
     return { objects: out, elapsedS: (performance.now() - t0) / 1000,
              imageSize: S, backend: this.ep, backendLine: this.backendLine(),
              frameIdx,
-             note: [notes.join(' · '), this.epNote || ''].filter(Boolean).join(' · ') };
+             note: [notes.join(' · '), this.tierNote || '',
+                    this.epNote || ''].filter(Boolean).join(' · ') };
   }
 
   /** A conditioning frame: heads_prompt (points) or heads_mask (a drawn shape). */
@@ -678,7 +783,7 @@ export class BrowserEngine {
 
   /** 192x192 logits -> an <img>-shaped thing the overlay can paint. */
   async maskImage(low) {
-    const P = 192;
+    const P = Math.round(Math.sqrt(low.length));
     const c = new OffscreenCanvas(P, P);
     const g = c.getContext('2d');
     const id = g.createImageData(P, P);
@@ -715,7 +820,7 @@ export class BrowserEngine {
    */
   async track({ objects, imageSize }, onProgress) {
     const t = await this.loadTracker((s) => onProgress
-      && onProgress({ done: 0, total: 1, text: s }));
+      && onProgress({ done: 0, total: 1, text: s }), imageSize);
     const S = t.man.image_size;
     const N = this.clip.nFrames;
     const t0 = performance.now();
@@ -780,7 +885,7 @@ export class BrowserEngine {
       backendLine: this.backendLine(),
       imageSize: S, steps: total,
       note: [objects.length > 1 ? `${objects.length} subjects, one pass each` : '',
-             this.decodeNote(), this.epNote || '',
+             this.decodeNote(), this.tierNote || '', this.epNote || '',
              notes.join(' · ')].filter(Boolean).join(' · '),
     };
   }
@@ -1031,6 +1136,7 @@ export class BrowserEngine {
 
   dispose() {
     this.clip = null;
+    this.releaseTracker();
     this.bmp.forEach((b) => b.close?.());
     this.bmp.clear();
     this.masks.clear();
