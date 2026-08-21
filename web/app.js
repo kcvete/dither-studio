@@ -222,7 +222,8 @@ function clipEstimate() {
   const h = DECODE_H, w = Math.max(2, Math.round(vw * (h / vh) / 2) * 2);
   const jpeg = n * 90e3 * (w * h) / (1280 * 720);
   const lru = 40 * w * h * 4;
-  const masks = n * 192 * 192 * 4 * Math.max(1, S.subjects.length || 1);
+  const lg = Math.round((S.trackSize || 768) / 4);   // logit grid = tracker square / 4
+  const masks = n * lg * lg * 4 * Math.max(1, S.subjects.length || 1);
   const t = (S.meta.track_sizes || []).find((x) => x.size === S.trackSize)
     || (S.meta.track_sizes || [])[0];
   const fps = (t && t.fps) || 0;
@@ -930,6 +931,7 @@ async function uploadClip(f, trim, opts = {}) {
     box.textContent = `${j.nFrames} frames · ${j.w}×${j.h} · ${j.fps} fps`
       + ` · ${(j.nFrames / Math.max(1, j.fps)).toFixed(1)} s`
       + (cut ? ` · trimmed ${t.start.toFixed(1)}–${t.end.toFixed(1)} s` : '')
+      + (j.decode && j.decode.label ? ` · ${j.decode.label}` : '')
       + (recut ? ' · re-cut, nothing re-uploaded' : '')
       + (E().id === 'browser' ? ' · stays in this tab' : '');
     paintEstimate();
