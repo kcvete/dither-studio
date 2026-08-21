@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest something Dither Studio should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem first, not the solution. What are you making, and where does the tool get in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should it do instead?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - Studio (source, subjects, look, palette, export)
+        - Sequence view and transitions
+        - The .dots.gz format or its player
+        - Tracking and the engines
+        - The local server, hosting or storage
+        - Documentation
+        - Something else
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Fits the constraints
+      description: >-
+        The page has no framework, no bundler and fetches nothing from a CDN at
+        run time, and the free browser engine is the product rather than a
+        degraded mode. Proposals that hold to that are much easier to accept.
+      options:
+        - label: This needs no new runtime dependency, or I have said in the proposal why one is unavoidable
+        - label: This works on the browser engine, or I have said why it can only work with a server

@@ -1,5 +1,12 @@
 # Dither Studio
 
+### [**Open it → kcvete.github.io/dither-studio**](https://kcvete.github.io/dither-studio/)
+
+[![licence](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
+[![Pages](https://github.com/kcvete/dither-studio/actions/workflows/pages.yml/badge.svg)](https://github.com/kcvete/dither-studio/actions/workflows/pages.yml)
+[![CI](https://github.com/kcvete/dither-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/kcvete/dither-studio/actions/workflows/ci.yml)
+[![models](https://img.shields.io/badge/models-v1-informational)](https://github.com/kcvete/dither-studio/releases/tag/models-v1)
+
 Turn a photograph into computational structure. One unit, one palette, one logic,
 repeated until the picture is made of it.
 
@@ -29,29 +36,27 @@ Silicon Mac, and the seam for a hosted one; the page picks whichever is there.
 
 ## Quickstart
 
-### The page, on its own
+Three ways in, in ascending order of effort. They are the same page.
+
+### 1 · Use it — nothing to install
+
+**[kcvete.github.io/dither-studio](https://kcvete.github.io/dither-studio/)**
+
+That deployment is `web/` with the model weights baked in, and it is the whole
+product: drop a clip or a still, point at a person, export. No account, no
+upload, nothing leaves the tab. The first track downloads ~55 MB of weights once
+and the browser caches them.
+
+It runs on WebGPU, so a current Chrome or Edge (or Safari 26+) is the fast path;
+anything else falls back to multi-threaded WASM and says so in the header.
+
+### 2 · Run it locally — about 2x faster
+
+On an Apple Silicon Mac:
 
 ```sh
-python3 -m http.server -d web 8080     # or any static host
-open http://127.0.0.1:8080/
-```
-
-That is the whole product. `web/` is self-contained and deploys to GitHub Pages
-or Cloudflare Pages with no build step — see [`web/README.md`](web/README.md).
-Subject tracking needs ~83 MB of model weights that are **not** in git; the page
-says so plainly and still does stills and whole-frame clips without them.
-
-Verified on exactly that: `python3 -m http.server -d web`, no server anywhere,
-page up in 0.6 s, 149 frames tracked at 9.6 fps and exported to WebM in 5.3 s.
-
-![the whole tool on a plain static file server](docs/w-static-only.png)
-
-### With the local accelerator
-
-On an Apple Silicon Mac, `./run.sh` builds everything and opens the page against
-a local server that tracks about **1.7x faster**:
-
-```sh
+git clone https://github.com/kcvete/dither-studio.git
+cd dither-studio
 ./run.sh
 ```
 
@@ -61,10 +66,46 @@ the CoreML graphs *and* the ONNX graphs, vendors onnxruntime-web — then starts
 `server/server.py` on `http://127.0.0.1:8765` and opens the browser. First run is
 a few minutes and about 330 MB on disk; every run after is a no-op. If 8765 is
 taken it walks forward to the next free port and says which one. `DV_PORT=`
-overrides, `DV_NO_OPEN=1` skips the browser,
-`DV_SKIP_WEB_MODELS=1 ./setup.sh` skips the browser-engine models.
+overrides, `DV_NO_OPEN=1` skips the browser.
+
+What that buys: **20.9 fps** tracking against 12.4 in the tab, three tracker
+resolutions instead of one, one batched pass for several subjects instead of one
+pass each, and **H.264 MP4** out instead of WebM.
 
 The page served by that server is the same directory. There is no fork.
+
+### 3 · Host it yourself — the page, on your own domain
+
+`web/` is self-contained: no build step, no bundler, nothing fetched from a CDN
+at run time. Copy it to GitHub Pages, Cloudflare Pages, Netlify, S3, anything.
+
+```sh
+./setup.sh --page-only        # pulls the pre-exported weights + onnxruntime-web
+python3 -m http.server -d web 8080
+```
+
+`--page-only` needs no python environment, no PyTorch and no checkpoint: it
+downloads the graphs from the [`models-v1`](https://github.com/kcvete/dither-studio/releases/tag/models-v1)
+release. Skip it entirely and the page still does stills and whole-frame clips —
+it says plainly in step 2 that subject tracking has no weights, instead of
+failing on the Track button. See [`web/README.md`](web/README.md), and
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) for how this repo's
+own deployment is built.
+
+Verified on exactly that: `python3 -m http.server -d web`, no server anywhere,
+page up in 0.6 s, 149 frames tracked at 9.6 fps and exported to WebM in 5.3 s.
+
+![the whole tool on a plain static file server](docs/w-static-only.png)
+
+### Knobs on setup.sh
+
+| | |
+|---|---|
+| `./setup.sh --page-only` | the static page only: weights from the release + onnxruntime-web. No venv, no PyTorch, no checkpoint |
+| `DV_MODELS=download ./setup.sh` | full install, but download the ONNX graphs instead of spending 90 s exporting them |
+| `DV_SKIP_WEB_MODELS=1 ./setup.sh` | server only: no ONNX graphs, no `web/ort` |
+| `DV_EDGETAM_CKPT=<path>` | reuse an `edgetam.pt` you already have |
+| `DV_PYTHON=<path>` | which python builds the venv (default 3.13) |
 
 ## Three tiers, one codebase
 
@@ -1629,7 +1670,7 @@ What that means in practice:
 |---|---|---|
 | this code (`web/`, `server/`, `coreml/`, `onnxexport/`, `bench/`) | Apache-2.0 | yes |
 | [EdgeTAM](https://github.com/facebookresearch/EdgeTAM) + its checkpoint | Apache-2.0 | no — `setup.sh` clones and downloads |
-| the derived ONNX / CoreML graphs | Apache-2.0 (derived from the checkpoint) | no — regenerated or released separately |
+| the derived ONNX / CoreML graphs | Apache-2.0 (derived from the checkpoint) | no — exported by `setup.sh`, or downloaded from [`models-v1`](https://github.com/kcvete/dither-studio/releases/tag/models-v1) |
 | [onnxruntime-web](https://github.com/microsoft/onnxruntime) in `web/ort/` | MIT | no — `setup.sh` fetches it from npm |
 | `docs/entry-clip.mp4` | Mixkit Free License | yes, **as a test fixture only** |
 | `sample.mp4` / `sample.jpg` | Mixkit Free License | yes, **as a test fixture only** |
@@ -1642,6 +1683,11 @@ this was a test input and is not here. `NOTICE` has the full attributions, and
 anyone bundling `web/ort/` must carry the MIT notice with it.
 
 ## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the mechanics — how to get an
+environment, which suite to run for which change, what CI checks on its own.
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) and [`SECURITY.md`](SECURITY.md) are
+the short ones. What follows is the standard those files are enforcing.
 
 The bar is the same one the code holds itself to: **no mocks in the tests, and a
 number in the commit message**. `verify.mjs`, `verify-web.mjs` and `parity.py`

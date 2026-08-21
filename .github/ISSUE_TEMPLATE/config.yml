@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the documentation first
+    url: https://github.com/kcvete/dither-studio#readme
+    about: >-
+      The README covers the two engines, the model files tracking needs, export
+      formats, the .dots.gz format, hosting a backend and the measured
+      performance numbers. Most questions are answered there.
+  - name: Contributing and how to run the test suites
+    url: https://github.com/kcvete/dither-studio/blob/main/CONTRIBUTING.md
+    about: Dev setup, the parity gate, the end-to-end suites and what to run before a PR.

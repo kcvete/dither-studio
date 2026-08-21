@@ -1,0 +1,17 @@
+{
+  "name": "dither-studio",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dither Studio — a browser dithering studio and its parity-checked Python renderer. This manifest exists to name the checks; the project itself has no npm dependencies and no build step.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "scripts": {
+    "check": "node tests/syntax-check.mjs",
+    "test": "node tests/syntax-check.mjs && node tests/player-roundtrip.mjs",
+    "parity": "python3 server/parity.py",
+    "parity:gate": "GATE=1 python3 server/parity.py",
+    "jobsgc": "python3 server/jobsgc_check.py",
+    "verify": "node verify.mjs",
+    "verify:web": "node verify-web.mjs"
+  }
+}

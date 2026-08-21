@@ -1,0 +1,112 @@
+# Dither Studio — CI
+#
+# What this runs is the half of the test suite that needs nothing but a
+# compiler, a Python and a Node: it parses every JavaScript file, round-trips
+# the .dots.gz codec, and — the reason this workflow is worth having — proves
+# that web/dither.js and server/dither.py still produce the *same pixels*.
+#
+# That parity gate is the project's load-bearing invariant. The browser dithers
+# a frame in JavaScript and the server dithers it in Python + C, and a clip
+# rendered in the tab has to match a clip rendered on the box byte for byte or
+# the whole "preview is the export" promise is a lie. server/parity.py drives
+# both implementations over 110 dither cases, 15 compose cases and 27 polish
+# cases and diffs the raw bytes; GATE=1 does it again through the masked path
+# the cutout and overlay exports actually take. It takes under a second.
+#
+# The C shared library gets built from source here rather than downloaded.
+# server/dither.py dlopens env/libcdither.dylib through ctypes — the .dylib
+# suffix is just a file name, ctypes does not care, and an ELF object under
+# that name loads fine on Linux. -ffp-contract=off is not decoration: it stops
+# the compiler fusing multiply-adds, and a fused multiply-add rounds
+# differently from the two separate operations JavaScript performs, which would
+# break pixel parity in exactly the subtle way this gate exists to catch. The
+# riemersma modes refuse to run without the library at all, so the build step
+# asserts the file landed instead of letting parity quietly fall back.
+#
+# WHAT IS NOT HERE, and why. verify.mjs and verify-web.mjs are the real
+# end-to-end suites — they drive the actual page in a real browser, cut real
+# video and check the pixels that come out. They are local-only on purpose:
+# they need Playwright with a downloaded Chromium, a running server.py, ffmpeg,
+# the EdgeTAM checkpoint and the ONNX exports — north of a gigabyte of weights
+# that are not in this repository and could not be, plus a torch install, plus
+# minutes of GPU-less inference. Putting that on a free runner would trade a
+# ninety-second signal for a twenty-minute flake. Run them yourself after
+# ./setup.sh, with `npm run verify` and `npm run verify:web`; their reports and
+# screenshots are committed under docs/ as the evidence.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: parity, codec, syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # numpy and Pillow are the entire server-side dependency list for
+      # everything CI touches. dither.py, polish.py and render.py import
+      # nothing else; torch, onnxruntime and EdgeTAM stay out of this job.
+      - name: Install Python dependencies
+        run: python3 -m pip install --upgrade pip numpy pillow
+
+      # ctypes opens this by path, so the name matters and the extension does
+      # not. See the note at the top about -ffp-contract=off.
+      - name: Build the C dithering library
+        run: |
+          mkdir -p env
+          cc -O3 -ffp-contract=off -shared -fPIC -o env/libcdither.dylib server/cdither.c
+          test -f env/libcdither.dylib \
+            || { echo "env/libcdither.dylib was not produced — parity would silently fall back to the slow pure-Python path"; exit 1; }
+          ls -l env/libcdither.dylib
+
+      - name: Versions
+        run: |
+          node --version
+          python3 --version
+          cc --version | head -1
+
+      # Every hand-written .js and .mjs, parsed and thrown away. Knows which
+      # files are classic scripts and which are ES modules; see the file.
+      - name: Syntax check
+        run: npm run check
+
+      # The .dots.gz codec out and back: dot coordinates, colours, frame count
+      # and per-frame counts, plus the empty, uint16-extreme, negative-delta
+      # and 65,535-frame edges.
+      - name: Player round trip
+        run: node tests/player-roundtrip.mjs
+
+      # The gate. Exits non-zero on a single mismatched byte.
+      - name: Parity — web/dither.js against server/dither.py
+        run: python3 server/parity.py
+
+      - name: Parity — the masked compose path
+        env:
+          GATE: '1'
+        run: python3 server/parity.py
+
+      # The jobs/ janitor's retention policy, against fabricated job trees in a
+      # temp directory. Standard library only.
+      - name: Job GC policy
+        run: python3 server/jobsgc_check.py

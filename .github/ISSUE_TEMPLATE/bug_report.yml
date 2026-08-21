@@ -1,0 +1,75 @@
+name: Bug report
+description: Something in Dither Studio does not do what it says it does
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The engine and the model situation explain most
+        bugs on their own, so please fill those two in even if nothing else.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+      placeholder: |
+        1. Dropped a 5 s 1280x720 clip
+        2. Clicked a subject, hit Track
+        3. Expected masks on every frame; got an empty mask after frame 60
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine
+      description: The chip in the page header always says.
+      options:
+        - Browser (free, everything in the tab)
+        - Local server (./run.sh)
+        - Custom URL (a self-hosted or rented backend)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Browser and OS
+      description: Include versions.
+      placeholder: Chrome 141, macOS 15.2, M2 Pro
+    validations:
+      required: true
+
+  - type: dropdown
+    id: models
+    attributes:
+      label: Are the model files installed?
+      description: >-
+        Tracking needs web/models/ (ONNX graphs) and web/ort/, which ./setup.sh
+        produces and which are not in git. Without them the page still does
+        stills and whole-frame clips.
+      options:
+        - "Yes — ran ./setup.sh"
+        - "No — serving web/ as plain static files"
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output
+      description: >-
+        Anything the browser console printed, and the server's stdout if you are
+        on the local engine. Pasted as text, not a screenshot, please.
+      render: shell
+
+  - type: textarea
+    id: source
+    attributes:
+      label: The source file
+      description: >-
+        Resolution, frame rate, duration, container — and whether it also happens
+        with the committed sample.mp4.
