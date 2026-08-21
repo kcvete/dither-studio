@@ -1366,15 +1366,17 @@ both paths, `DV_DECODE_SLOW=1 node verify-web.mjs`:
 
 | clip | `<video>` seek | WebCodecs · worker | |
 |---|---|---|---|
-| `sample.mp4` — 150 frames, H.264 720p | 4.72 s | **1.00 s** | 4.7× |
-| `docs/entry-clip.mp4` — 149 frames, H.264 | 5.74 s | **1.24 s** | 4.6× |
-| VP8 WebM, no Cues, no Duration (a camera recording) | 15.51 s | **1.29 s** | 12.1× |
-| `sample.mp4` looped to 90 s — 2,700 frames | 92.4 s | **16.5 s** | 5.6× |
+| `sample.mp4` — 150 frames, H.264 720p | 4.65 s | **1.01 s** | 4.6× |
+| `docs/entry-clip.mp4` — 149 frames, H.264 | 5.55 s | **1.25 s** | 4.5× |
+| VP8 WebM, no Cues, no Duration (a camera recording) | 15.33 s | **1.30 s** | 11.8× |
+| `sample.mp4` looped to 90 s — 2,700 frames | 82.8 s | **16.7 s** | 5.0× |
 
-The seek column is the noisy one: a standalone run of that last comparison
-measured **192.5 s** for the same file on the same machine. Which frames the
-browser still has decoded when a seek lands changes the answer by a factor of
-two. The WebCodecs column does not move, because it decodes the stream once.
+The seek column is the noisy one. That last row measured **82.8 s**, **92.4 s**
+and **192.5 s** across three runs of the same comparison on the same machine:
+whether the browser still has the neighbouring frames decoded when a seek lands
+changes the answer by a factor of two. The WebCodecs column moved by 1.4% over
+the same three runs, because it decodes the stream once and cache state has
+nothing to be lucky about.
 
 The frames are not merely equivalent, they are **byte-identical**: same JPEG
 bytes, same total, same FNV hash on the first and last frame of every clip in
