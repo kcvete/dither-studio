@@ -1,0 +1,126 @@
+{
+ "base": "https://kcvete.github.io/dither-studio",
+ "checks": [
+  {
+   "name": "the page loads",
+   "ok": true,
+   "detail": "1.08 s to a live engine"
+  },
+  {
+   "name": "the engine chip says Browser (no server, no /api/meta)",
+   "ok": true,
+   "detail": "Browser · free"
+  },
+  {
+   "name": "the demo hero has painted the prebaked .dots.gz",
+   "ok": true,
+   "detail": "{\"present\":true,\"w\":1920,\"h\":1080,\"colours\":2,\"inkPx\":2073600,\"heroHidden\":false}"
+  },
+  {
+   "name": "the demo hero is animating (frame changed)",
+   "ok": true,
+   "detail": "33098855 -> 33091241"
+  },
+  {
+   "name": "sample.mp4 decodes in the tab",
+   "ok": true,
+   "detail": "150 frames"
+  },
+  {
+   "name": "the models load and one click segments the subject",
+   "ok": true,
+   "detail": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12825 px"
+  },
+  {
+   "name": "the clip tracks in the tab",
+   "ok": true,
+   "detail": "tracked 150 frames in 12.0 s (12.5 fps) on WEBGPU fp16 · 1 subject"
+  },
+  {
+   "name": "the dither preview renders",
+   "ok": true,
+   "detail": "{\"w\":1280,\"h\":720,\"distinctColours\":2}"
+  },
+  {
+   "name": "the export finishes",
+   "ok": true,
+   "detail": "rendered 150 frames in 5.1 s (29.3 fps) · 1.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4"
+  },
+  {
+   "name": "the WebM downloads",
+   "ok": true,
+   "detail": "1114174"
+  },
+  {
+   "name": "the WebM is a real VP9 video of the tracked frames",
+   "ok": true,
+   "detail": "{\"codec_name\":\"vp9\",\"width\":1280,\"height\":720,\"pix_fmt\":\"yuv420p\",\"nb_read_frames\":\"150\"}"
+  },
+  {
+   "name": "the \"run it on your machine\" link is on the page",
+   "ok": true,
+   "detail": "https://github.com/kcvete/dither-studio"
+  },
+  {
+   "name": "no console errors",
+   "ok": false,
+   "detail": "[\"Failed to load resource: the server responded with a status of 404 ()\"]"
+  },
+  {
+   "name": "no page errors",
+   "ok": true,
+   "detail": "[]"
+  },
+  {
+   "name": "no failed requests",
+   "ok": true,
+   "detail": "[]"
+  },
+  {
+   "name": "no 4xx/5xx responses beyond the expected /api/meta",
+   "ok": true,
+   "detail": "{}"
+  }
+ ],
+ "consoleErrors": [
+  "Failed to load resource: the server responded with a status of 404 ()"
+ ],
+ "pageErrors": [],
+ "requestFailed": [],
+ "statuses": {},
+ "notes": [],
+ "browser": "chromium (channel:'chromium', WebGPU flags)",
+ "ep": "webgpu",
+ "loadSeconds": 1.08,
+ "chip": "Browser · free",
+ "hero": {
+  "present": true,
+  "w": 1920,
+  "h": 1080,
+  "colours": 2,
+  "inkPx": 2073600,
+  "heroHidden": false
+ },
+ "nFrames": 150,
+ "preview": "frame 0 · 1 subject in 0.06 s (768 px) · #1 12825 px",
+ "previewSeconds": 7.9,
+ "track": "tracked 150 frames in 12.0 s (12.5 fps) on WEBGPU fp16 · 1 subject",
+ "trackSeconds": 12.2,
+ "trackedFrames": 150,
+ "census": {
+  "w": 1280,
+  "h": 720,
+  "distinctColours": 2
+ },
+ "export": "rendered 150 frames in 5.1 s (29.3 fps) · 1.1 MB · video/webm;codecs=vp9 — the server engine writes H.264 MP4",
+ "exportSeconds": 5.7,
+ "exportBytes": 1114174,
+ "probe": {
+  "codec_name": "vp9",
+  "width": 1280,
+  "height": 720,
+  "pix_fmt": "yuv420p",
+  "nb_read_frames": "150"
+ },
+ "ossLink": "https://github.com/kcvete/dither-studio"
+}

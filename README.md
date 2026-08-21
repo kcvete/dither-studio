@@ -50,6 +50,17 @@ and the browser caches them.
 It runs on WebGPU, so a current Chrome or Edge (or Safari 26+) is the fast path;
 anything else falls back to multi-threaded WASM and says so in the header.
 
+Measured against that deployment, headless Chromium with WebGPU, nothing local
+running: page to a live engine in **1.08 s**, `sample.mp4` decoded to 150 frames
+in the tab, one click segmented the subject in **0.06 s**, 150 frames tracked in
+**12.0 s (12.5 fps)** on WebGPU fp16, and the dithered clip rendered to VP9 WebM
+in **5.1 s (29.3 fps)** — 150 frames out, 1.1 MB. Zero page errors, zero failed
+requests, and exactly one console line: the `/api/meta` 404 from the engine
+probe, which is the fallback working. Sixteen checks,
+[`docs/live-pages-report.json`](docs/live-pages-report.json).
+
+![tracked on the deployed page, no server anywhere](docs/live-pages-tracked.png)
+
 ### 2 · Run it locally — about 2x faster
 
 On an Apple Silicon Mac:
