@@ -48,7 +48,8 @@ html,body{height:100%;margin:0;background:var(--bgdeep);color:var(--ink);overflo
 .chip[aria-pressed="true"]{background:var(--ink);color:#0e1512;opacity:1;border-color:transparent}
 .chip.off{opacity:.25;cursor:not-allowed}
 .chip .fl{font-style:normal;font-size:12px;opacity:.55;line-height:1}
-.chip.sub .sw{width:11px;height:11px;border-radius:3px;flex:0 0 11px;box-shadow:0 0 0 1px #0006 inset}
+.chip.sub .sw,.chip.fol .sw{width:11px;height:11px;border-radius:3px;flex:0 0 11px;box-shadow:0 0 0 1px #0006 inset}
+#followui{margin-top:2px}
 .chip .x{opacity:.45;padding:0 2px;font-size:11px;line-height:1}
 .chip .x:hover{opacity:1;color:var(--warn)}
 .chip.pal .pv{display:flex;gap:2px}

@@ -46,6 +46,16 @@ tagged release will close this section.
 - The canvas: aspect-ratio presets, so 16:9 goes in and 9:16 comes out — one
   affine map from source to output pixels, an auto-reframe that turns per-frame
   mask centroids into a camera move, and a hand-nudge over it.
+- **Follow one subject with the camera.** With two or more tracked subjects the
+  reframe offers `follow: all · #1 · #2` (and the same switch from each chip's
+  ⋯ menu). Anchored to a subject, the crop chases its whole mask **box** rather
+  than a centroid: the smallest move per frame that keeps the box inside the
+  window, smoothed over ±15 frames, corrected where the smooth fell short, then
+  clamped to the source — so the camera pans to the limits of the picture and
+  stops there. Gaps hold the last position; a box larger than the window is
+  centred; an anchor that stops rendering falls back to `all`, whose path is
+  unchanged. Preview, dithered export, matched original cut, `.dots.gz` and the
+  server render all read the same path.
 
 ### Sequences and the dot-data player
 

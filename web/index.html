@@ -180,6 +180,13 @@
               <button class="chip" data-framing="follow">follow</button>
               <button class="chip" data-framing="static">hold still</button>
             </div>
+            <!-- Which subject the camera is anchored to. Only there when the
+                 frame is actually following and there is more than one tracked
+                 subject to choose between; built in app.js from the cast. -->
+            <div id="followui" hidden>
+              <div class="lbl"><span>Follow</span><span id="vFollow">all</span></div>
+              <div class="chips seg" id="followpick"></div>
+            </div>
             <div class="lbl"><span>Scale</span><span id="vZoom">1.00×</span></div>
             <input type="range" id="sZoom" min="0.5" max="3" step="0.05" value="1">
             <div class="chips" style="margin-top:7px">

@@ -49,6 +49,9 @@ docs/w-original-ref-*.png
 # the report; the contact sheets beside them are the evidence and stay
 docs/w-canvas-916-dithered.webm
 docs/w-canvas-916-original.webm
+# the anchored-camera run's 9:16 pair, same reasoning: the screenshots under
+# docs/ux-after/follow-*.png are the evidence and the numbers are in the report
+docs/w-follow-anchor.webm
 # the range run's pair and its reference frames, same reasoning
 docs/w-range-dithered.webm
 docs/w-range-original.webm

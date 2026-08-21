@@ -109,9 +109,13 @@ const S = {
    * the subject ever leaves a fixed frame. `dx`/`dy` are the manual bias, as a
    * FRACTION of the source frame, that dragging the preview adds to the
    * smoothed path — a fraction and not pixels, because the preview, a still's
-   * native-resolution export and the server are three different grids. */
+   * native-resolution export and the server are three different grids.
+   * `followId` is the ANCHOR: null means the camera holds every tracked
+   * subject (the union, as it always did), a subject id means it follows that
+   * one and keeps its whole mask box inside the crop for as long as the source
+   * allows. Video only — a still has no path to follow. */
   canvas: { preset: 'source', w: 1080, h: 1920, follow: 'auto', zoom: 1,
-            dx: 0, dy: 0 },
+            dx: 0, dy: 0, followId: null },
   /* THE WORKSPACE. `zoom` is a pure CSS transform on the stage content -- it
    * never touches a backing store, and every coordinate in the app already
    * goes through getBoundingClientRect(), which reports the TRANSFORMED rect,
@@ -1413,6 +1417,18 @@ function openSubMenu(s, anchor) {
          + 'every other subject keeps the masks it has',
          () => { backToPrompt(); track([s.id]); });
   }
+  /* The camera anchor, from the chip that owns the subject — the same switch
+   * the Frame step's "follow: all · #1 · #2" picker is, reachable from where
+   * the subject already is. Only when there is a canvas to reframe INTO and
+   * more than one subject to choose between. */
+  if (followPickable() && renderable(s)) {
+    const mine = effFollowId() === s.id;
+    item(mine ? 'stop following just this one' : 'follow with the camera',
+         mine ? 'the crop goes back to holding every tracked subject'
+           : `the reframe keeps #${s.id} whole inside the crop for the whole `
+             + 'clip, as far as the edges of the source allow',
+         () => setFollowId(mine ? null : s.id));
+  }
   item(s.hidden ? 'show in the render' : 'hide from the render',
        s.hidden ? 'put its masks back into the picture'
          : 'keeps the masks — the picture just stops using them',
@@ -1440,7 +1456,12 @@ function afterSubjectChange() {
   DOTS_CACHE = null;
   renderSubjects(); buildTargets(); renderModes(); paintCompose(); paintAlphaUI();
   drawOverlay();
-  if (!$('#vwrap').hidden) draw();
+  /* The crop path is a function of the cast — a hidden, removed or newly
+   * tracked subject changes it, and so does losing the one the camera was
+   * anchored to. Rebuilding it here is what keeps the preview from drawing
+   * the previous cast's camera move. */
+  paintCanvasUI();
+  if (!$('#vwrap').hidden) { canvasOn() ? applyCanvas() : draw(); }
 }
 
 /** Remove a subject for good. Tracked subjects also tell the engine to forget
@@ -2757,7 +2778,14 @@ function renderDots(srcData, W, H, masks, P, palettes, bg, tile) {
  *               largest rectangle of the target aspect that fits, scaled up to
  *               the target's pixels. That upscale is real and the UI says so.
  */
-const CPATH = { key: null, centers: null, union: null, n: 0 };
+const CPATH = { key: null, centers: null, union: null, n: 0,
+                /* the unsmoothed per-frame measurement the centres are derived
+                 * from — {ok, x, y, box}, normalised. Kept because the derived
+                 * step (keep-in-frame, smooth, correct) depends on the CROP,
+                 * which the zoom slider and the preset change without any of
+                 * the masks moving: re-deriving is arithmetic, re-measuring is
+                 * a walk over every mask of every frame. */
+                raw: null, dkey: null };
 
 /** The source's own pixel size for the flow that is open. */
 function srcSize() {
@@ -2786,6 +2814,39 @@ const canvasOn = () => !!canvasTarget();
  *  is visible, false for a cutout, which has nothing behind it to run out of. */
 const canvasClamps = () => !(usingSubjects() && S.P.compose !== 'overlay');
 
+/* ------------------------------------------------------------ the anchor */
+/** The subject the camera is following, or null for "all of them".
+ *
+ *  Only ever a subject that is actually in the picture: an anchor that is
+ *  hidden, removed or never tracked silently falls back to the whole cast
+ *  rather than pinning the crop to something the render is not using. Video
+ *  only — a still is one frame and has no path to follow. */
+function followAnchor() {
+  if (S.kind !== 'video' || S.canvas.followId == null) return null;
+  return activeSubs().find((s) => s.id === S.canvas.followId) || null;
+}
+const effFollowId = () => (followAnchor() ? followAnchor().id : null);
+
+/** Whether the anchor picker is worth showing: two or more tracked subjects
+ *  to choose between, on a clip, with a canvas that is actually following. */
+const followPickable = () => S.kind === 'video' && canvasOn() && usingSubjects()
+  && activeSubs().length > 1;
+
+/** The ids the crop path is measured from. One id when an anchor is set, the
+ *  whole active cast otherwise — which is exactly what it used to be. */
+function followIds() {
+  const a = followAnchor();
+  return a ? [a.id] : activeSubs().map((s) => s.id);
+}
+
+/** The crop window, in SOURCE pixels, that the path has to keep a box inside
+ *  of. The same rectangle `framing()` asks the hold-still question about. */
+function cropWindow() {
+  const [sw, sh] = srcSize();
+  const t = canvasTarget() || { w: sw, h: sh };
+  return CV.cropRect(sw, sh, t.w, t.h, S.canvas.zoom);
+}
+
 /** The framing actually in force. 'auto' answers itself, and answers it
  *  against the CROP THAT IS SET rather than once and for all: a subject that
  *  never leaves a 16:9 frame may well leave a 1:1 one. Cheap enough to ask on
@@ -2795,8 +2856,7 @@ function framing() {
   if (f === 'follow' || f === 'static') return f;
   if (!CPATH.union || !CPATH.centers || CPATH.centers.length < 2) return 'static';
   const [sw, sh] = srcSize();
-  const t = canvasTarget() || { w: sw, h: sh };
-  const crop = CV.cropRect(sw, sh, t.w, t.h, S.canvas.zoom);
+  const crop = cropWindow();
   const u = CPATH.union;
   return CV.fitsStatic({ x0: u.x0 * sw, y0: u.y0 * sh, x1: u.x1 * sw, y1: u.y1 * sh },
                        crop) ? 'static' : 'follow';
@@ -2811,7 +2871,16 @@ function pathKey() {
                          // by the file itself — two photographs dropped one
                          // after the other must not share a crop centre
                          S.kind === 'image' ? [S.fileName, S.natW, S.natH] : 0,
-                         usingSubjects() ? activeSubs().map((s) => s.id) : [],
+                         // the ANCHOR is in here, not the whole cast: a path
+                         // that follows #2 does not care that #1 was hidden,
+                         // and switching anchor must re-measure. Each id
+                         // carries WHEN it was tracked, so re-tracking a
+                         // subject re-measures rather than serving a path
+                         // built from the masks it used to have.
+                         usingSubjects() ? followIds().map((id) => {
+                           const s = S.subjects.find((x) => x.id === id);
+                           return [id, (s && s.track && s.track.at) || 0];
+                         }) : [],
                          S.kind === 'image' ? S.stillMasks.size : 0]);
 }
 
@@ -2842,33 +2911,149 @@ function centroidFromBitmaps(bmps, sw, sh) {
            box: { x0: x0 / w, y0: y0 / h, x1: (x1 + 1) / w, y1: (y1 + 1) / h } };
 }
 
+/* The measurements, by path key. A walk over every mask of every frame is the
+ * expensive part of this whole feature and it does not change when the anchor
+ * is switched back to one that was already measured, so the last few are kept.
+ * Bounded, and dropped wholesale when the source changes. */
+const RAWS = new Map();
+const RAWS_MAX = 6;
+function rawsPut(key, raw) {
+  RAWS.set(key, raw);
+  while (RAWS.size > RAWS_MAX) RAWS.delete(RAWS.keys().next().value);
+}
+
+/** The union of every box in a measured path — what "auto" asks the hold-still
+ *  question about, and what 'all' framing centres on when it holds still. */
+function unionOf(raw) {
+  let u = null;
+  raw.forEach((p) => {
+    if (!p || !p.ok || !p.box) return;
+    u = u ? { x0: Math.min(u.x0, p.box.x0), y0: Math.min(u.y0, p.box.y0),
+              x1: Math.max(u.x1, p.box.x1), y1: Math.max(u.y1, p.box.y1) }
+          : Object.assign({}, p.box);
+  });
+  return u;
+}
+
+/**
+ * KEEP-IN-FRAME. The anchored camera does not chase a centroid — it chases the
+ * subject's whole BOX, and only as far as it has to.
+ *
+ * Per frame, the crop centre is the SMALLEST move from where the camera was
+ * last frame that puts the whole box inside the window. While the subject is
+ * comfortably inside, the interval [box.x1 - w/2, box.x0 + w/2] contains the
+ * previous centre and the camera does not move at all; the moment an edge of
+ * the box touches an edge of the window, the camera moves exactly enough to
+ * keep it there. A box that is bigger than the window in an axis cannot be
+ * held, so that axis centres on it and loses the same amount off both sides.
+ *
+ * Everything is normalised (0..1 of the source), which is what the boxes and
+ * the centres already are; `cw`/`ch` are the window in the same units.
+ */
+function keepInFrame(raw, cw, ch) {
+  const out = [];
+  let px = null, py = null;
+  for (let i = 0; i < raw.length; i++) {
+    const p = raw[i];
+    const b = p && p.ok ? p.box : null;
+    if (!b) {                       // a gap: hold, never jump home
+      out.push({ x: px === null ? 0.5 : px, y: py === null ? 0.5 : py,
+                 ok: px !== null });
+      continue;
+    }
+    const mx = (b.x0 + b.x1) / 2, my = (b.y0 + b.y1) / 2;
+    const x = (b.x1 - b.x0 >= cw || px === null) ? mx
+      : clamp(px, b.x1 - cw / 2, b.x0 + cw / 2);
+    const y = (b.y1 - b.y0 >= ch || py === null) ? my
+      : clamp(py, b.y1 - ch / 2, b.y0 + ch / 2);
+    out.push({ x, y, ok: true });
+    px = x; py = y;
+  }
+  return out;
+}
+
+/** The correction pass. `smoothPath` averages over ±15 frames, so on a fast
+ *  move it can hand back a centre a few pixels short of where keep-in-frame
+ *  put it — and a few pixels is the difference between "always in frame" and
+ *  nearly. This shifts each smoothed centre by the least amount that puts the
+ *  box back inside, which is a no-op on the frames where the smooth was
+ *  already good enough. The clamp to the SOURCE happens later, in CV.place:
+ *  at the edges of the frame the camera stops and the subject is cut, which
+ *  is the whole point of "to the limits of the video". */
+function fixInFrame(pts, raw, cw, ch) {
+  return pts.map((c, i) => {
+    const p = raw[i];
+    const b = p && p.ok ? p.box : null;
+    if (!b) return c;
+    const mx = (b.x0 + b.x1) / 2, my = (b.y0 + b.y1) / 2;
+    return {
+      x: b.x1 - b.x0 >= cw ? mx : clamp(c.x, b.x1 - cw / 2, b.x0 + cw / 2),
+      y: b.y1 - b.y0 >= ch ? my : clamp(c.y, b.y1 - ch / 2, b.y0 + ch / 2),
+    };
+  });
+}
+
+/** Measurements -> the centres the crop actually sits on.
+ *
+ *  Cheap, and re-run whenever the CROP changes (preset, zoom) rather than
+ *  whenever the masks do. Two behaviours:
+ *
+ *    all       the union's area-weighted centroid, smoothed. Unchanged from
+ *              before there was an anchor — a camera holding a whole cast is
+ *              not trying to keep any one box whole, and changing it would
+ *              move every existing 'follow' export.
+ *    anchored  keep-in-frame on that subject's box, smoothed, corrected.
+ */
+function derivePath() {
+  const raw = CPATH.raw;
+  if (!raw || !raw.length) return;
+  const anchored = !!effFollowId();
+  const crop = cropWindow();
+  const [sw, sh] = srcSize();
+  const cw = crop.w / sw, ch = crop.h / sh;
+  const dkey = JSON.stringify([CPATH.key, anchored,
+                               +cw.toFixed(6), +ch.toFixed(6)]);
+  if (CPATH.dkey === dkey && CPATH.centers) return;
+  let sm;
+  if (!anchored || raw.length < 2) {
+    sm = CV.smoothPath(raw, 15);
+  } else {
+    sm = fixInFrame(CV.smoothPath(keepInFrame(raw, cw, ch), 15), raw, cw, ch);
+  }
+  CPATH.dkey = dkey;
+  CPATH.centers = sm.map((p) => [p.x, p.y]);
+}
+
 /** Build (or reuse) the per-frame crop centres for whatever is open.
  *
  *  A tracked clip walks its masks once — through the server's own arithmetic
  *  where there is a server, because 900 mask PNGs over HTTP to work out 900
- *  centres is silly — smooths the result over +/-15 frames, and remembers the
- *  union box so "auto" can answer the hold-still question. Everything else
- *  (a whole-frame clip, a still with no subject) is one fixed centre. */
+ *  centres is silly — and remembers them. `derivePath` turns them into the
+ *  camera move; it runs on every call, because the crop it is measured
+ *  against moves with the preset and the zoom while the masks stay put.
+ *  Everything else (a whole-frame clip, a still with no subject) is one fixed
+ *  centre. */
 async function ensureCanvasPath(onProgress) {
   const key = pathKey();
-  if (CPATH.key === key) return CPATH;
+  if (CPATH.key === key && CPATH.raw) { derivePath(); return CPATH; }
   const centre = { ok: true, x: 0.5, y: 0.5, box: null };
   if (S.kind === 'image') {
     const ms = usingSubjects()
       ? activeSubs().map((s) => S.stillMasks.get(s.id)).filter(Boolean) : [];
     const c = ms.length ? centroidFromBitmaps(ms, S.W || 1, S.H || 1) : centre;
-    Object.assign(CPATH, { key, centers: [[c.x, c.y]], union: c.box, n: 1 });
+    Object.assign(CPATH, { key, centers: [[c.x, c.y]], union: c.box, n: 1,
+                           raw: [c], dkey: null });
     return CPATH;
   }
   if (S.kind !== 'video' || !usingSubjects() || !S.tracked) {
     Object.assign(CPATH, { key, centers: [[0.5, 0.5]], union: null,
-                           n: S.nFrames || 1 });
+                           n: S.nFrames || 1, raw: [centre], dkey: null });
     return CPATH;
   }
   const n = S.nFrames;
-  const ids = activeSubs().map((s) => s.id);
-  let raw = null;
-  if (E().centroids) {
+  const ids = followIds();
+  let raw = RAWS.get(key) || null;
+  if (!raw && E().centroids) {
     try { raw = await E().centroids(ids); } catch (err) { raw = null; }
   }
   if (!raw) {
@@ -2883,15 +3068,10 @@ async function ensureCanvasPath(onProgress) {
       if ((i & 7) === 7) await sleep(0);
     }
   }
-  const sm = CV.smoothPath(raw, 15);
-  let union = null;
-  raw.forEach((p) => {
-    if (!p.ok || !p.box) return;
-    union = union ? { x0: Math.min(union.x0, p.box.x0), y0: Math.min(union.y0, p.box.y0),
-                      x1: Math.max(union.x1, p.box.x1), y1: Math.max(union.y1, p.box.y1) }
-                  : Object.assign({}, p.box);
-  });
-  Object.assign(CPATH, { key, n, centers: sm.map((p) => [p.x, p.y]), union });
+  rawsPut(key, raw);
+  Object.assign(CPATH, { key, n, raw, union: unionOf(raw), dkey: null,
+                         centers: null });
+  derivePath();
   return CPATH;
 }
 
@@ -3004,6 +3184,56 @@ function buildCanvasPresets() {
   });
 }
 
+/** Anchor the camera to one subject, or to all of them again.
+ *
+ *  Picking a subject implies following it: it is the only thing an anchor can
+ *  mean, and reaching this from the chip's ⋯ menu while the frame is holding
+ *  still would otherwise do nothing visible at all. */
+async function setFollowId(id) {
+  const next = id == null ? null : +id;
+  if (S.canvas.followId === next) return;
+  S.canvas.followId = next;
+  if (next !== null && S.canvas.follow === 'static') S.canvas.follow = 'follow';
+  await applyCanvas();
+  if (typeof renderSubjects === 'function') renderSubjects();
+}
+
+/** The anchor picker: "all · #1 · #2", in the subjects' own colours, next to
+ *  the framing chips. One tracked subject is already the only thing the camera
+ *  could follow, so there is nothing to pick and the row stays away. */
+function paintFollowPicker() {
+  const wrap = $('#followpick'), box = $('#followui');
+  if (!wrap || !box) return;
+  const show = followPickable() && framing() === 'follow';
+  box.hidden = !show;
+  if (!show) { wrap.textContent = ''; return; }
+  const cur = effFollowId();
+  const subs = activeSubs();
+  $('#vFollow').textContent = cur === null ? 'all subjects' : '#' + cur;
+  wrap.textContent = '';
+  const add = (id, label, colour, title) => {
+    const b = document.createElement('button');
+    b.className = 'chip fol';
+    b.dataset.follow = id === null ? 'all' : String(id);
+    b.setAttribute('aria-pressed', String(cur === id));
+    if (colour) {
+      const sw = document.createElement('span');
+      sw.className = 'sw'; sw.style.background = colour;
+      b.append(sw);
+    }
+    b.append(document.createTextNode(label));
+    b.title = title;
+    b.addEventListener('click', () => setFollowId(id));
+    wrap.append(b);
+  };
+  add(null, 'all', '', 'the crop holds every tracked subject — the camera '
+    + 'follows the whole cast’s centre');
+  subs.forEach((s) => add(s.id, '#' + s.id,
+    s.palette[s.palette.length - 1],
+    `keep #${s.id} in frame for the whole clip — the camera stops at the `
+    + 'edges of the source, so it can still be cut there'));
+}
+
 function paintCanvasUI() {
   const box = $('#canvasui');
   if (!box) return;
@@ -3020,8 +3250,11 @@ function paintCanvasUI() {
   $('#vstage').dataset.canvas = t ? '1' : '0';
   $$('#framing .chip').forEach((b) => b.setAttribute(
     'aria-pressed', String(b.dataset.framing === S.canvas.follow)));
-  $('#vFraming').textContent = S.canvas.follow === 'auto'
-    ? 'auto · ' + framing() : framing();
+  const anchor = effFollowId();
+  $('#vFraming').textContent = (S.canvas.follow === 'auto'
+    ? 'auto · ' + framing() : framing())
+    + (anchor !== null && framing() === 'follow' ? ' · #' + anchor : '');
+  paintFollowPicker();
   $('#sZoom').value = String(S.canvas.zoom);
   $('#vZoom').textContent = S.canvas.zoom.toFixed(2) + '×';
   const note = $('#canvasnote');
@@ -3042,7 +3275,11 @@ function paintCanvasUI() {
       + (up > 1.05 ? ' — real footage, really upscaled.' : '.'));
     if (S.kind === 'video' && usingSubjects()) {
       lines.push(framing() === 'follow'
-        ? 'The crop follows the tracked subject, smoothed over ±15 frames.'
+        ? (anchor !== null
+          ? `The crop keeps #${anchor} whole inside the frame, smoothed over `
+            + '±15 frames, and stops at the edges of the source — where it '
+            + 'stops, the subject can still be cut.'
+          : 'The crop follows the tracked subject, smoothed over ±15 frames.')
         : 'The crop holds still on the subject’s whole-clip box; the subject '
           + 'moves inside it.');
     } else {
@@ -3056,7 +3293,9 @@ function paintCanvasUI() {
       + 'of the OUTPUT.');
     if (S.kind === 'video' && usingSubjects()) {
       lines.push(framing() === 'follow'
-        ? 'The frame follows the subject, smoothed over ±15 frames.'
+        ? (anchor !== null
+          ? `The frame keeps #${anchor} whole inside it, smoothed over ±15 frames.`
+          : 'The frame follows the subject, smoothed over ±15 frames.')
         : 'The frame holds still; the subject moves inside it.');
     }
   }
@@ -6001,8 +6240,9 @@ function resetClip() {
   // the SHAPE is kept — someone making a set of 9:16 clips should not have to
   // say so again for each one — but the hand-nudged bias and the crop path
   // belong to the source that has just gone
-  S.canvas.dx = 0; S.canvas.dy = 0;
+  S.canvas.dx = 0; S.canvas.dy = 0; S.canvas.followId = null;
   CPATH.key = null; CPATH.centers = null; CPATH.union = null;
+  CPATH.raw = null; CPATH.dkey = null; RAWS.clear();
   paintRange(); paintTrimOffer();
   $('#vidopts').hidden = true;
   showStage('empty');
@@ -6605,7 +6845,13 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
                                             w: p.w || 0, h: p.h || 0 })),
     get: () => Object.assign({}, S.canvas, {
       target: canvasTarget(), framing: framing(), clamps: canvasClamps(),
-      label: canvasLabel(), slug: canvasSlug() }),
+      label: canvasLabel(), slug: canvasSlug(),
+      /* the anchor that is actually in force — S.canvas.followId falls back to
+         "all" when the subject it names is hidden, removed or untracked */
+      anchor: effFollowId(), pickable: followPickable(),
+      picker: [...document.querySelectorAll('#followpick .chip')].map((b) => ({
+        follow: b.dataset.follow,
+        on: b.getAttribute('aria-pressed') === 'true' })) }),
     set: async (preset, opts) => {
       if (opts) Object.assign(S.canvas, opts);
       if (preset) { S.canvas.preset = preset; S.canvas.dx = 0; S.canvas.dy = 0; }
@@ -6625,10 +6871,17 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
       return p ? { k: p.k, x0: p.x0, y0: p.y0, cx: p.cx, cy: p.cy,
                    tw: p.tw, th: p.th, sw, sh } : null;
     },
+    /* anchor the camera to one tracked subject (an id) or to all of them
+       (null) — the picker and the chip's ⋯ menu both come through here */
+    follow: async (id) => { await setFollowId(id); return effFollowId(); },
     path: async () => {
       await ensureCanvasPath();
       return { n: CPATH.n, mode: framing(), union: CPATH.union,
-               centers: CPATH.centers };
+               anchor: effFollowId(), centers: CPATH.centers,
+               /* the unsmoothed measurement the centres came from: the boxes
+                  a keep-in-frame assertion needs, normalised 0..1 */
+               boxes: (CPATH.raw || []).map((p) => (p && p.ok && p.box
+                 ? [p.box.x0, p.box.y0, p.box.x1, p.box.y1] : null)) };
     },
     payload: (rng) => canvasPayload(rng),
     note: () => $('#canvasnote').textContent,

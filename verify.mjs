@@ -1787,6 +1787,124 @@ async function runCanvas(page) {
   r.overlaySheet = contactSheet(dith, [0, r.nFrames >> 1, r.nFrames - 1],
                                 path.join(DOCS, 'x-canvas-916-overlay.png'));
   await page.uncheck('#cOrig');
+
+  /* ---- the camera ANCHORED to one subject ------------------------------ *
+   * A second subject, and the crop told to keep just ONE of them in frame.
+   * On this engine the per-frame boxes come from the server's own numpy pass
+   * over the masks (GET /centroids?objs=2 is the anchor alone rather than the
+   * union), so the assertion below is the tab's geometry checked against the
+   * server's measurement, not against itself. */
+  await openStep(page, 'st2');
+  await page.click('#bAdd');
+  await sleep(400);
+  await prompt(page, SUBJECT_B);
+  r.anchorPlan = await page.evaluate(() => window.DV_subjects.plan());
+  if (JSON.stringify(r.anchorPlan.ids) !== '[2]') {
+    throw new Error('the second subject should be the plan, is '
+                    + JSON.stringify(r.anchorPlan.ids));
+  }
+  {
+    // #tinfo still carries the first run's sentence: wait for it to CHANGE
+    const was = (await page.textContent('#tinfo')) || '';
+    await page.click('#bTrack');
+    for (const t0 = Date.now(); ;) {
+      const now = (await page.textContent('#tinfo')) || '';
+      if (now !== was && /tracked|failed/.test(now)) { r.trackTwo = now; break; }
+      if (Date.now() - t0 > 300000) throw new Error('the second track never finished');
+      await sleep(500);
+    }
+  }
+  if (/failed/.test(r.trackTwo)) throw new Error(r.trackTwo);
+  r.anchorActive = await page.evaluate(() => window.DV_subjects.active());
+  if (JSON.stringify(r.anchorActive) !== '[1,2]') {
+    throw new Error('two subjects should be in the picture, are '
+                    + JSON.stringify(r.anchorActive));
+  }
+  await page.evaluate(() => window.DV_canvas.framing('follow'));
+  r.anchorAllPath = await page.evaluate(async () =>
+    (await window.DV_canvas.path()).centers);
+  r.anchorSet = await page.evaluate(() => window.DV_canvas.follow(1));
+  if (r.anchorSet !== 1) throw new Error('the anchor did not take: ' + r.anchorSet);
+  r.anchorGet = await page.evaluate(() => window.DV_canvas.get());
+  if (!r.anchorGet.pickable || r.anchorGet.picker.length !== 3) {
+    throw new Error('the picker should offer all + two subjects, offers '
+                    + JSON.stringify(r.anchorGet.picker));
+  }
+  r.anchorPath = await page.evaluate(async () =>
+    (await window.DV_canvas.path()).centers);
+  if (JSON.stringify(r.anchorPath) === JSON.stringify(r.anchorAllPath)) {
+    throw new Error('anchoring the camera to #1 did not change the path');
+  }
+  await page.screenshot({ path: path.join(DOCS, 'x-canvas-916-follow.png') });
+
+  // the server's own measurement of the anchor, asked for by id
+  const one = await (await page.request.get(
+    `${BASE}/api/jobs/${r.job}/centroids?objs=1`)).json();
+  if (JSON.stringify(one.subjects) !== '["1"]') {
+    throw new Error('/centroids?objs=1 answered for ' + JSON.stringify(one.subjects));
+  }
+  r.anchorFrames = { total: 0, inside: 0, clampedAtEdge: 0, gaps: 0, escaped: 0,
+                     worstPx: 0 };
+  for (let n = 0; n < r.nFrames; n++) {
+    const c = one.frames[n];
+    if (!c || !c.ok) { r.anchorFrames.gaps++; continue; }
+    const at = await page.evaluate((i) => window.DV_canvas.at(i), n);
+    const cw = at.tw / at.k, ch = at.th / at.k;
+    if (at.cx - cw / 2 < -0.5 || at.cx + cw / 2 > at.sw + 0.5
+        || at.cy - ch / 2 < -0.5 || at.cy + ch / 2 > at.sh + 0.5) {
+      throw new Error(`frame ${n}: the crop window left the source`);
+    }
+    r.anchorFrames.total++;
+    const x0 = c.x0 * at.sw, x1 = c.x1 * at.sw;
+    const y0 = c.y0 * at.sh, y1 = c.y1 * at.sh;
+    const inX = x0 >= at.cx - cw / 2 - 1 && x1 <= at.cx + cw / 2 + 1;
+    const inY = y0 >= at.cy - ch / 2 - 1 && y1 <= at.cy + ch / 2 + 1;
+    if (inX && inY) { r.anchorFrames.inside++; continue; }
+    /* the camera stops at the limits of the picture: a box that cannot be
+       held by ANY legal window position is the clamp doing its job */
+    const okX = x1 - x0 <= cw
+      && Math.max(x1 - cw / 2, cw / 2) <= Math.min(x0 + cw / 2, at.sw - cw / 2) + 1;
+    const okY = y1 - y0 <= ch
+      && Math.max(y1 - ch / 2, ch / 2) <= Math.min(y0 + ch / 2, at.sh - ch / 2) + 1;
+    if ((inX || !okX) && (inY || !okY)) { r.anchorFrames.clampedAtEdge++; continue; }
+    r.anchorFrames.escaped++;
+    const miss = Math.max(inX ? 0 : Math.max(at.cx - cw / 2 - x0, x1 - at.cx - cw / 2),
+                          inY ? 0 : Math.max(at.cy - ch / 2 - y0, y1 - at.cy - ch / 2));
+    r.anchorFrames.worstPx = Math.max(r.anchorFrames.worstPx, +miss.toFixed(1));
+    throw new Error(`frame ${n}: the anchored crop lost #1 by ${miss.toFixed(1)} px `
+      + `(box ${x0.toFixed(0)}..${x1.toFixed(0)} x ${y0.toFixed(0)}..${y1.toFixed(0)}, `
+      + `window ${cw.toFixed(0)}x${ch.toFixed(0)} centred ${at.cx.toFixed(0)},${at.cy.toFixed(0)})`);
+  }
+
+  /* the map that crosses the wire is the map the tab is drawing */
+  r.anchorPayload = await page.evaluate(() => window.DV_canvas.payload());
+  const at0 = await page.evaluate(() => window.DV_canvas.at(0));
+  if (r.anchorPayload.place.length !== r.nFrames) {
+    throw new Error(`the payload carries ${r.anchorPayload.place.length} placements `
+                    + `for ${r.nFrames} frames`);
+  }
+  if (Math.abs(r.anchorPayload.place[0][0] - at0.x0) > 0.01
+      || Math.abs(r.anchorPayload.place[0][1] - at0.y0) > 0.01) {
+    throw new Error('the payload disagrees with the tab about frame 0');
+  }
+  /* and the server renders it: the anchored place[] all the way to a file */
+  await openStep(page, 'st5');
+  await page.click('#bExport');
+  r.anchorRender = await waitText(page, '#rinfo', /rendered|failed/, 300000);
+  if (/failed/.test(r.anchorRender)) throw new Error(r.anchorRender);
+  r.anchorProbe = ffprobeFull(path.join(HERE, 'jobs', r.job, 'out.mp4'));
+  if (+r.anchorProbe.width !== 1080 || +r.anchorProbe.height !== 1920) {
+    throw new Error(`the anchored render is ${r.anchorProbe.width}×${r.anchorProbe.height}`);
+  }
+
+  await page.evaluate(() => window.DV_canvas.follow(null));
+  r.anchorBack = await page.evaluate(async () =>
+    (await window.DV_canvas.path()).centers);
+  if (JSON.stringify(r.anchorBack) !== JSON.stringify(r.anchorAllPath)) {
+    throw new Error('“all” did not reproduce the path it had before the anchor');
+  }
+  await page.evaluate(() => window.DV_subjects.remove(2));
+  await sleep(900);
   await page.evaluate(() => window.DV_canvas.framing('auto'));
 
   /* ---- the sequence has a frame size of its own ------------------------- */
@@ -2109,7 +2227,12 @@ console.log(JSON.stringify(R, null, 1));
 // The report is committed as evidence, so it must not carry this machine's
 // home directory around in it: every absolute path under the checkout is
 // rewritten to a repo-relative one on the way out.
-fs.writeFileSync(path.join(DOCS, 'verify-report.json'),
+/* A DV_ONLY run is a subset, so it writes a subset report. It used to write
+ * over docs/verify-report.json, which is committed evidence for the WHOLE
+ * suite -- one narrow re-run and the evidence was gone. (verify-web.mjs has
+ * had this guard for a while; this is the other half of it.) */
+fs.writeFileSync(path.join(DOCS, ONLY.length
+  ? `verify-report.${ONLY.join('-')}.json` : 'verify-report.json'),
   JSON.stringify(R, null, 1).split('file://' + HERE + '/').join('')
                              .split(HERE + '/').join(''));
 process.exit(R.fatal || R.consoleErrors.length || R.pageErrors.length ? 1 : 0);

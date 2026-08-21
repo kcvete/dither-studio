@@ -772,8 +772,39 @@ The path itself is a mask centroid per frame, **smoothed with a gaussian over
 jittery per-frame centroid into a camera move. Frames where the subject is not
 in shot are filled from their neighbours rather than dragging the crop home and
 back. On the server the centroids come from one request
-(`GET /api/jobs/<id>/centroids`, every frame in one numpy pass); in the tab the
-same walk happens over the mask logits already in memory.
+(`GET /api/jobs/<id>/centroids`, every frame in one numpy pass — asked with
+`?objs=` for whichever subjects the camera is holding, so an anchored path
+costs the same one request); in the tab the same walk happens over the mask
+logits already in memory. The measurements are cached per subject set, so
+switching the anchor back and forth does not re-walk anything.
+
+**Follow one subject, not the crowd.** With two or more tracked subjects a
+`follow: all · #1 · #2` picker appears under the framing chips, in the
+subjects' own colours (the same switch is an entry in each chip's ⋯ menu,
+"follow with the camera"). `all` is what the tool always did — the union's
+centroid, smoothed. Pick a subject and the camera is **anchored** to it, and it
+stops chasing a point: per frame the crop centre is the *smallest* move from
+where the camera was last frame that puts that subject's whole mask **box**
+inside the window. While the subject is comfortably inside, the camera does not
+move at all; the moment an edge of the box touches an edge of the window it
+moves exactly enough to keep it there. Then the same ±15-frame smooth, then a
+correction pass — a gaussian can hand back a centre a few pixels short of where
+the box needs it on a fast move — and finally the same clamp to the source. So
+the camera tracks **to the limits of the video**: at the edge of the picture it
+stops, and the subject can be cut there, because there is nothing further left
+to pan to. A subject bigger than the window in an axis is centred in that axis.
+Frames where the anchor has no mask hold the last position rather than jumping
+back to the crowd; an anchor that is hidden, removed or never tracked falls
+back to `all`. Video only — a still has no path. Measured in
+`docs/verify-web-report.followAnchor-canvasBrowser.json` (flow `followAnchor`;
+`docs/verify-report.canvas.json` is the server half): over 150 frames of the
+reference clip, the anchor's box is whole inside the crop on **140** of them
+and **clamped at the edge of the source** on the other 10, with **0** frames
+where a legal window position existed and the camera missed it. Without the
+keep-in-frame pass — a plain smoothed centroid — the same clip loses the box on
+**16** frames.
+
+![the anchor picker, following #2](docs/ux-after/follow-anchor-2.png)
 
 **Drag the picture** on a paused frame to bias it. The nudge is stored as a
 fraction of the source and *added* to the smoothed path, so a followed subject
@@ -1709,6 +1740,13 @@ in the tab by walking 150 frames of mask logits, the preview canvas at
 reports, the file named `sample-dots-9x16.original.webm`, a hand-nudge moving
 the crop by the fraction it was given, and a sequence re-fitted to 4:5.
 
+A flow of its own takes the **camera anchored to one subject**: two subjects
+tracked in the tab, a clamped 9:16 overlay crop, and the assertion is per frame
+and geometric — the anchor's own mask box inside the crop window on every frame
+where a legal window position exists, the window itself never outside the
+source, the two anchors producing two different journeys, `all` reproducing the
+path it had before anything was anchored, and the whole thing exporting.
+
 Its flagship run is the **sequence
 view**: four items added through the UI the way a person would — a subject
 tracked in one clip, a subject tracked in a second clip, a subject cut out of a
@@ -1765,6 +1803,8 @@ Chromium with a real WebGPU adapter), 150-frame 1280×720 clip:
 | canvas: 9:16 overlay + cut | both 1080×1920, both 60 frames, both `30/1`; forced to follow, the crop travelled **49.1 px** against the subject's **53.7** and never missed it by more than **3.2 px** of a 405 px window |
 | canvas: in the tab | the crop path built from **150 frames** of mask logits in **2.0 s**, preview canvas 1080×1920, the pair written at 1080×1920 / 150 frames each |
 | canvas: auto framing | the 5 s clip answers **follow** at 9:16 (the subject's box spans 592 px of a 405 px window) and the 2 s window answers **hold still** |
+| canvas: anchored to one subject, tab | 150 frames at 9:16, anchor #1: box whole inside the crop on **140**, **clamped at the edge of the source** on 10, **0** missed where a legal window existed; at 1.4× (a 289×514 window) **114** inside, 36 too big to hold and centred, still **0** missed; anchor #2 **73/73** on the frames it has a mask; `all` reproduces the pre-anchor path exactly. A plain smoothed centroid loses the box on **16** of the 150 |
+| canvas: anchored to one subject, server | `GET /centroids?objs=1` is the anchor alone; **60/60** frames whole inside the crop, the window never leaves the source, the `place[]` payload agrees with the tab on frame 0 and the server render comes out 1080×1920 / 60 frames |
 | still: 14 kernels | **14 distinct** images, no two kernels alike |
 | still: subject, server | one frame, **0.09 s** at 768 px, a 12,750 px mask, no propagation |
 | still: subject, browser | one frame, **0.08 s** at 768 px, a 12,654 px mask, WebGPU fp16 |

@@ -34,6 +34,9 @@
  *       the crop path built in the tab from the mask logits, the dots
  *       re-measured at 1080x1920, the matched original cut on the same path,
  *       the .dots.gz carrying the new frame, and a sequence at 4:5
+ *   WF  browser · the camera ANCHORED to one tracked subject: two subjects, a
+ *       clamped 9:16 overlay crop, and the anchor's own mask box asserted
+ *       inside the crop window on every frame the source allows it
  *   W8  the SEQUENCE view: four items added through the UI (two clips, a still
  *       cutout, a shape), per-item trims and colours, three transition kinds,
  *       drag-reorder, preview, .dots.gz and an MP4 off the server
@@ -2360,6 +2363,295 @@ async function runCanvasBrowser() {
   return r;
 }
 
+/* ======= WF: the camera anchored to ONE subject =========================
+ * The auto-reframe has always followed the whole cast: the union's centroid,
+ * smoothed. This is the other thing people want out of a 16:9 -> 9:16 crop —
+ * pick ONE tracked subject and keep it in frame for the whole clip, as far as
+ * the source allows.
+ *
+ * Two subjects on the reference clip (the athlete, who moves; the tree on the
+ * right edge, which does not and which sits hard against the limit of the
+ * frame), an overlay 9:16 crop so the window really is clamped inside the
+ * source, and the assertion is per frame and geometric: the anchor's own mask
+ * box is INSIDE the crop window on every frame where a legal window position
+ * exists, and the window itself never leaves the source. Where no legal
+ * position exists — the subject is against the edge of the picture and the
+ * camera has run out of room — the frame is counted, not excused silently.
+ */
+async function runFollowAnchor() {
+  const r = {};
+  const { ctx, page } = await newPage(browserPref());
+  await loadClip(page, CLIP, BR.seconds);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+
+  await promptBoxPoint(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.trackOne = await waitText(page, '#tinfo', /tracked|failed/, 900000);
+  check('follow · the first subject tracks', !/failed/.test(r.trackOne), r.trackOne);
+  await openStep(page, 'st2');
+  await page.click('#bAdd'); await sleep(400);
+  await promptBoxPoint(page, SUBJECT_B);
+  r.plan = await page.evaluate(() => window.DV_subjects.plan());
+  check('follow · the second subject is the one that would be tracked',
+        JSON.stringify(r.plan.ids) === '[2]', JSON.stringify(r.plan));
+  /* #tinfo still carries the FIRST run's sentence, so waiting for
+     /tracked|failed/ would match it instantly — wait for it to change */
+  const was = (await page.textContent('#tinfo')) || '';
+  await page.click('#bTrack');
+  for (let t = Date.now(); ;) {
+    const now = (await page.textContent('#tinfo')) || '';
+    if (now !== was && /tracked|failed/.test(now)) { r.trackTwo = now; break; }
+    if (Date.now() - t > 900000) throw new Error('the second track never finished');
+    await sleep(500);
+  }
+  check('follow · the second subject tracks', !/failed/.test(r.trackTwo), r.trackTwo);
+  r.active = await page.evaluate(() => window.DV_subjects.active());
+  check('follow · two subjects are in the picture',
+        JSON.stringify(r.active) === '[1,2]', JSON.stringify(r.active));
+
+  /* real footage on screen, so the crop is clamped inside the source — which
+   * is the case the whole feature is about */
+  await openStep(page, 'st3');
+  await page.click('#composeui .chip[data-compose="overlay"]'); await sleep(400);
+  await setMode(page, 'ordered');
+  r.canvas = await page.evaluate(() => window.DV_canvas.set('9:16'));
+  check('follow · 9:16 is 1080×1920 with a clamped crop',
+        r.canvas.target.w === 1080 && r.canvas.target.h === 1920 && r.canvas.clamps,
+        JSON.stringify(r.canvas.target) + ' clamps=' + r.canvas.clamps);
+  await page.evaluate(() => window.DV_canvas.framing('follow'));
+
+  /* ---- 1. the picker only exists when there is something to pick ------- */
+  r.pickAll = await page.evaluate(() => window.DV_canvas.get());
+  check('follow · the anchor defaults to all of them', r.pickAll.anchor === null,
+        String(r.pickAll.anchor));
+  check('follow · the picker offers all + one chip per subject',
+        r.pickAll.pickable
+        && JSON.stringify(r.pickAll.picker.map((p) => p.follow)) === '["all","1","2"]'
+        && r.pickAll.picker[0].on,
+        JSON.stringify(r.pickAll.picker));
+  await page.screenshot({ path: path.join(AFTER, 'follow-picker-all.png') });
+
+  /* the union path, before anything is anchored — this has to come back
+     byte for byte when the anchor is put back to "all" */
+  r.pathAll = await page.evaluate(async () => {
+    const p = await window.DV_canvas.path();
+    return { n: p.n, mode: p.mode, anchor: p.anchor, centers: p.centers };
+  });
+  check('follow · the union path has a centre per frame',
+        r.pathAll.n === r.nFrames && r.pathAll.centers.length === r.nFrames,
+        `${r.pathAll.n}/${r.pathAll.centers.length} vs ${r.nFrames}`);
+
+  /* ---- 2. anchor the camera to #2 -------------------------------------- */
+  r.anchored = await page.evaluate(() => window.DV_canvas.follow(2));
+  check('follow · the camera anchors to #2', r.anchored === 2, String(r.anchored));
+  r.get2 = await page.evaluate(() => window.DV_canvas.get());
+  check('follow · the picker moves to #2 and nothing else is lit',
+        r.get2.anchor === 2 && r.get2.picker[2].on
+        && r.get2.picker.filter((p) => p.on).length === 1,
+        JSON.stringify(r.get2.picker));
+  r.framingLabel = await page.textContent('#vFraming');
+  check('follow · the framing readout names the anchor',
+        /#2/.test(r.framingLabel), r.framingLabel);
+  r.note = await page.evaluate(() => window.DV_canvas.note());
+  check('follow · the note says what anchoring does', /#2/.test(r.note), r.note);
+  await page.evaluate(() => window.DV_draw(0)); await sleep(500);
+  await page.screenshot({ path: path.join(AFTER, 'follow-anchor-2.png') });
+
+  r.path2 = await page.evaluate(async () => {
+    const p = await window.DV_canvas.path();
+    return { n: p.n, mode: p.mode, anchor: p.anchor, centers: p.centers,
+             boxes: p.boxes };
+  });
+  check('follow · anchoring to #2 built a different path',
+        JSON.stringify(r.path2.centers) !== JSON.stringify(r.pathAll.centers));
+
+  /* ---- 3. per frame: the anchor's box is inside the crop window -------- */
+  const plans = [];
+  for (let i = 0; i < r.nFrames; i++) {
+    plans.push(await page.evaluate((n) => window.DV_canvas.at(n), i));
+  }
+  r.containment = await page.evaluate(([boxes, ats]) => {
+    const out = { frames: 0, inside: 0, clampedAtEdge: 0, gaps: 0,
+                  escapedX: 0, escapedY: 0, worst: 0, outsideSource: 0,
+                  edges: [] };
+    boxes.forEach((b, i) => {
+      const at = ats[i];
+      if (!at) return;
+      const cw = at.tw / at.k, ch = at.th / at.k;
+      // the window never leaves the source, on any frame, box or no box
+      if (at.cx - cw / 2 < -0.5 || at.cx + cw / 2 > at.sw + 0.5
+          || at.cy - ch / 2 < -0.5 || at.cy + ch / 2 > at.sh + 0.5) {
+        out.outsideSource++;
+      }
+      if (!b) { out.gaps++; return; }
+      out.frames++;
+      const x0 = b[0] * at.sw, y0 = b[1] * at.sh;
+      const x1 = b[2] * at.sw, y1 = b[3] * at.sh;
+      const inX = x0 >= at.cx - cw / 2 - 0.5 && x1 <= at.cx + cw / 2 + 0.5;
+      const inY = y0 >= at.cy - ch / 2 - 0.5 && y1 <= at.cy + ch / 2 + 0.5;
+      if (inX && inY) { out.inside++; return; }
+      /* is there ANY legal window position that would have held it? the crop
+         has to stay inside the source, so the answer is an interval test */
+      const okX = x1 - x0 <= cw
+        && Math.max(x1 - cw / 2, cw / 2) <= Math.min(x0 + cw / 2, at.sw - cw / 2) + 0.5;
+      const okY = y1 - y0 <= ch
+        && Math.max(y1 - ch / 2, ch / 2) <= Math.min(y0 + ch / 2, at.sh - ch / 2) + 0.5;
+      if ((inX || !okX) && (inY || !okY)) {
+        out.clampedAtEdge++;
+        out.edges.push(i);
+        return;
+      }
+      if (!inX && okX) out.escapedX++;
+      if (!inY && okY) out.escapedY++;
+      const miss = Math.max(inX ? 0 : Math.max(at.cx - cw / 2 - x0, x1 - at.cx - cw / 2),
+                            inY ? 0 : Math.max(at.cy - ch / 2 - y0, y1 - at.cy - ch / 2));
+      out.worst = Math.max(out.worst, +miss.toFixed(1));
+    });
+    out.edges = out.edges.slice(0, 12);
+    return out;
+  }, [r.path2.boxes, plans]);
+  check('follow · the crop window never leaves the source',
+        r.containment.outsideSource === 0, JSON.stringify(r.containment));
+  check('follow · #2 is whole inside the frame on every frame the source allows',
+        r.containment.escapedX === 0 && r.containment.escapedY === 0,
+        JSON.stringify(r.containment));
+  check('follow · and it was measured on real frames',
+        r.containment.frames > 10, JSON.stringify(r.containment));
+
+  /* ---- 4. the other anchor is a different journey again --------------- */
+  r.anchor1 = await page.evaluate(() => window.DV_canvas.follow(1));
+  r.path1 = await page.evaluate(async () => {
+    const p = await window.DV_canvas.path();
+    return { anchor: p.anchor, centers: p.centers, boxes: p.boxes };
+  });
+  check('follow · anchoring to #1 is a different path again',
+        r.anchor1 === 1
+        && JSON.stringify(r.path1.centers) !== JSON.stringify(r.path2.centers));
+  const plans1 = [];
+  for (let i = 0; i < r.nFrames; i++) {
+    plans1.push(await page.evaluate((n) => window.DV_canvas.at(n), i));
+  }
+  r.containment1 = await page.evaluate(([boxes, ats]) => {
+    let frames = 0, inside = 0, edge = 0, escaped = 0;
+    boxes.forEach((b, i) => {
+      const at = ats[i];
+      if (!b || !at) return;
+      frames++;
+      const cw = at.tw / at.k, ch = at.th / at.k;
+      const x0 = b[0] * at.sw, y0 = b[1] * at.sh;
+      const x1 = b[2] * at.sw, y1 = b[3] * at.sh;
+      const inX = x0 >= at.cx - cw / 2 - 0.5 && x1 <= at.cx + cw / 2 + 0.5;
+      const inY = y0 >= at.cy - ch / 2 - 0.5 && y1 <= at.cy + ch / 2 + 0.5;
+      if (inX && inY) { inside++; return; }
+      const okX = x1 - x0 <= cw
+        && Math.max(x1 - cw / 2, cw / 2) <= Math.min(x0 + cw / 2, at.sw - cw / 2) + 0.5;
+      const okY = y1 - y0 <= ch
+        && Math.max(y1 - ch / 2, ch / 2) <= Math.min(y0 + ch / 2, at.sh - ch / 2) + 0.5;
+      if ((inX || !okX) && (inY || !okY)) edge++; else escaped++;
+    });
+    return { frames, inside, edge, escaped };
+  }, [r.path1.boxes, plans1]);
+  check('follow · #1 is whole inside the frame wherever the source allows',
+        r.containment1.escaped === 0, JSON.stringify(r.containment1));
+  await page.evaluate(() => window.DV_draw(0)); await sleep(500);
+  await page.screenshot({ path: path.join(AFTER, 'follow-anchor-1.png') });
+
+  /* ---- 4b. the same anchor through a TIGHT window -------------------- *
+   * At 1x the 405x720 window has a hundred pixels of slack around the
+   * athlete and a merely-smoothed centroid would mostly get away with it.
+   * Zoomed to 1.4x the window is 289x514 against a box that is most of it,
+   * and keeping the whole box in shot is the only thing that works. */
+  r.zoom = await page.evaluate(() => window.DV_canvas.set(null, { zoom: 1.4 }));
+  const plansZ = [];
+  for (let i = 0; i < r.nFrames; i++) {
+    plansZ.push(await page.evaluate((n) => window.DV_canvas.at(n), i));
+  }
+  r.pathZ = await page.evaluate(async () => {
+    const p = await window.DV_canvas.path();
+    return { centers: p.centers, boxes: p.boxes };
+  });
+  r.containmentZ = await page.evaluate(([boxes, ats]) => {
+    let frames = 0, inside = 0, edge = 0, escaped = 0, worst = 0, tooBig = 0;
+    let cw = 0, ch = 0;
+    boxes.forEach((b, i) => {
+      const at = ats[i];
+      if (!b || !at) return;
+      frames++;
+      cw = at.tw / at.k; ch = at.th / at.k;
+      const x0 = b[0] * at.sw, y0 = b[1] * at.sh;
+      const x1 = b[2] * at.sw, y1 = b[3] * at.sh;
+      if (x1 - x0 > cw || y1 - y0 > ch) tooBig++;
+      const inX = x0 >= at.cx - cw / 2 - 0.5 && x1 <= at.cx + cw / 2 + 0.5;
+      const inY = y0 >= at.cy - ch / 2 - 0.5 && y1 <= at.cy + ch / 2 + 0.5;
+      if (inX && inY) { inside++; return; }
+      const okX = x1 - x0 <= cw
+        && Math.max(x1 - cw / 2, cw / 2) <= Math.min(x0 + cw / 2, at.sw - cw / 2) + 0.5;
+      const okY = y1 - y0 <= ch
+        && Math.max(y1 - ch / 2, ch / 2) <= Math.min(y0 + ch / 2, at.sh - ch / 2) + 0.5;
+      if ((inX || !okX) && (inY || !okY)) { edge++; return; }
+      escaped++;
+      worst = Math.max(worst, +Math.max(
+        inX ? 0 : Math.max(at.cx - cw / 2 - x0, x1 - at.cx - cw / 2),
+        inY ? 0 : Math.max(at.cy - ch / 2 - y0, y1 - at.cy - ch / 2)).toFixed(1));
+    });
+    return { frames, inside, edge, escaped, worst, tooBig,
+             window: [Math.round(cw), Math.round(ch)] };
+  }, [r.pathZ.boxes, plansZ]);
+  check('follow · a 1.4× window still holds #1 wherever the source allows',
+        r.containmentZ.escaped === 0, JSON.stringify(r.containmentZ));
+  await page.evaluate(() => window.DV_draw(0)); await sleep(500);
+  await page.screenshot({ path: path.join(AFTER, 'follow-tight.png') });
+  await page.evaluate(() => window.DV_canvas.set(null, { zoom: 1 }));
+
+  /* ---- 5. 'all' reproduces exactly what it was before ----------------- */
+  r.backToAll = await page.evaluate(() => window.DV_canvas.follow(null));
+  r.pathBack = await page.evaluate(async () => {
+    const p = await window.DV_canvas.path();
+    return { anchor: p.anchor, centers: p.centers };
+  });
+  check('follow · putting it back to all reproduces the old path exactly',
+        r.backToAll === null
+        && JSON.stringify(r.pathBack.centers) === JSON.stringify(r.pathAll.centers));
+
+  /* ---- 6. the ⋯ menu is the second way in ----------------------------- */
+  r.menu = await page.evaluate(() => window.DV_subjects.menu(2));
+  check('follow · the subject menu offers the camera anchor',
+        r.menu.some((x) => /follow with the camera/.test(x)),
+        JSON.stringify(r.menu));
+  await page.screenshot({ path: path.join(AFTER, 'follow-menu.png') });
+  await page.evaluate(() => window.DV_subjects.closeMenu());
+
+  /* ---- 7. one subject: nothing to pick -------------------------------- */
+  await page.evaluate(() => window.DV_canvas.follow(2));
+  await page.evaluate(() => window.DV_subjects.remove(1));
+  await sleep(1200);
+  r.onePicker = await page.evaluate(() => window.DV_canvas.get());
+  check('follow · one tracked subject offers no picker at all',
+        !r.onePicker.pickable && r.onePicker.picker.length === 0,
+        JSON.stringify(r.onePicker.picker));
+  r.oneAnchor = r.onePicker.anchor;
+  check('follow · and the surviving subject is still the anchor',
+        r.oneAnchor === 2, String(r.oneAnchor));
+
+  /* ---- 8. and an anchored path exports ------------------------------- */
+  await openStep(page, 'st5');
+  await page.check('#cOrig');
+  await page.click('#bExport');
+  r.export = await waitText(page, '#rinfo', /original cut|failed/, 1800000);
+  check('follow · an anchored 9:16 pair exports', !/failed/.test(r.export), r.export);
+  const out = path.join(DOCS, 'w-follow-anchor.webm');
+  r.bytes = await saveDownload(page, out);
+  r.probe = r.bytes ? probe(out) : null;
+  check('follow · the export is the canvas, every frame of it',
+        r.probe && +r.probe.width === 1080 && +r.probe.height === 1920,
+        JSON.stringify(r.probe));
+  await page.screenshot({ path: path.join(AFTER, 'follow-export.png') });
+
+  await ctx.close();
+  return r;
+}
+
 /* ================================== K: the optional bearer-token gate ======== */
 async function runApiKey() {
   const r = {};
@@ -3330,6 +3622,7 @@ try {
   await run('dotsRemote', runDots, 'remote');
   await run('dotsBrowser', runDots, 'browser');
   await run('canvasBrowser', runCanvasBrowser);
+  await run('followAnchor', runFollowAnchor);
   await run('sequence', runSequence);
   await run('seqItemLook', runSeqItemLook);
   await run('seqPixel', runSeqPixel);
