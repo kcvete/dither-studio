@@ -112,6 +112,14 @@ const S = {
    * native-resolution export and the server are three different grids. */
   canvas: { preset: 'source', w: 1080, h: 1920, follow: 'auto', zoom: 1,
             dx: 0, dy: 0 },
+  /* THE WORKSPACE. `zoom` is a pure CSS transform on the stage content -- it
+   * never touches a backing store, and every coordinate in the app already
+   * goes through getBoundingClientRect(), which reports the TRANSFORMED rect,
+   * so a click still lands on the same source pixel. `sources` is the session
+   * tray: one entry per thing opened, newest last, so re-opening is one tap.
+   * (The sequence `library` is a different pool -- dot clouds people CAPTURED,
+   * not files they opened.) */
+  zoom: 1, sources: [], traySel: null,
 };
 const E = () => S.engine;
 
@@ -137,6 +145,12 @@ function showStage(which) {
   $('#camwrap').hidden = which !== 'camera';
   $('#seqwrap').hidden = which !== 'sequence';
   $('#empty').hidden = which !== 'empty';
+  // the toolbar and the tray belong to a picture, not to the landing
+  const onPix = which === 'result' || which === 'prompt';
+  $('#cbar').hidden = !onPix;
+  $('#bCmp').hidden = which !== 'result';
+  if (!onPix) closeStats();
+  paintTray(); paintInfo();
   // the hero demo runs only while the landing is what is on stage
   if (typeof HERO !== 'undefined' && HERO) {
     if (which === 'empty'
@@ -260,7 +274,9 @@ function paintEstimate() {
 
 function take(f) {
   stop();                       // whatever was playing belongs to the old source
+  setZoom(1);                   // a new picture starts at its own size
   const isVid = /^video\//.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name);
+  trayTake(f, isVid ? 'video' : 'image');
   $('#vidopts').hidden = !isVid;
   $('#trimui').hidden = true;
   if (!isVid) { S.srcFile = null; return loadStill(f); }
@@ -368,6 +384,7 @@ async function buildStrip(file) {
       g.drawImage(v, (tw - vw * k) / 2 + i * tw, (th - vh * k) / 2, vw * k, vh * k);
     }
     $('#trimnote').textContent = '';
+    trayThumb(cv, 0, 0, Math.floor(cv.width / nThumbs), cv.height);
   } catch (err) {
     $('#trimnote').textContent = 'no filmstrip for this file (' + err.message
       + ') — the trim handles still work';
@@ -824,6 +841,7 @@ async function loadStill(f) {
   box.textContent = 'reading ' + f.name + '…';
   try {
     const bmp = await createImageBitmap(f);
+    trayThumb(bmp, 0, 0, bmp.width, bmp.height);
     S.kind = 'image'; S.bitmap = bmp; S.natW = bmp.width; S.natH = bmp.height;
     S.fileName = f.name.replace(/\.[^.]+$/, '');
     S.tracked = false; S.subjects = []; S.nextId = 1; S.scope = 'whole';
@@ -1824,6 +1842,7 @@ async function track() {
   btn.dataset.running = '1';
   btn.textContent = 'tracking…';
   $('#tinfo').hidden = true; $('#tinfo').textContent = '';
+  hideSlowHint();               // whatever the last run said belongs to the last run
   const prog = $('#prog'); prog.hidden = false;
   const bar = $('.bar i', prog), lab = $('span', prog);
   bar.style.width = '0%';
@@ -1852,6 +1871,9 @@ async function track() {
           + (left > 1 ? ` · ≈ ${fmtDur(left)} left` : '');
         btn.textContent = p.total
           ? `tracking · ${p.done}/${p.total}` : 'tracking…';
+        // the free tier is the slow one: say where the fast one is, once,
+        // and never interrupt the run to do it
+        if (el > 5 && p.done > 0) slowHint(left, p.done / el);
         if (streamed && p.done > 2) {
           const now = performance.now();
           if (now - TSTREAM.at > 350) {
@@ -1862,7 +1884,7 @@ async function track() {
           }
         }
       });
-    prog.hidden = true; S.tracked = true;
+    prog.hidden = true; S.tracked = true; hideSlowHint();
     const spread = new Set(S.subjects.map(frameOf));
     const box = $('#tinfo'); box.hidden = false; box.classList.remove('err');
     box.textContent = `tracked ${st.frames} frames in ${st.elapsedS.toFixed(1)} s `
@@ -1886,7 +1908,7 @@ async function track() {
     await draw(activeRange().in);
     play();
   } catch (err) {
-    prog.hidden = true;
+    prog.hidden = true; hideSlowHint();
     const box = $('#tinfo'); box.hidden = false; box.classList.add('err');
     box.textContent = 'track failed: ' + why(err);
     backToPrompt();
@@ -6057,6 +6079,9 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
     payload: (rng) => canvasPayload(rng),
     note: () => $('#canvasnote').textContent,
   };
+  /* Simulate a slow run so the hint can be asserted without waiting minutes
+   * for a real one. Returns whether the hint is now up. */
+  window.DV_slowHint = (etaSec, fps) => slowHint(etaSec, fps);
   window.DV_setFormat = (id) => {
     S.format = id; $('#sFmt').value = id; paintFormat();
     return currentFormat();
@@ -6064,6 +6089,347 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
   initHero();
   window.DV_ready = true;
 })();
+
+/* ==================================================== the workspace =======
+ * Three columns on a desktop: the controls rail on the left (unchanged), the
+ * picture in the middle with its own toolbar, trim bar and media tray under
+ * it, and a column of READOUTS on the right. Below 1024 px the right column
+ * folds under the stage; below 768 px it goes away and the toolbar's facts
+ * button carries the same lines. Everything here is additive: no id moves
+ * except #bCmp and #gcbar, which moved WITH their ids, and no state renames.
+ * (docs/ux-spec.md 2.1, 2.2, 4.1)
+ */
+
+/* ---------------------------------------------------------------- zoom ----
+ * A CSS transform on #pstage / #vstage and nothing else. povXY(), the canvas
+ * drag and the compare wipe all measure with getBoundingClientRect(), which
+ * returns the transformed rect, so every coordinate keeps mapping to the same
+ * source pixel at any zoom. At 100% the class is off and there is literally
+ * no transform in the tree. */
+const ZSTEPS = [1, 1.25, 1.5, 2, 2.5, 3, 4];
+const ZMAX = ZSTEPS[ZSTEPS.length - 1], ZMIN = ZSTEPS[0];
+function setZoom(z) {
+  S.zoom = clamp(+z || 1, ZMIN, ZMAX);
+  const st = $('#stage');
+  st.style.setProperty('--zoom', S.zoom.toFixed(3));
+  st.classList.toggle('zoomed', S.zoom !== 1);
+  const lbl = $('#zlbl');
+  if (lbl) lbl.textContent = Math.round(S.zoom * 100) + '%';
+  const out = $('#bZoomOut'), inn = $('#bZoomIn');
+  if (out) out.disabled = S.zoom <= ZMIN;
+  if (inn) inn.disabled = S.zoom >= ZMAX;
+}
+const zStep = (d) => {
+  const i = ZSTEPS.findIndex((v) => Math.abs(v - S.zoom) < 1e-3);
+  if (i >= 0) return ZSTEPS[clamp(i + d, 0, ZSTEPS.length - 1)];
+  return d > 0 ? (ZSTEPS.find((v) => v > S.zoom) || ZMAX)
+               : ([...ZSTEPS].reverse().find((v) => v < S.zoom) || ZMIN);
+};
+$('#bZoomIn') && $('#bZoomIn').addEventListener('click', () => setZoom(zStep(1)));
+$('#bZoomOut') && $('#bZoomOut').addEventListener('click', () => setZoom(zStep(-1)));
+$('#bZoomFit') && $('#bZoomFit').addEventListener('click', () => setZoom(1));
+
+/* ------------------------------------------------------------ download ----
+ * The same path the Export step's button takes -- or, when a file is already
+ * rendered, the link that holds it. */
+$('#bDl') && $('#bDl').addEventListener('click', () => {
+  if (S.view === 'sequence') { openStep(4); $('#bSeqPrev').scrollIntoView({ block: 'nearest' }); return; }
+  openStep(5);
+  if (window.DV_sheet && window.matchMedia('(max-width: 767px)').matches) {
+    window.DV_sheet('half');
+  }
+  const dl = $('#dl');
+  if (dl && !dl.hidden) {
+    dl.scrollIntoView({ block: 'nearest' });
+    dl.focus({ preventScroll: true });
+    toast('the file is ready — “download” in Export');
+    return;
+  }
+  const b = $('#bExport');
+  if (b && !b.disabled) b.click();
+});
+
+/* -------------------------------------------------------- the facts pop ---
+ * The same lines the info column carries, for the widths that have no info
+ * column. One popover, dismissed by anything else. */
+function closeStats() {
+  const p = $('#statspop');
+  if (!p || p.hidden) return;
+  p.hidden = true;
+  $('#bStats').setAttribute('aria-expanded', 'false');
+}
+$('#bStats') && $('#bStats').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const p = $('#statspop');
+  if (!p.hidden) return closeStats();
+  p.hidden = false;                 // paintInfo() only fills a pop that is up
+  $('#bStats').setAttribute('aria-expanded', 'true');
+  paintInfo();
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('#statspop') && !e.target.closest('#bStats')) closeStats();
+}, true);
+
+/* --------------------------------------------------------- the readouts ---
+ * Facts, not controls. Everything here is derived: clipEstimate() for the
+ * arithmetic, the engine object for who is answering, S.subjects for what is
+ * selected, and the two progress lines the run itself writes. */
+const esc = (t) => String(t).replace(/[&<>]/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const row = (k, v, cls) => `<div class="r"><span>${esc(k)}</span>`
+  + `<b class="${cls || ''}">${v}</b></div>`;
+
+/** Is anything actually open? `S.kind` is 'none' until a file lands. */
+const haveSource = () => S.kind === 'image' ? !!S.bitmap
+  : S.kind === 'video' ? !!(S.srcFile || S.nFrames) : false;
+
+function factsHTML() {
+  if (!haveSource()) return '<em>nothing open yet</em>';
+  const out = [];
+  if (S.fileName) out.push(row('source', esc(S.fileName)));
+  if (S.kind === 'image') {
+    out.push(row('pixels', `${S.natW} × ${S.natH}`));
+    out.push(row('stays', 'in this tab'));
+    return out.join('');
+  }
+  let e = null;
+  try { e = clipEstimate(); } catch (err) { e = null; }
+  if (e) {
+    out.push(row('length', `${e.secs.toFixed(1)} s`));
+    out.push(row('frames', `${e.n} @ ${DECODE_FPS} fps`));
+    out.push(row('pixels', `${e.w} × ${e.h}`));
+    const browser = E().id === 'browser';
+    out.push(row(browser ? 'in this tab' : 'on the server',
+                 fmtBytes(browser ? e.tabBytes : e.jpeg)));
+    if (e.trackS) {
+      out.push(row('tracking ≈', fmtDur(e.trackS)
+        + (e.quality ? ` · ${esc(e.quality)}` : '')));
+    }
+  }
+  if (S.nFrames) {
+    const r = (typeof activeRange === 'function') ? activeRange() : null;
+    out.push(row('on disk', `${S.nFrames} frames`));
+    if (r && !r.whole) out.push(row('range', `${r.in}–${r.out}`, 'warn'));
+  }
+  const w = $('#estwarn'), l = $('#estlong');
+  if (w && !w.hidden && w.textContent) {
+    out.push(`<div class="warn" style="margin-top:6px">${esc(w.textContent)}</div>`);
+  } else if (l && !l.hidden && l.textContent) {
+    out.push(`<div style="margin-top:6px;opacity:.55">${esc(l.textContent)}</div>`);
+  }
+  return out.join('') || '<em>nothing open yet</em>';
+}
+
+function engineHTML() {
+  const e = E();
+  if (!e) return '<em>starting…</em>';
+  const out = [`<div><span class="dot"></span><b>${esc(e.label)}</b>`
+    + (e.sublabel ? ` <span style="opacity:.5">${esc(e.sublabel)}</span>` : '')
+    + '</div>'];
+  const t = (S.meta && S.meta.track_sizes || []).find((x) => x.size === S.trackSize);
+  if (t) {
+    out.push(row('detail', `${esc(tqName(t))} · ${t.size} px`));
+    if (t.fps) out.push(row('tracker', `${t.fps} fps`));
+  }
+  return out.join('');
+}
+
+function subsHTML() {
+  if (!haveSource()) return '<em>nothing open yet</em>';
+  const whole = S.scope !== 'track';
+  if (whole) return `<em>${S.kind === 'image' ? 'the whole image' : 'the whole clip'}</em>`;
+  const n = S.subjects.length;
+  const out = [row('subjects', `${n} / 6`)];
+  S.subjects.forEach((sub) => {
+    const f = (typeof frameOf === 'function') ? frameOf(sub) : 0;
+    out.push(row('#' + sub.id, S.kind === 'image' ? 'this frame' : '@ ' + f));
+  });
+  out.push(`<div style="margin-top:5px;opacity:.55">`
+    + (S.tracked ? 'tracked' : 'not tracked yet') + '</div>');
+  return out.join('');
+}
+
+function progHTML() {
+  const bits = [];
+  const live = (sel) => {
+    const p = $(sel);
+    if (!p || p.hidden) return '';
+    const t = $('span', p);
+    return t ? t.textContent : '';
+  };
+  const t = live('#prog'), r = live('#rprog');
+  if (t) bits.push(`<div><b>tracking</b> · ${esc(t)}</div>`);
+  if (r) bits.push(`<div><b>rendering</b> · ${esc(r)}</div>`);
+  const ti = $('#tinfo'), ri = $('#rinfo');
+  if (ti && !ti.hidden && ti.textContent) {
+    bits.push(`<div class="${ti.classList.contains('err') ? 'warn' : ''}"`
+      + ` style="margin-top:5px;opacity:.75">${esc(ti.textContent)}</div>`);
+  }
+  if (ri && !ri.hidden && ri.textContent) {
+    bits.push(`<div class="${ri.classList.contains('err') ? 'warn' : ''}"`
+      + ` style="margin-top:5px;opacity:.75">${esc(ri.textContent)}</div>`);
+  }
+  return bits.join('');
+}
+
+let infoPending = false;
+function paintInfo() {
+  const f = factsHTML(), en = engineHTML(), su = subsHTML(), pr = progHTML();
+  $('#ifacts').innerHTML = f;
+  const eng = $('#iengine');
+  eng.innerHTML = en;
+  eng.dataset.engine = E() ? E().id : '';
+  $('#isubs').innerHTML = su;
+  $('#iprogwrap').hidden = !pr;
+  $('#iprog').innerHTML = pr;
+  const pop = $('#statspop');
+  if (pop && !pop.hidden) {
+    pop.innerHTML =
+      `<div class="ic"><div class="ih">This clip</div><div class="ilines">${f}</div></div>`
+      + `<div class="ic"><div class="ih">Engine</div>`
+      + `<div class="ilines" data-engine="${E() ? E().id : ''}">${en}</div></div>`
+      + `<div class="ic"><div class="ih">Selection</div><div class="ilines">${su}</div></div>`
+      + (pr ? `<div class="ic"><div class="ih">Progress</div><div class="ilines">${pr}</div></div>` : '');
+  }
+}
+/** Coalesce the paints: the rail writes to these nodes dozens of times a
+ *  second during a run, and the readouts only have to be right per frame. */
+function infoSoon() {
+  if (infoPending) return;
+  infoPending = true;
+  requestAnimationFrame(() => { infoPending = false; paintInfo(); });
+}
+new MutationObserver(infoSoon).observe($('#panel'), {
+  subtree: true, childList: true, characterData: true,
+  attributes: true, attributeFilter: ['hidden', 'class', 'aria-pressed'] });
+
+/* ------------------------------------------------------- the media tray ---
+ * One entry per source opened this session. The thumbnail is lifted from work
+ * that already happened -- the filmstrip's first cell for a clip, the decoded
+ * bitmap for a still -- so the tray costs no second decode. */
+const TRAY_MAX = 12;
+let trayN = 0;
+
+function trayTake(f, kind) {
+  const key = `${f.name}·${f.size}·${f.lastModified || 0}`;
+  let it = S.sources.find((x) => x.key === key);
+  if (!it) {
+    it = { id: 'src' + (++trayN), key, name: f.name, kind, file: f, thumb: null };
+    S.sources.push(it);
+    while (S.sources.length > TRAY_MAX) S.sources.shift();
+  }
+  S.traySel = it.id;
+  paintTray();
+  return it.id;
+}
+
+/** Paint the live source's thumbnail from a canvas or a bitmap already in hand. */
+function trayThumb(src, sx, sy, sw, sh) {
+  const it = S.sources.find((x) => x.id === S.traySel);
+  if (!it) return;
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = 148; cv.height = 96;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#0a1310'; g.fillRect(0, 0, cv.width, cv.height);
+    const k = Math.max(cv.width / sw, cv.height / sh);
+    g.drawImage(src, sx, sy, sw, sh,
+                (cv.width - sw * k) / 2, (cv.height - sh * k) / 2, sw * k, sh * k);
+    it.thumb = cv;
+  } catch (e) { /* a thumbnail is never worth an error */ }
+  paintTray();
+}
+
+function paintTray() {
+  const wrap = $('#tray'), list = $('#traylist');
+  if (!wrap || !list) return;
+  wrap.hidden = !S.sources.length;
+  if (wrap.hidden) { list.textContent = ''; return; }
+  list.textContent = '';
+  const lbl = document.createElement('span');
+  lbl.className = 'tlbl';
+  lbl.textContent = 'this session';
+  list.append(lbl);
+  S.sources.forEach((it) => {
+    const b = document.createElement('button');
+    b.className = 'ti';
+    b.type = 'button';
+    b.title = it.name;
+    b.setAttribute('aria-pressed', String(it.id === S.traySel));
+    b.setAttribute('aria-label', 'reopen ' + it.name);
+    if (it.thumb) {
+      const cv = document.createElement('canvas');
+      cv.width = it.thumb.width; cv.height = it.thumb.height;
+      cv.getContext('2d').drawImage(it.thumb, 0, 0);
+      b.append(cv);
+    }
+    const em = document.createElement('em');
+    em.textContent = it.kind === 'video' ? 'clip' : 'still';
+    b.append(em);
+    b.addEventListener('click', () => {
+      if (it.id === S.traySel) return;
+      take(it.file);
+    });
+    list.append(b);
+  });
+}
+
+/* -------------------------------------------------- the slow-track hint ---
+ * The hosted page is the browser engine: tracking runs on WebGPU in the tab,
+ * and on a long clip that is minutes. There IS a faster tier, it is free, and
+ * the page had no way of saying so mid-run. This says it once, under the
+ * progress line, without touching the run -- and never on a server engine,
+ * where the sentence would be a lie. The repo URL is web/oss-link.js's, read
+ * lazily so the literal lives in exactly one file. */
+const SLOW_ETA = 60, SLOW_FPS = 4;
+let slowOff = false;
+try { slowOff = sessionStorage.getItem('dv.slowhint') === 'off'; } catch (e) { slowOff = false; }
+
+function slowRepo() { return window.DV_REPO || 'https://github.com/kcvete/dither-studio'; }
+
+/** The cheapest tier below the one selected, and how much faster it is. */
+function cheaperTier() {
+  const sizes = (S.meta && S.meta.track_sizes) || [];
+  const cur = sizes.find((x) => x.size === S.trackSize);
+  if (!cur) return null;
+  const under = sizes.filter((x) => x.size < cur.size);
+  if (!under.length) return null;
+  const pick = under.reduce((a, b) => (b.size < a.size ? b : a));
+  const n = (cur.fps && pick.fps) ? pick.fps / cur.fps
+    : (cur.size * cur.size) / (pick.size * pick.size);
+  return { tier: pick, n };
+}
+
+function hideSlowHint() {
+  const el = $('#slowhint');
+  if (el) el.hidden = true;
+}
+
+/** Decide, and paint. Called from the tracking progress callback and by the
+ *  DV_slowHint() test hook with a simulated ETA / fps. */
+function slowHint(etaSec, fps) {
+  const el = $('#slowhint');
+  if (!el) return false;
+  if (slowOff || !E() || E().id !== 'browser') return false;
+  const slow = (+etaSec > SLOW_ETA) || (+fps > 0 && +fps < SLOW_FPS);
+  if (!slow) return false;
+  if (!el.hidden) return true;
+  $('#slowmain').innerHTML = 'Taking a while? Run it on your machine for ~2× — '
+    + `<a href="${slowRepo()}#readme" target="_blank" rel="noopener">`
+    + 'github.com/kcvete/dither-studio</a>';
+  const c = cheaperTier();
+  $('#slowtier').textContent = c
+    ? `or pick ${tqName(c.tier)} · ${c.tier.size} px next time `
+      + `(≈ ${c.n >= 10 ? Math.round(c.n) : c.n.toFixed(1)}× faster)`
+    : '';
+  el.hidden = false;
+  return true;
+}
+$('#bSlowNo') && $('#bSlowNo').addEventListener('click', () => {
+  slowOff = true;
+  try { sessionStorage.setItem('dv.slowhint', 'off'); } catch (e) { /* private mode */ }
+  hideSlowHint();
+});
 
 /* ===================================================== the mobile shell ===
  * Below 768 px: #panel is a bottom sheet with three detents, the five steps
@@ -6122,7 +6488,7 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
     if (!drag) return;
     const dy = e.clientY - drag.y0;                 // down = smaller sheet
     if (Math.abs(dy) > 5) drag.moved = true;
-    const h = clamp(drag.h0 - dy, 46, window.innerHeight * 0.86);
+    const h = clamp(drag.h0 - dy, 96, window.innerHeight * 0.86);
     panel.style.height = h + 'px';
   });
   const dragEnd = (e) => {
@@ -6132,7 +6498,7 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
       setSheet(document.body.dataset.sheet === 'collapsed' ? 'half' : 'collapsed');
       return;
     }
-    const h = clamp(d.h0 - (e.clientY - d.y0), 46, window.innerHeight * 0.86);
+    const h = clamp(d.h0 - (e.clientY - d.y0), 96, window.innerHeight * 0.86);
     const vh = window.innerHeight;
     setSheet(h < vh * 0.25 ? 'collapsed' : h < vh * 0.66 ? 'half' : 'full');
   };
@@ -6150,7 +6516,14 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
     if (document.body.dataset.sheet !== 'collapsed') setSheet('collapsed');
   }, { capture: true, passive: true });
 
-  const boot = () => { if (mq.matches) { setSheet('half'); paintTabs(); } };
+  /* On the landing there is nothing to control yet and the hero IS the
+     product, so the phone opens on the picture with only the tab bar under
+     it -- the sheet comes up the moment a tab asks for it. */
+  const boot = () => {
+    if (!mq.matches) return;
+    setSheet($('#empty').hidden ? 'half' : 'collapsed');
+    paintTabs();
+  };
   mq.addEventListener ? mq.addEventListener('change', boot) : 0;
   boot();
 })();

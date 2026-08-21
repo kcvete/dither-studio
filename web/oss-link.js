@@ -20,6 +20,11 @@
 
 (() => {
   const REPO = 'https://github.com/kcvete/dither-studio';
+  /* The one place the URL is written. app.js's slow-tracking hint reads it
+     from here rather than carrying a second copy -- published BEFORE the
+     localhost early-return, because the hint is about the engine, not about
+     where the page is served from. */
+  window.DV_REPO = REPO;
   const local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)
     || location.protocol === 'file:';
   if (local) return;

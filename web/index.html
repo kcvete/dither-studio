@@ -130,6 +130,14 @@
           <div class="row"><button class="btn go" id="bTrack">Track</button></div>
           <div id="prog" class="prog" hidden><div class="bar"><i></i></div><span></span></div>
           <div id="tinfo" class="stat" hidden></div>
+          <!-- the browser engine is the free tier and it is slower; when a
+               run is genuinely long this says where the fast one is, once,
+               without interrupting anything. -->
+          <div id="slowhint" class="note warn" hidden>
+            <span id="slowmain"></span>
+            <span id="slowtier"></span>
+            <button class="lnk" id="bSlowNo">dismiss</button>
+          </div>
         </div>
         <div id="wholenote" class="note">Every pixel of every frame gets dithered.
           Switch to <b>track subjects</b> to dither only what you point at.</div>
@@ -408,12 +416,6 @@
       </section>
     </div>
 
-    <!-- What this tool is sitting on, and the button that hands it back. The
-         server sweeps jobs/ on its own every 6 h; this is the manual nudge. -->
-    <div id="gcbar" hidden>
-      <span id="gcuse">storage: –</span>
-      <button class="chip" id="bGC">clean up</button>
-    </div>
   </aside>
 
   <main id="stage">
@@ -483,8 +485,27 @@
         <input type="range" id="sFrame" min="0" max="0" step="1" value="0" hidden>
         <span class="mono" id="fcount" hidden>0 / 0</span>
         <span class="mono" id="fps">–</span>
-        <button class="chip" id="bCmp" aria-pressed="false">before / after</button>
       </div>
+    </div>
+
+    <!-- ------------------------------------------------- canvas toolbar
+         A slim glass bar under the picture carrying the four verbs that
+         belong to the pixels rather than to a step: compare, zoom, save,
+         and the facts. #bCmp moved here from the transport row -- same id,
+         same behaviour, now labelled and next to what it compares.
+         (ux-spec 2.1.1, 2.1.6) -->
+    <div id="cbar" hidden>
+      <button class="tb" id="bCmp" aria-pressed="false"
+              title="hold the before against the after"><i>&#9704;</i><span>before / after</span></button>
+      <span class="tbsep"></span>
+      <button class="tb ic" id="bZoomOut" aria-label="zoom out"><i>&minus;</i></button>
+      <button class="tb num" id="bZoomFit" title="back to 100%"><span id="zlbl">100%</span></button>
+      <button class="tb ic" id="bZoomIn" aria-label="zoom in"><i>+</i></button>
+      <span class="tbsep"></span>
+      <button class="tb" id="bDl" title="export, or jump to the file that is ready"><i>&#10515;</i><span>download</span></button>
+      <button class="tb ic" id="bStats" aria-expanded="false"
+              aria-label="the facts about this clip"><i>&#9641;</i></button>
+      <div id="statspop" hidden></div>
     </div>
 
     <!-- ------------------------------------------------- trim / range bar
@@ -521,10 +542,47 @@
         </div>
       </div>
     </div>
+    <!-- ------------------------------------------------------ media tray
+         Everything opened this session, as thumbnails. Clicking one re-opens
+         that source; the live one carries the ring. -->
+    <div id="tray" hidden><div id="traylist"></div></div>
+
     <div id="coach" hidden></div>
     <div id="toast" hidden></div>
     <div id="busy" hidden><i></i></div>
   </main>
+
+  <!-- ------------------------------------------------- the info column
+       Everything that is a READOUT rather than a control: the clip's facts
+       and what they cost, which engine is answering and how finely, what is
+       selected, and how far a run has got. Desktop only -- below 1024 px it
+       folds under the stage, and on a phone the same lines live in the
+       toolbar's facts popover. (ux-spec 2.1) -->
+  <aside id="info">
+    <div class="ic">
+      <div class="ih">This clip</div>
+      <div id="ifacts" class="ilines"><em>nothing open yet</em></div>
+    </div>
+    <div class="ic">
+      <div class="ih">Engine</div>
+      <div id="iengine" class="ilines"></div>
+    </div>
+    <div class="ic">
+      <div class="ih">Selection</div>
+      <div id="isubs" class="ilines"></div>
+    </div>
+    <div class="ic" id="iprogwrap" hidden>
+      <div class="ih">Progress</div>
+      <div id="iprog" class="ilines"></div>
+    </div>
+    <div class="isp"></div>
+    <!-- What this tool is sitting on, and the button that hands it back. The
+         server sweeps jobs/ on its own every 6 h; this is the manual nudge. -->
+    <div id="gcbar" hidden>
+      <span id="gcuse">storage: –</span>
+      <button class="chip" id="bGC">clean up</button>
+    </div>
+  </aside>
 
   <!-- the phone's spine: five tabs that open the same five steps. Desktop
        never sees this; the sheet above it is #panel itself, re-laid by CSS. -->
@@ -533,7 +591,7 @@
     <button class="tab" data-mtab="2"><i>&#8853;</i><span>Subject</span></button>
     <button class="tab" data-mtab="3"><i>&#9641;</i><span>Style</span></button>
     <button class="tab" data-mtab="5"><i>&#8682;</i><span>Export</span></button>
-    <button class="tab" data-mtab="seq"><i>&#9707;</i><span>Seq</span></button>
+    <button class="tab" data-mtab="seq"><i>&#9707;</i><span>Sequence</span></button>
   </nav>
 </div>
 <script src="./dither.js"></script>
