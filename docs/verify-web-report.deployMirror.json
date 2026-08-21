@@ -1,0 +1,196 @@
+{
+ "base": "http://127.0.0.1:8765",
+ "clip": "sample.mp4",
+ "entryClip": "docs/entry-clip.mp4",
+ "still": "sample.jpg",
+ "consoleErrors": [],
+ "pageErrors": [],
+ "runs": {
+  "deployMirror": {
+   "squares": {
+    "512": {
+     "size": 512,
+     "nFrames": 60,
+     "picked": 512,
+     "track": "tracked 60 frames in 4.5 s (13.5 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+     "state": {
+      "loaded": 512,
+      "backend": "WebGPU fp16 · 512 px",
+      "tierNote": "",
+      "epNote": ""
+     }
+    },
+    "1024": {
+     "size": 1024,
+     "nFrames": 60,
+     "picked": 1024,
+     "track": "tracked 60 frames in 17.7 s (3.4 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)",
+     "state": {
+      "loaded": 1024,
+      "backend": "WebGPU fp16 · 1024 px",
+      "tierNote": "",
+      "epNote": ""
+     }
+    }
+   },
+   "mirror": {
+    "models": [
+     "1024",
+     "512",
+     "consts.bin",
+     "encoder.fp16.onnx",
+     "heads.fp16.onnx",
+     "heads_mask.fp16.onnx",
+     "heads_prompt.fp16.onnx",
+     "manifest.json",
+     "memattn.fp16.onnx",
+     "memenc.f16in.onnx",
+     "memenc.onnx"
+    ]
+   },
+   "base": "http://127.0.0.1:58464",
+   "noF16": {
+    "adapter": {
+     "gpu": true,
+     "adapter": true,
+     "f16": false
+    },
+    "preview": "1 subject in 1.85 s (768 px) · #1 5300 px · this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle",
+    "state": {
+     "ep": "wasm",
+     "fp16": true,
+     "line": "WASM fp16 · 768 px · 1 thread · slow",
+     "note": "this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle"
+    }
+   },
+   "broken512_404": {
+    "line": "tracked 30 frames in 2.7 s (11.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead",
+    "loaded": 768,
+    "tierNote": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+   },
+   "broken512_a 200 that is HTML": {
+    "line": "tracked 30 frames in 2.7 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead",
+    "loaded": 768,
+    "tierNote": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
+   }
+  }
+ },
+ "checks": [
+  {
+   "name": "mirror · the tree carries no fp32 graph at any square",
+   "ok": true,
+   "detail": "[\"1024\",\"512\",\"consts.bin\",\"encoder.fp16.onnx\",\"heads.fp16.onnx\",\"heads_mask.fp16.onnx\",\"heads_prompt.fp16.onnx\",\"manifest.json\",\"memattn.fp16.onnx\",\"memenc.f16in.onnx\",\"memenc.onnx\"]"
+  },
+  {
+   "name": "mirror · 512 px is offered and selects",
+   "ok": true,
+   "detail": "512"
+  },
+  {
+   "name": "mirror · 512 px tracks with no fp32 in the deployment",
+   "ok": true,
+   "detail": "tracked 60 frames in 4.5 s (13.5 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "mirror · 512 px really loaded its own square",
+   "ok": true,
+   "detail": "{\"loaded\":512,\"backend\":\"WebGPU fp16 · 512 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · 512 px needed no fallback and says nothing about one",
+   "ok": true,
+   "detail": "{\"loaded\":512,\"backend\":\"WebGPU fp16 · 512 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · 1024 px is offered and selects",
+   "ok": true,
+   "detail": "1024"
+  },
+  {
+   "name": "mirror · 1024 px tracks with no fp32 in the deployment",
+   "ok": true,
+   "detail": "tracked 60 frames in 17.7 s (3.4 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware)"
+  },
+  {
+   "name": "mirror · 1024 px really loaded its own square",
+   "ok": true,
+   "detail": "{\"loaded\":1024,\"backend\":\"WebGPU fp16 · 1024 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · 1024 px needed no fallback and says nothing about one",
+   "ok": true,
+   "detail": "{\"loaded\":1024,\"backend\":\"WebGPU fp16 · 1024 px\",\"tierNote\":\"\",\"epNote\":\"\"}"
+  },
+  {
+   "name": "mirror · the GPU is there and reports no shader-f16",
+   "ok": true,
+   "detail": "{\"gpu\":true,\"adapter\":true,\"f16\":false}"
+  },
+  {
+   "name": "mirror · no shader-f16 still segments, on fp16 over WASM",
+   "ok": true,
+   "detail": "1 subject in 1.85 s (768 px) · #1 5300 px · this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle"
+  },
+  {
+   "name": "mirror · it went to WASM fp16, not to a missing fp32 graph",
+   "ok": true,
+   "detail": "{\"ep\":\"wasm\",\"fp16\":true,\"line\":\"WASM fp16 · 768 px · 1 thread · slow\",\"note\":\"this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle\"}"
+  },
+  {
+   "name": "mirror · and the note says why, and where the fp32 bundle is",
+   "ok": true,
+   "detail": "this GPU has no shader-f16 and the fp32 graphs are not in this deployment — running fp16 on WASM instead, which is much slower. See web/README.md for the fp32 bundle"
+  },
+  {
+   "name": "mirror · 404 on a tier graph does not kill the track",
+   "ok": true,
+   "detail": "tracked 30 frames in 2.7 s (11.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · 404 falls back to the default square",
+   "ok": true,
+   "detail": "{\"loaded\":768,\"tierNote\":\"the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead\"}"
+  },
+  {
+   "name": "mirror · 404 names the file it could not load",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · 404 never reaches \"protobuf parsing failed\"",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead | tracked 30 frames in 2.7 s (11.3 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: it is not in this deployment (HTTP 404)) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · a 200 that is HTML on a tier graph does not kill the track",
+   "ok": true,
+   "detail": "tracked 30 frames in 2.7 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · a 200 that is HTML falls back to the default square",
+   "ok": true,
+   "detail": "{\"loaded\":768,\"tierNote\":\"the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead\"}"
+  },
+  {
+   "name": "mirror · a 200 that is HTML names the file it could not load",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
+  },
+  {
+   "name": "mirror · a 200 that is HTML never reaches \"protobuf parsing failed\"",
+   "ok": true,
+   "detail": "the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead | tracked 30 frames in 2.7 s (11.1 fps) on WEBGPU fp16 · 1 subject · frames via WebCodecs (hardware) · the 512 px graphs are not complete in this deployment (heads_prompt.fp16.onnx: the server answered with a page, not an ONNX graph (52 bytes, text/html) — the file is not in this deployment, or a cache is still serving its 404) — tracking at 768 px instead"
+  }
+ ],
+ "browser": {
+  "how": "chromium (headless, WebGPU flags)",
+  "executionProvider": "webgpu",
+  "webgpu": "ok",
+  "clipSeconds": 5
+ },
+ "only": [
+  "deployMirror"
+ ],
+ "checksPassed": 21,
+ "checksTotal": 21
+}

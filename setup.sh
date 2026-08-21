@@ -63,6 +63,37 @@ vendor_ort() {
   fi
 }
 
+# Every square is either COMPLETE or absent -- there is no third state that
+# works. A tier missing one graph is a quality chip the page offers and then
+# fails to load: web/track.js names the file and web/engines/browser.js drops
+# back to 768 px, but that is a rescue, not an install. Say so here instead.
+models_complete() {
+  local root="$1"; shift
+  local ok=1
+  for S in "$@"; do
+    [ "$S" = "0" ] && continue
+    local d="$root"; [ "$S" = "768" ] || d="$root/$S"
+    [ -d "$d" ] || continue
+    for F in manifest.json consts.bin encoder.fp16.onnx memattn.fp16.onnx \
+             heads.fp16.onnx heads_prompt.fp16.onnx heads_mask.fp16.onnx \
+             memenc.onnx memenc.f16in.onnx; do
+      if [ ! -s "$d/$F" ]; then
+        echo "[setup] WARNING: ${S}px is incomplete - $d/$F is missing."
+        echo "[setup]          that chip will fall back to 768 px in the page."
+        ok=0; break
+      fi
+    done
+    # fp32 is optional, but half of it is not
+    if [ -f "$d/encoder.onnx" ]; then
+      for F in memattn.onnx heads.onnx heads_prompt.onnx heads_mask.onnx; do
+        [ -s "$d/$F" ] || { echo "[setup] WARNING: ${S}px fp32 is incomplete - $d/$F is missing"; ok=0; break; }
+      done
+    fi
+  done
+  [ "$ok" = "1" ] && echo "[setup] model squares complete: $*"
+  return 0
+}
+
 # --page-only: everything the static page needs and nothing else. No venv, no
 # PyTorch, no EdgeTAM clone, no checkpoint -- the graphs come pre-exported from
 # the release and onnxruntime-web from npm. This is the install for anyone who
@@ -87,6 +118,26 @@ if [ "${1:-}" = "--page-only" ] || [ "${DV_PAGE_ONLY:-0}" = "1" ]; then
         || echo "[setup] ${S}px download failed - that chip will track at 768 instead"
     fi
   done
+  # DV_MODELS_FP32=1 adds the fp32 graphs for every square. Nothing needs them:
+  # a GPU without shader-f16 runs the fp16 graphs on WASM and says so. They are
+  # the FASTER answer for that machine (WebGPU fp32, ~20% slower than fp16,
+  # against WASM's ~6x), at ~85 MB per square. All or nothing, per square --
+  # half a square installed is a chip that 404s in the middle of a load.
+  if [ "${DV_MODELS_FP32:-0}" = "1" ]; then
+    for S in "" $MODELS_TIERS; do
+      [ "$S" = "0" ] && continue
+      D="$HERE/web/models${S:+/$S}"; SFX="${S:+-$S}-fp32"
+      if [ -f "$D/encoder.onnx" ]; then
+        echo "[setup] ${S:-768}px fp32 already there"
+      else
+        echo "[setup] the ${S:-768}px fp32 set"
+        curl -fL --progress-bar "$MODELS_BASE/dither-studio-models-$MODELS_VER$SFX.tar.gz" \
+          | tar xz -C "$HERE/web" \
+          || echo "[setup] ${S:-768}px fp32 download failed - that square stays fp16-only"
+      fi
+    done
+  fi
+  models_complete "$HERE/web/models" 768 $MODELS_TIERS
   vendor_ort
   echo "[setup] ok - now serve web/ with any static server"
   exit 0
@@ -233,6 +284,7 @@ if [ "${DV_SKIP_WEB_MODELS:-0}" != "1" ]; then
     fi
   fi
 
+  models_complete "$WEBM" 768 $MODELS_TIERS
   vendor_ort
 fi
 

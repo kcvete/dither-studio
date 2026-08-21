@@ -47,6 +47,12 @@ async function countWebMFrames(blob) {
 }
 const NO_OBJ = -1024;                    // EdgeTAM's "this object is not here"
 
+/* Said in three places (the probe in init(), and both retries in
+ * loadTracker), so it is written once. */
+const NO_FP32_NOTE = 'this GPU has no shader-f16 and the fp32 graphs are not '
+  + 'in this deployment \u2014 running fp16 on WASM instead, which is much '
+  + 'slower. See web/README.md for the fp32 bundle';
+
 /* ===================================================== blue noise, in JS ===
  * The port of render.blue_noise: iterated high-pass + histogram remap. The
  * server does the low-pass as a gaussian multiply in the frequency domain;
@@ -381,8 +387,24 @@ export class BrowserEngine {
     // A HEAD that 404s prints a line in the console. That is unavoidable and,
     // in the only case it happens, correct: the file really is not there. The
     // alternative is finding out when the user presses Track.
-    const probe = this.fp16 ? 'encoder.fp16.onnx' : 'encoder.onnx';
-    const head = await fetch(this.dir + probe, { method: 'HEAD' }).catch(() => null);
+    let probe = this.fp16 ? 'encoder.fp16.onnx' : 'encoder.onnx';
+    let head = await fetch(this.dir + probe, { method: 'HEAD' }).catch(() => null);
+    /* fp32 was asked for because this GPU has no shader-f16, and the fp32
+     * graphs are a separate download that a fp16-only deployment (Pages, and
+     * the default release tarball) does not carry. loadTracker has always had
+     * the answer to that — fp16 on WASM — but it only ran if the SESSION
+     * failed, and this probe threw first, so the machine that needed the
+     * fallback got "the ONNX weights are not committed to the repo" instead.
+     * Decide it here, before anything is downloaded. */
+    if ((!head || !head.ok) && !this.fp16) {
+      const alt = await fetch(this.dir + 'encoder.fp16.onnx', { method: 'HEAD' })
+        .catch(() => null);
+      if (alt && alt.ok) {
+        this.ep = 'wasm'; this.fp16 = true;
+        this.epNote = NO_FP32_NOTE;
+        probe = 'encoder.fp16.onnx'; head = alt;
+      }
+    }
     if (!head || !head.ok) {
       throw new modelsMissing(`${probe} is not there — the ONNX weights are not `
         + 'committed to the repo. See web/README.md: download the release bundle '
@@ -396,7 +418,7 @@ export class BrowserEngine {
    *  a model set is ~50 MB of fp16 weights plus its GPU buffers, and holding
    *  three of them so that switching a chip is instant is the wrong trade in a
    *  tab. Switching costs the reload, which is 0.4-1.0 s. */
-  async loadTracker(log, size) {
+  async loadTracker(log, size, carryNote) {
     await this.manifestOf();                 // settles baseSize and tiers
     let want = size && this.tiers.includes(+size) ? +size : this.baseSize;
     /* `tiers` says what the deployment SHOULD carry; this is the check that it
@@ -414,6 +436,9 @@ export class BrowserEngine {
     if (want === this.baseSize && this.tierNote && size === this.baseSize) {
       this.tierNote = '';
     }
+    // a retry that already knows why it is at the default square keeps its
+    // sentence: the clear above is for a chip the visitor pressed, not for this
+    if (carryNote) this.tierNote = carryNote;
     if (this.tracker && this.trackerSize === want) return this.tracker;
     if (this.tracker) { await this.releaseTracker(); }
     await this.init();                       // settles ep and fp16 first
@@ -441,6 +466,31 @@ export class BrowserEngine {
     try {
       await t.load(log || (() => {}));
     } catch (e) {
+      /* A file that did not come back as model bytes (web/track.js checks every
+       * one) is a DEPLOYMENT fault, not a backend fault, and it says which file.
+       * It used to arrive here as onnxruntime's "protobuf parsing failed", which
+       * named nothing and left the visitor at a dead end. Two recoveries, in
+       * order, then a sentence that names the file. */
+      if (e && e.modelFetch) {
+        // (a) a tier whose graphs are not all in this deployment — or whose 404
+        //     an edge cache is still serving in the minutes after they shipped.
+        //     The default square is always there, so go back to it and say so.
+        if (want !== this.baseSize) {
+          return this.loadTracker(log, this.baseSize,
+            `the ${want} px graphs are not complete in this deployment `
+            + `(${e.file}: ${e.why}) — tracking at ${this.baseSize} px instead`);
+        }
+        // (b) this GPU has no shader-f16, so the fp32 graphs were asked for and
+        //     this deployment does not carry them. WASM does have fp16.
+        if (this.ep === 'webgpu' && !this.fp16) {
+          this.ep = 'wasm'; this.fp16 = true;
+          this.epNote = NO_FP32_NOTE;
+          return this.loadTracker(log, want, carryNote);
+        }
+        throw new modelsMissing(`${e.file} could not be loaded from `
+          + `${e.url} — ${e.why}. See web/README.md: download the release `
+          + 'bundle into web/models/, or run ./setup.sh to export them yourself.');
+      }
       /* One retry, for one specific case: this GPU has no shader-f16, so the
        * fp32 graphs were asked for, and this deployment does not carry them —
        * the release ships fp16 by default and the fp32 set is a separate
@@ -448,10 +498,8 @@ export class BrowserEngine {
        * into a 404 the visitor cannot act on. */
       if (this.ep === 'webgpu' && !this.fp16) {
         this.ep = 'wasm'; this.fp16 = true;
-        this.epNote = 'this GPU has no shader-f16 and the fp32 graphs are not '
-          + 'in this deployment — running fp16 on WASM instead, which is much '
-          + 'slower. See web/README.md for the fp32 bundle';
-        return this.loadTracker(log, want);
+        this.epNote = NO_FP32_NOTE;
+        return this.loadTracker(log, want, carryNote);
       }
       // ORT's own message for this is "no available backend found", which tells
       // a visitor nothing. Say which backend was tried and what to do.

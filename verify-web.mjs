@@ -40,6 +40,12 @@
  *       every mode, the dot sliders, a palette and the mask polish — changing
  *       item 2 while items 1 and 3 stay byte-identical, through the preview,
  *       the .dots.gz and the server's MP4
+ *   WD  browser · the DEPLOYMENT mirrored: web/ served statically with the
+ *       fp16-only model tree Pages actually ships. 512 and 1024 track; a GPU
+ *       with no shader-f16 falls to fp16 on WASM instead of asking for an fp32
+ *       graph that is not there; and a tier graph that answers with a 404 page
+ *       (or a 200 that is HTML) falls back to 768 px naming the file, rather
+ *       than reaching ORT as "protobuf parsing failed"
  *   R5  server  · the same two-frame prompt, so the feature is checked on both
  *   K   an optional DV_API_KEY server: 401 without the header, 200 with it
  *
@@ -50,6 +56,7 @@ import { chromium, firefox, webkit } from 'playwright';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -166,7 +173,9 @@ async function newPage(pref, opts = {}) {
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() !== 'error') return;
-    const t = m.text();
+    // "Failed to load resource: ... 404" carries the URL in the location, not
+    // in the text, so a flow that expects one 404 has to be able to name it
+    const t = m.text() + ' ' + ((m.location() || {}).url || '');
     // onnxruntime routes its own WARNING lines through console.error; sessions
     // are opened with logSeverityLevel 3 so these should not appear at all, but
     // do not let a future ORT build fail the run over a warning.
@@ -185,7 +194,7 @@ async function newPage(pref, opts = {}) {
       R.consoleErrors.push('requestfailed ' + rq.url() + ' ' + why);
     }
   });
-  await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+  await page.goto((opts.base || BASE) + '/', { waitUntil: 'networkidle' });
   await page.waitForFunction(() => window.DV_ready === true, { timeout: 60000 });
   return { ctx, page };
 }
@@ -2874,6 +2883,227 @@ async function runTrackTiers() {
   return r;
 }
 
+/* ====== WD: the DEPLOYMENT, mirrored ======================================
+ * Every other flow in this file runs against a checkout, where web/models has
+ * everything: three squares, fp16 AND fp32. The live deployment does not. Pages
+ * ships fp16 only -- the fp32 graphs are 83 MB a square for the one case of a
+ * GPU without `shader-f16` -- and it ships the two extra squares as separate
+ * tarballs. So the checkout can be green while the deployment is broken, and
+ * that is exactly what happened:
+ *
+ *   "track failed: WebGPU fp16 at 512 px could not start -- Can't create a
+ *    session. ERROR_CODE: 7, ERROR_MESSAGE: Failed to load model because
+ *    protobuf parsing failed."
+ *
+ * which is onnxruntime being handed a static host's 404 PAGE as a model. It
+ * names no file, so it reads as "the tracker is broken" rather than "one graph
+ * is missing". web/track.js checks every fetch now and web/engines/browser.js
+ * knows what to do with each answer; this is the flow that holds it there.
+ *
+ * The mirror is web/ with models/ replaced by symlinks to the fp16 files only,
+ * served by `python3 -m http.server` -- no FastAPI, no /api/meta, no fp32,
+ * which is the deployment. Four things are asked of it:
+ *
+ *   1. 512 px and 1024 px track, on the fp16-only tree
+ *   2. no `shader-f16` -> WASM fp16, with the note, instead of a dead end
+ *      (the fp32 probe's 404 is the one console error this flow allows)
+ *   3. one tier graph 404ing -> the default square, and the note NAMES the file
+ *   4. a 200 that is HTML rather than a graph -> the same, not "protobuf"
+ */
+const MIRROR_SET = ['manifest.json', 'consts.bin', 'encoder.fp16.onnx',
+  'memattn.fp16.onnx', 'heads.fp16.onnx', 'heads_prompt.fp16.onnx',
+  'heads_mask.fp16.onnx', 'memenc.onnx', 'memenc.f16in.onnx'];
+
+/** web/, with models/ cut down to what a Pages deploy actually carries. */
+function mirrorTree() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dv-pages-'));
+  const web = path.join(HERE, 'web');
+  for (const name of fs.readdirSync(web)) {
+    if (name === 'models') continue;
+    fs.symlinkSync(path.join(web, name), path.join(root, name));
+  }
+  const square = (from, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const f of MIRROR_SET) {
+      const src = path.join(from, f);
+      if (fs.existsSync(src)) fs.symlinkSync(src, path.join(to, f));
+    }
+  };
+  square(path.join(web, 'models'), path.join(root, 'models'));
+  for (const S of [512, 1024]) {
+    square(path.join(web, 'models', String(S)), path.join(root, 'models', String(S)));
+  }
+  return root;
+}
+
+async function serveStatic(root) {
+  const port = await freePort();
+  const proc = spawn('python3', ['-m', 'http.server', String(port),
+    '--bind', '127.0.0.1'], { cwd: root, stdio: 'ignore' });
+  const base = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 100; i++) {
+    const ok = await fetch(base + '/index.html').then((r) => r.ok).catch(() => false);
+    if (ok) return { base, proc };
+    await sleep(100);
+  }
+  proc.kill();
+  throw new Error('the static mirror never came up');
+}
+
+/** adapter.features.has('shader-f16') -> false, everything else untouched. */
+const NO_F16 = () => {
+  if (!navigator.gpu) return;
+  const real = navigator.gpu.requestAdapter.bind(navigator.gpu);
+  Object.defineProperty(navigator.gpu, 'requestAdapter', {
+    configurable: true,
+    value: async (o) => {
+      const a = await real(o);
+      if (!a) return a;
+      return new Proxy(a, {
+        get(t, k) {
+          if (k === 'features') return { has: (f) => f !== 'shader-f16' && t.features.has(f) };
+          const v = t[k];
+          return typeof v === 'function' ? v.bind(t) : v;
+        },
+      });
+    },
+  });
+};
+
+async function runDeployMirror() {
+  const r = { squares: {} };
+  const root = mirrorTree();
+  r.mirror = { models: fs.readdirSync(path.join(root, 'models')).sort() };
+  check('mirror · the tree carries no fp32 graph at any square',
+        !fs.existsSync(path.join(root, 'models', 'encoder.onnx'))
+        && !fs.existsSync(path.join(root, 'models', '512', 'encoder.onnx')),
+        JSON.stringify(r.mirror.models));
+  const { base, proc } = await serveStatic(root);
+  r.base = base;
+  try {
+    /* --- 1. the two extra squares, on an fp16-only tree ------------------ */
+    for (const size of [512, 1024]) {
+      const t = { size };
+      const { ctx, page } = await newPage(browserPref(), { base });
+      await loadClip(page, CLIP, 2);
+      t.nFrames = await page.evaluate(() => window.DV.nFrames);
+      t.picked = await page.evaluate((sz) => {
+        const b = [...document.querySelectorAll('#tq .chip')]
+          .find((c) => +c.dataset.size === sz);
+        if (!b) return 0;
+        b.click();
+        return window.DV.trackSize;
+      }, size);
+      check(`mirror · ${size} px is offered and selects`, t.picked === size,
+            String(t.picked));
+      await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+      await promptBoxPoint(page, SUBJECT_A);
+      await page.click('#bTrack');
+      t.track = await waitText(page, '#tinfo', /tracked|failed/, 1800000);
+      check(`mirror · ${size} px tracks with no fp32 in the deployment`,
+            !/failed/.test(t.track), t.track);
+      t.state = await page.evaluate(() => ({
+        loaded: window.DV.engine.trackerSize,
+        backend: window.DV.engine.backendLine(),
+        tierNote: window.DV.engine.tierNote || '',
+        epNote: window.DV.engine.epNote || '',
+      }));
+      check(`mirror · ${size} px really loaded its own square`,
+            t.state.loaded === size, JSON.stringify(t.state));
+      check(`mirror · ${size} px needed no fallback and says nothing about one`,
+            !t.state.tierNote && !t.state.epNote, JSON.stringify(t.state));
+      r.squares[size] = t;
+      await ctx.close();
+    }
+
+    /* --- 2. no shader-f16, and no fp32 to fall back to -------------------- */
+    // the fp32 probe's 404 is the point of the case, so it is the one console
+    // error allowed here -- and only this URL
+    EXPECTED = '/models/encoder.onnx';
+    const { ctx: c2, page: p2 } = await newPage(browserPref(), { base, init: NO_F16 });
+    r.noF16 = {};
+    r.noF16.adapter = await p2.evaluate(async () => {
+      const a = await navigator.gpu.requestAdapter().catch(() => null);
+      return { gpu: !!navigator.gpu, adapter: !!a,
+               f16: !!(a && a.features.has('shader-f16')) };
+    });
+    check('mirror · the GPU is there and reports no shader-f16',
+          r.noF16.adapter.adapter && !r.noF16.adapter.f16,
+          JSON.stringify(r.noF16.adapter));
+    await p2.setInputFiles('#file', STILL);
+    await p2.waitForFunction(() => window.DV.kind === 'image', null, { timeout: 60000 });
+    await sleep(1200);
+    await openStep(p2, 'st2');
+    await p2.click('#scope .chip[data-scope="track"]'); await sleep(900);
+    const [px, py] = await stageXY(p2, SUBJECT_A.point[0], SUBJECT_A.point[1]);
+    await p2.mouse.click(px, py);
+    r.noF16.preview = await waitText(p2, '#pvinfo',
+      /^(?!.*(reading|loading|\.onnx)).*(px|failed)/, 900000);
+    check('mirror · no shader-f16 still segments, on fp16 over WASM',
+          !/failed/.test(r.noF16.preview), r.noF16.preview);
+    r.noF16.state = await p2.evaluate(() => ({
+      ep: window.DV.engine.ep, fp16: window.DV.engine.fp16,
+      line: window.DV.engine.backendLine(), note: window.DV.engine.epNote || '',
+    }));
+    check('mirror · it went to WASM fp16, not to a missing fp32 graph',
+          r.noF16.state.ep === 'wasm' && r.noF16.state.fp16 === true,
+          JSON.stringify(r.noF16.state));
+    check('mirror · and the note says why, and where the fp32 bundle is',
+          /shader-f16/.test(r.noF16.state.note)
+          && /fp32/.test(r.noF16.state.note)
+          && /README/.test(r.noF16.state.note), r.noF16.state.note);
+    await p2.screenshot({ path: path.join(DOCS, 'w-mirror-nof16.png') });
+    await c2.close();
+    EXPECTED = null;
+
+    /* --- 3 and 4. a tier graph that does not come back as a graph --------- */
+    // the 404 IS the case under test, so its console line is expected here --
+    // and only for this URL
+    EXPECTED = '/models/512/heads_prompt.fp16.onnx';
+    for (const [name, fulfil] of [
+      ['404', { status: 404, contentType: 'text/html; charset=utf-8',
+                body: '<!DOCTYPE html><html><head><title>Site not found</title>'
+                  + '</head><body>404</body></html>' }],
+      ['a 200 that is HTML', { status: 200, contentType: 'text/html; charset=utf-8',
+                body: '<!DOCTYPE html><html><body>not a graph</body></html>' }],
+    ]) {
+      const { ctx, page } = await newPage(browserPref(), { base });
+      await page.route('**/models/512/heads_prompt.fp16.onnx', (rt) => rt.fulfill(fulfil));
+      await loadClip(page, CLIP, 1);
+      await page.evaluate(() => {
+        const b = [...document.querySelectorAll('#tq .chip')]
+          .find((c) => +c.dataset.size === 512);
+        if (b) b.click();
+      });
+      await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+      await promptBoxPoint(page, SUBJECT_A);
+      await page.click('#bTrack');
+      const line = await waitText(page, '#tinfo', /tracked|failed/, 1800000);
+      const st = await page.evaluate(() => ({
+        loaded: window.DV.engine.trackerSize,
+        tierNote: window.DV.engine.tierNote || '',
+      }));
+      r[`broken512_${name}`] = { line, ...st };
+      check(`mirror · ${name} on a tier graph does not kill the track`,
+            !/failed/.test(line), line);
+      check(`mirror · ${name} falls back to the default square`,
+            st.loaded === 768, JSON.stringify(st));
+      check(`mirror · ${name} names the file it could not load`,
+            /heads_prompt\.fp16\.onnx/.test(st.tierNote), st.tierNote);
+      check(`mirror · ${name} never reaches "protobuf parsing failed"`,
+            !/protobuf/i.test(st.tierNote) && !/protobuf/i.test(line),
+            st.tierNote + ' | ' + line);
+      await ctx.close();
+    }
+    EXPECTED = null;
+  } finally {
+    EXPECTED = null;
+    proc.kill();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  return r;
+}
+
 /* --------------------------------------------------------------------- main */
 BR = await pickBrowser();
 R.browser = { how: BR.how, executionProvider: BR.ep, webgpu: BR.gpu,
@@ -2917,6 +3147,7 @@ try {
   await run('entryBrowser', runEntry, 'browser');
   await run('entryRemote', runEntry, 'remote');
   await run('trackTiers', runTrackTiers);
+  await run('deployMirror', runDeployMirror);
   await run('otherBrowsers', runOtherBrowsers);
   await run('noAdapter', runNoAdapter);
   await run('apiKey', runApiKey);
@@ -2932,7 +3163,11 @@ console.log(JSON.stringify(R, null, 1));
 // The report is committed as evidence, so it must not carry this machine's
 // home directory around in it: every absolute path under the checkout is
 // rewritten to a repo-relative one on the way out.
-fs.writeFileSync(path.join(DOCS, 'verify-web-report.json'),
+/* A DV_ONLY run is a subset, so it writes a subset report. It used to write
+ * over docs/verify-web-report.json, which is committed evidence for the WHOLE
+ * suite -- one narrow re-run and the evidence was gone. */
+fs.writeFileSync(path.join(DOCS, ONLY.length
+  ? `verify-web-report.${ONLY.join('-')}.json` : 'verify-web-report.json'),
   JSON.stringify(R, null, 1).split('file://' + HERE + '/').join('')
                              .split(HERE + '/').join(''));
 process.exit(R.fatal || R.consoleErrors.length || R.pageErrors.length ? 1 : 0);

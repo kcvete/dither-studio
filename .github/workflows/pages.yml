@@ -70,11 +70,34 @@ jobs:
           done
           # the fp32 set is not deployed: it is 83 MB for the case of a GPU
           # with no shader-f16, and that machine falls to fp16 on WASM and says
-          # so rather than failing.
-          test -f web/models/encoder.fp16.onnx
-          test -f web/models/memenc.f16in.onnx
+          # so rather than failing. Nothing here may need an fp32 graph.
+          #
+          # EVERY file of EVERY square, checked. A tier that is half here is the
+          # exact shape of the 512 px bug: the chip is offered (the tier list is
+          # in the committed manifest), the visitor presses it, and one graph
+          # 404s in the middle of the load. The page names the file and drops
+          # back to 768 px now, but a deployment that needs that is a broken
+          # deployment, and this is where it gets caught.
+          SET="manifest.json consts.bin encoder.fp16.onnx memattn.fp16.onnx \
+               heads.fp16.onnx heads_prompt.fp16.onnx heads_mask.fp16.onnx \
+               memenc.onnx memenc.f16in.onnx"
+          for D in web/models web/models/512 web/models/1024; do
+            for F in $SET; do
+              test -s "$D/$F" || { echo "missing or empty: $D/$F"; exit 1; }
+            done
+          done
           # the tier list the page reads has to match what is actually here
           grep -q '"tiers"' web/models/manifest.json
+          python3 - <<'PY'
+          import json, os
+          man = json.load(open('web/models/manifest.json'))
+          base = man['image_size']
+          for t in man['tiers']:
+              d = 'web/models' if t == base else f'web/models/{t}'
+              assert os.path.isfile(f'{d}/manifest.json'), f'tier {t} advertised, {d} not deployed'
+              assert json.load(open(f'{d}/manifest.json'))['image_size'] == t, d
+          print('tiers advertised and deployed agree:', man['tiers'])
+          PY
           du -sh web/models web/models/512 web/models/1024
 
       - name: onnxruntime-web, at the version setup.sh pins

@@ -60,6 +60,34 @@ function f32from(t) {
   return out;
 }
 
+/* ---------------------------------------------------- fetching the weights */
+
+/** A model URL that did not answer with model bytes.
+ *
+ * This is the failure a static deployment actually has: a graph the release
+ * tarball did not carry, a tier whose files are only half there, or one an
+ * edge cache is still 404ing in the minutes after it shipped. A static host
+ * answers all of those with its 404 PAGE — HTML — and `fetch` is perfectly
+ * happy to hand that HTML back as an ArrayBuffer. Give it to onnxruntime and
+ * the whole diagnosis a visitor gets is
+ *
+ *     Can't create a session. ERROR_CODE: 7, ERROR_MESSAGE: Failed to load
+ *     model because protobuf parsing failed.
+ *
+ * which names neither the file nor the reason. So every fetch below is checked
+ * before the bytes go anywhere: the status, the content type, and — for a
+ * graph — the first byte, because an ONNX file is a protobuf whose first field
+ * is `ir_version` and therefore starts 0x08, never with '<'.
+ */
+export class ModelFetchError extends Error {
+  constructor(file, url, status, why) {
+    super(`${file}: ${why}`);
+    this.name = 'ModelFetchError';
+    this.modelFetch = true;                 // what the engine branches on
+    this.file = file; this.url = url; this.status = status; this.why = why;
+  }
+}
+
 /* ------------------------------------------------------------- the bank */
 
 /** `_prepare_memory_conditioned_features`, as bookkeeping only.
@@ -155,10 +183,54 @@ export class WebTracker {
     return new this.ort.Tensor('float32', data, dims);
   }
 
+  /** One file out of the model directory, checked to actually BE that file.
+   *
+   *  `kind` is 'json', 'bin' or 'onnx'. Anything that is not what it claims to
+   *  be throws a ModelFetchError naming the URL and the status, which is the
+   *  difference between "heads_prompt.fp16.onnx is not in this deployment
+   *  (HTTP 404)" and "protobuf parsing failed". */
+  async grab(file, kind) {
+    const url = this.dir + file;
+    let res;
+    try { res = await fetch(url); }
+    catch (e) {
+      throw new ModelFetchError(file, url, 0,
+        `the request failed (${e && e.message ? e.message : e})`);
+    }
+    if (!res.ok) {
+      throw new ModelFetchError(file, url, res.status, res.status === 404
+        ? 'it is not in this deployment (HTTP 404)'
+        : `the server answered HTTP ${res.status}`);
+    }
+    const ct = (res.headers.get('content-type') || '').split(';')[0].trim()
+      .toLowerCase();
+    if (kind === 'json') {
+      const text = await res.text();
+      try { return JSON.parse(text); } catch (e) {
+        throw new ModelFetchError(file, url, res.status,
+          `the server answered with ${ct || 'something'} rather than JSON`);
+      }
+    }
+    const buf = await res.arrayBuffer();
+    if (!buf.byteLength) {
+      throw new ModelFetchError(file, url, res.status, 'the file is empty');
+    }
+    if (kind === 'onnx') {
+      const b0 = new Uint8Array(buf, 0, 1)[0];
+      if (ct === 'text/html' || b0 === 0x3c /* '<' */) {
+        throw new ModelFetchError(file, url, res.status,
+          `the server answered with a page, not an ONNX graph `
+          + `(${buf.byteLength} bytes${ct ? ', ' + ct : ''}) \u2014 the file is not `
+          + 'in this deployment, or a cache is still serving its 404');
+      }
+    }
+    return buf;
+  }
+
   async load(log = () => {}) {
     const t0 = performance.now();
-    this.man = await (await fetch(this.dir + 'manifest.json')).json();
-    const cb = new Float32Array(await (await fetch(this.dir + 'consts.bin')).arrayBuffer());
+    this.man = await this.grab('manifest.json', 'json');
+    const cb = new Float32Array(await this.grab('consts.bin', 'bin'));
     const c = {};
     for (const [k, v] of Object.entries(this.man.consts))
       c[k] = cb.subarray(v.offset / 4, v.offset / 4 + v.count);
@@ -181,27 +253,37 @@ export class WebTracker {
       logSeverityLevel: 3,
       ...(outs ? { preferredOutputLocation: outs } : {}),
     });
+    // a graph that opened before a later one failed still holds its GPU
+    // buffers, and nothing else has a handle on it — so keep the list
+    const opened = [];
     const mk = async (file, outs) => {
       const t = performance.now();
-      const buf = await (await fetch(this.dir + file)).arrayBuffer();
+      const buf = await this.grab(file, 'onnx');
       const s = await this.ort.InferenceSession.create(buf, opt(outs));
+      opened.push(s);
       log(`${file}: ${(buf.byteLength / 1e6).toFixed(1)} MB, ` +
         `${(performance.now() - t).toFixed(0)} ms`);
       return { s, bytes: buf.byteLength };
     };
 
-    const enc = await mk(`encoder${sfx}.onnx`, { f0: gpu, f1: gpu, f2: gpu });
-    const mat = await mk(`memattn${sfx}.onnx`, { out: gpu });
-    const hds = await mk(`heads${sfx}.onnx`);
-    const hpr = await mk(`heads_prompt${sfx}.onnx`);
-    // A lasso/polygon prompt takes a different route through EdgeTAM entirely
-    // (`use_mask_input_as_output_without_sam`), so it is its own graph. Older
-    // model sets do not have it; the caller checks `has_mask_prompt` first.
-    const hmk = this.man.has_mask_prompt ? await mk(`heads_mask${sfx}.onnx`) : null;
-    // the memory encoder always computes in fp32; only its pix_feat input dtype
-    // follows the encoder, so a chained GPU buffer needs no conversion
-    const mec = await mk(this.chain && this.fp16 ? 'memenc.f16in.onnx'
-      : 'memenc.onnx');
+    let enc, mat, hds, hpr, hmk, mec;
+    try {
+      enc = await mk(`encoder${sfx}.onnx`, { f0: gpu, f1: gpu, f2: gpu });
+      mat = await mk(`memattn${sfx}.onnx`, { out: gpu });
+      hds = await mk(`heads${sfx}.onnx`);
+      hpr = await mk(`heads_prompt${sfx}.onnx`);
+      // A lasso/polygon prompt takes a different route through EdgeTAM entirely
+      // (`use_mask_input_as_output_without_sam`), so it is its own graph. Older
+      // model sets do not have it; the caller checks `has_mask_prompt` first.
+      hmk = this.man.has_mask_prompt ? await mk(`heads_mask${sfx}.onnx`) : null;
+      // the memory encoder always computes in fp32; only its pix_feat input dtype
+      // follows the encoder, so a chained GPU buffer needs no conversion
+      mec = await mk(this.chain && this.fp16 ? 'memenc.f16in.onnx'
+        : 'memenc.onnx');
+    } catch (e) {
+      for (const s of opened) { try { await s.release?.(); } catch (_) { /* gone */ } }
+      throw e;
+    }
     this.enc = enc.s; this.mat = mat.s; this.hds = hds.s;
     this.hpr = hpr.s; this.mec = mec.s; this.hmk = hmk ? hmk.s : null;
     this.bytes = enc.bytes + mat.bytes + hds.bytes + hpr.bytes + mec.bytes
