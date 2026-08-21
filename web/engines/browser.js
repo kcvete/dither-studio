@@ -1,7 +1,8 @@
 /* ---------------------------------------------------------------------------
    BROWSER ENGINE — the whole tool in the tab, no server at all.
 
-     decode      <video> + canvas seek loop -> one JPEG blob per frame
+     decode      demux + VideoDecoder in a module Worker -> one JPEG blob per
+                 frame; the <video> seek loop is the fallback (engines/decode.js)
      track       EdgeTAM as four ONNX graphs on onnxruntime-web (web/track.js)
      dither      web/dither.js, the same engine the server mirrors
      export      MediaRecorder over a canvas capture stream -> WebM
@@ -13,14 +14,37 @@
 
    MEMORY. A 150-frame 720p clip is kept as ~15 MB of JPEG blobs plus, per
    subject, 150 x 192x192 float32 mask logits (~22 MB). Full-resolution RGBA is
-   never retained — frames are decoded on demand and the LRU in app.js holds
-   forty of them.
+   never retained — frames are decoded on demand, this engine keeps a sixteen
+   frame bitmap LRU in front of the blobs and the LRU in app.js holds forty
+   more. Both are bounded by bytes, not by frames, so a 1080p clip holds fewer.
 --------------------------------------------------------------------------- */
 'use strict';
 
 import { WebTracker } from '../track.js';
+import { decodeClip, decodeSupport } from './decode.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/* One compositor frame. Only the capture path that has no requestFrame needs
+ * it, and a document that is hidden never fires one — hence the timeout. */
+const raf = () => new Promise((r) => {
+  if (typeof requestAnimationFrame !== 'function') return setTimeout(r, 16);
+  let done = false;
+  const go = () => { if (!done) { done = true; r(); } };
+  requestAnimationFrame(go);
+  setTimeout(go, 100);
+});
+
+/** How many video frames a recorded WebM actually contains. Uses the demuxer
+ *  the decode path already ships; a file it cannot read reports 0, which the
+ *  caller treats as "no count", never as "no frames". */
+async function countWebMFrames(blob) {
+  try {
+    const { demuxWebM, looksLikeWebM } = await import('../workers/demux-webm.js');
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (!looksLikeWebM(bytes)) return 0;
+    return demuxWebM(bytes).samples.length;
+  } catch (e) { return 0; }
+}
 const NO_OBJ = -1024;                    // EdgeTAM's "this object is not here"
 
 /* ===================================================== blue noise, in JS ===
@@ -69,93 +93,24 @@ export function blueNoiseTile(n = 64, seed = 7, iters = 40, sigma = 1.6) {
 }
 
 /* ================================================ decoding a clip in-tab ===
- * `requestVideoFrameCallback` is the fast path but it only ever gives you the
- * frames the compositor chose to show, which is not a stable 30 fps grid. The
- * seek loop is slower and exactly reproducible, and it is what the server's
- * ffmpeg `-r 30` produces, so both engines index the same picture as frame 42.
+ * The three decode paths, the frame grid they all reproduce and why the grid
+ * is what it is live in engines/decode.js. What is left here is what a decoded
+ * clip costs the tab.
  */
+export const BITMAP_BUDGET = 48e6;       // bytes of RGBA the engine caches
+
 export function clipMemoryEstimate(nFrames, w, h, subjects = 1) {
   // What a decoded clip actually costs this tab:
   //   the JPEG blobs it keeps           ~90 KB a frame at 1280x720
+  //   this engine's bitmap LRU           48 MB, or fewer frames' worth
   //   the 40-frame bitmap LRU in app.js  w*h*4 each
   //   one 192x192 float32 mask logit per frame per subject, once tracked
-  const jpeg = nFrames * 90e3 * Math.max(1, w * h) / (1280 * 720);
-  const lru = 40 * w * h * 4;
+  const px = Math.max(1, w * h);
+  const jpeg = nFrames * 90e3 * px / (1280 * 720);
+  const bitmaps = Math.min(BITMAP_BUDGET, nFrames * px * 4);
+  const lru = 40 * px * 4;
   const masks = nFrames * 192 * 192 * 4 * Math.max(1, subjects);
-  return { jpeg, lru, masks, total: jpeg + lru + masks };
-}
-
-async function decodeClip(file, { fps = 30, maxHeight = 720,
-                                  trimStart = 0, trimEnd = null,
-                                  onProgress } = {}) {
-  const url = URL.createObjectURL(file);
-  const v = document.createElement('video');
-  v.preload = 'auto'; v.muted = true; v.playsInline = true; v.src = url;
-  try {
-    await new Promise((ok, no) => {
-      v.onloadedmetadata = ok;
-      v.onerror = () => no(new Error('this browser cannot decode that file'));
-      setTimeout(() => no(new Error('timed out reading the video header')), 30000);
-    });
-    // MediaRecorder WebM (a camera recording) carries no duration until it has
-    // been seeked past its end; do that before deciding how many frames there are
-    let full = v.duration;
-    if (!isFinite(full) || full <= 0) full = await probeDuration(v);
-    const t0 = Math.max(0, trimStart || 0);
-    const avail = Math.max(0, (full || 0) - t0);
-    const want = trimEnd ? Math.max(0, trimEnd - t0) : avail;
-    // no cap: the whole clip, or exactly the trim range
-    const dur = Math.min(want || avail, avail);
-    if (!isFinite(dur) || dur <= 0) throw new Error('the clip has no duration');
-    const n = Math.max(1, Math.floor(dur * fps));
-    const scale = Math.min(1, maxHeight / (v.videoHeight || maxHeight));
-    const w = Math.max(2, Math.round(v.videoWidth * scale / 2) * 2);
-    const h = Math.max(2, Math.round(v.videoHeight * scale / 2) * 2);
-    const cv = new OffscreenCanvas(w, h);
-    const g = cv.getContext('2d', { willReadFrequently: false });
-
-    const frames = [];
-    for (let i = 0; i < n; i++) {
-      // + half a frame: land in the middle of frame i's display interval so a
-      // seek never lands on the boundary and returns i-1
-      await seek(v, t0 + (i + 0.5) / fps);
-      g.drawImage(v, 0, 0, w, h);
-      frames.push(await cv.convertToBlob({ type: 'image/jpeg', quality: 0.92 }));
-      if (onProgress && (i % 5 === 0 || i === n - 1)) {
-        onProgress({ done: i + 1, total: n, phase: 'decode',
-                     text: `decoding ${i + 1}/${n} frames…` });
-      }
-    }
-    return { frames, w, h, fps, nFrames: frames.length, trimStart: t0, seconds: dur };
-  } finally {
-    v.src = ''; v.load?.();
-    URL.revokeObjectURL(url);
-  }
-}
-
-/** A stream whose header has no duration: seek past the end and read it back. */
-function probeDuration(v) {
-  return new Promise((ok) => {
-    const done = () => {
-      v.removeEventListener('durationchange', done);
-      ok(isFinite(v.duration) && v.duration > 0 ? v.duration : 0);
-    };
-    v.addEventListener('durationchange', done);
-    setTimeout(done, 3000);
-    try { v.currentTime = 1e6; } catch (e) { done(); }
-  });
-}
-
-function seek(v, t) {
-  return new Promise((ok, no) => {
-    const done = () => { v.removeEventListener('seeked', done); ok(); };
-    v.addEventListener('seeked', done);
-    const bail = setTimeout(() => { v.removeEventListener('seeked', done);
-      no(new Error('seek stalled at ' + t.toFixed(3) + 's')); }, 20000);
-    const wrap = () => clearTimeout(bail);
-    v.addEventListener('seeked', wrap, { once: true });
-    v.currentTime = Math.max(0, t);
-  });
+  return { jpeg, bitmaps, lru, masks, total: jpeg + bitmaps + lru + masks };
 }
 
 /* ====================================================== export formats ===
@@ -272,6 +227,9 @@ export class BrowserEngine {
     this.ep = opts.ep || 'webgpu';
     this.clip = null;
     this.tracker = null;
+    this.bmp = new Map();                // frame index -> ImageBitmap (LRU)
+    this.bmpMax = 0;                     // set from the clip's size on open
+    this.lastDecode = null;              // which decode path ran, and how fast
     this.masks = new Map();              // objId -> Float32Array[](192*192 logits)
     this.promptFrames = new Map();       // objId -> the frame it was prompted on
     this.supports = {
@@ -287,6 +245,10 @@ export class BrowserEngine {
       extractProgress: true,        // decode reports frame by frame
       uncapped: true,               // whole clip, however long it is
       original: true,               // the matched cut, straight off the decoded frames
+      // what this browser could decode with, before any file is opened;
+      // `decode` is filled in per clip by open() with what actually ran
+      decodePaths: decodeSupport(),
+      decode: null,
       formats: browserFormats(),
     };
   }
@@ -311,9 +273,60 @@ export class BrowserEngine {
     return man;
   }
 
+  /* --------------------------------------------------- backend, for real
+   * Which execution provider and which precision, decided by asking the
+   * hardware rather than by assuming Chrome. Three answers:
+   *
+   *   webgpu + fp16   the adapter reports `shader-f16`
+   *   webgpu + fp32   it does not. The fp32 graphs are committed beside the
+   *                   fp16 ones and are ~20% slower, which is a far better
+   *                   answer than emulating half floats in a shader or
+   *                   dropping to WASM
+   *   wasm            no navigator.gpu, or no adapter at all
+   *
+   * Idempotent and cheap, so `meta()` can call it before any weights exist —
+   * the chip has to be honest from the first paint, not from the first track.
+   */
+  async pickBackend() {
+    if (this._picked) return this;
+    this._picked = true;
+    if (this.ep !== 'webgpu') return this;
+    if (!navigator.gpu) {
+      this.ep = 'wasm';
+      this.epNote = 'no WebGPU in this browser — running on WASM, ~6x slower';
+      return this;
+    }
+    let adapter = null;
+    try { adapter = await navigator.gpu.requestAdapter(); } catch (e) { adapter = null; }
+    if (!adapter) {
+      // navigator.gpu EXISTS and requestAdapter still answered null. That is
+      // not a browser without WebGPU, it is a browser that has switched it off:
+      // Brave does it by default through Shields' fingerprinting protection,
+      // and Chrome does it on blocklisted GPUs. Naming the cause is the whole
+      // difference between a dead end and a setting to change.
+      this.ep = 'wasm';
+      this.adapterBlocked = true;
+      this.epNote = 'WebGPU is present but this browser refused an adapter — '
+        + 'in Brave that is Shields\u2019 fingerprinting protection (set it to '
+        + 'Standard at brave://settings/shields, or enable '
+        + 'brave://flags/#enable-unsafe-webgpu). Running on WASM instead, '
+        + '~6x slower';
+      return this;
+    }
+    if (this.fp16 && !(adapter.features && adapter.features.has('shader-f16'))) {
+      this.fp16 = false;
+      this.epNote = 'this GPU has no shader-f16 — running the fp32 graphs '
+        + '(bigger download, ~20% slower, same masks)';
+    }
+    return this;
+  }
+
   async init() {
     if (this.ready) return this;
     await this.manifestOf();
+    // the precision has to be settled BEFORE the probe, or a machine without
+    // shader-f16 gets told the fp16 weights are missing
+    await this.pickBackend();
     // A HEAD that 404s prints a line in the console. That is unavoidable and,
     // in the only case it happens, correct: the file really is not there. The
     // alternative is finding out when the user presses Track.
@@ -324,31 +337,53 @@ export class BrowserEngine {
         + 'committed to the repo. See web/README.md: download the release bundle '
         + 'into web/models/, or run ./setup.sh to export them yourself.');
     }
-    if (this.ep === 'webgpu' && !navigator.gpu) {
-      this.ep = 'wasm';
-      this.epNote = 'no WebGPU in this browser — running on WASM, ~6x slower';
-    }
     this.ready = true;
     return this;
   }
 
   async loadTracker(log) {
     if (this.tracker) return this.tracker;
-    await this.init();
+    await this.init();                       // settles ep and fp16 first
     // `fetch('./x')` resolves against the DOCUMENT, but `import('./x')` resolves
     // against this module — which lives one directory deeper. Resolve both the
     // same way the rest of the engine does, or the runtime 404s under engines/.
     const ortBase = new URL(this.ortDir, document.baseURI).href;
     const ort = await import(ortBase + 'ort.all.bundle.min.mjs');
     ort.env.wasm.wasmPaths = ortBase;
-    ort.env.wasm.numThreads = Math.min(8, navigator.hardwareConcurrency || 4);
+    /* Threads need SharedArrayBuffer, and SharedArrayBuffer needs the page to
+     * be cross-origin isolated (COOP + COEP), which a plain static host does
+     * not do and GitHub Pages cannot. Asking for eight threads there is not a
+     * degraded fast path, it is a failed init — so ask for what is actually
+     * available. One thread is slow; slow and working beats "no available
+     * backend found". */
+    const isolated = typeof SharedArrayBuffer !== 'undefined'
+      && (globalThis.crossOriginIsolated !== false);
+    this.threads = isolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
+    ort.env.wasm.numThreads = this.threads;
     ort.env.logLevel = 'error';
     this.ort = ort;
     const t = new WebTracker(ort, { ep: this.ep, fp16: this.fp16,
                                     chain: this.ep === 'webgpu', dir: this.dir });
-    await t.load(log || (() => {}));
+    try {
+      await t.load(log || (() => {}));
+    } catch (e) {
+      // ORT's own message for this is "no available backend found", which tells
+      // a visitor nothing. Say which backend was tried and what to do.
+      throw new Error(`${this.backendLine()} could not start — ${e.message}`
+        + (this.epNote ? ' · ' + this.epNote : ''));
+    }
     this.tracker = t;
     return t;
+  }
+
+  /** The backend, in the words the stats line uses. */
+  backendLine() {
+    return this.ep === 'webgpu'
+      ? `WebGPU ${this.fp16 ? 'fp16' : 'fp32'}`
+      : `WASM ${this.fp16 ? 'fp16' : 'fp32'}`
+        + (this.threads ? ` \u00b7 ${this.threads} thread`
+          + (this.threads > 1 ? 's' : '') : '')
+        + ' \u00b7 slow';
   }
 
   /* ------------------------------------------------------------ metadata */
@@ -357,6 +392,8 @@ export class BrowserEngine {
     // mode tables from loading. checkModels() in app.js reports that separately.
     let S = 768;
     try { S = (await this.manifestOf()).image_size; } catch (e) { /* reported later */ }
+    // ask the GPU what it can do before claiming a backend on the chip
+    await this.pickBackend();
     return {
       palettes: Dither.PALETTES,
       modes: Dither.MODES,
@@ -373,6 +410,15 @@ export class BrowserEngine {
       default_track_size: S,
       engine: 'browser',
     };
+  }
+
+  /** How the frames this track just walked were decoded — the short form, for
+   *  the stats line. Empty for a still, which was never decoded. */
+  decodeNote() {
+    const d = this.lastDecode;
+    if (!d) return '';
+    return d.path === 'video-seek' ? 'frames from the <video> seek path'
+      : `frames via WebCodecs${d.accel ? ' (' + d.accel + ')' : ''}`;
   }
 
   async blueNoise(n, seed) {
@@ -393,8 +439,16 @@ export class BrowserEngine {
     this.srcFile = file;
     this.srcOpts = opts;
     this.masks.clear(); this.promptFrames.clear();
+    this.dropBitmaps(c.w, c.h);
+    // Which path ran is a fact about this decode, not about the browser, so it
+    // is reported per clip. `supports.decode` is the same object, which is how
+    // window.DV_engine() and the verification suite see it without app.js
+    // having to carry it.
+    this.lastDecode = c.decode || null;
+    this.supports.decode = this.lastDecode;
+    if (c.decode) console.info('[dither] ' + c.decode.line);
     return { job: 'local', nFrames: c.nFrames, w: c.w, h: c.h, fps: c.fps,
-             trimStart: c.trimStart, seconds: c.seconds };
+             trimStart: c.trimStart, seconds: c.seconds, decode: c.decode };
   }
 
   /** A different range out of the same file. The tab still holds the File
@@ -417,6 +471,7 @@ export class BrowserEngine {
     }
     this.clip = { frames: [blob], nFrames: 1, w: W, h: H, fps: 1, still: true };
     this.masks.clear(); this.promptFrames.clear();
+    this.dropBitmaps(W, H);
     return { job: 'local', kind: 'image', nFrames: 1, w: W, h: H, fps: 1 };
   }
 
@@ -443,22 +498,54 @@ export class BrowserEngine {
       out.push({ id: String(o.id), image: await this.mask(o.id, 0), area: step.area });
     }
     return { objects: out, elapsedS: (performance.now() - t0) / 1000,
-             imageSize: S, backend: this.ep, frameIdx: 0, note: notes.join(' · ') };
+             imageSize: S, backend: this.ep, backendLine: this.backendLine(),
+             frameIdx: 0,
+             note: [notes.join(' · '), this.epNote || ''].filter(Boolean).join(' · ') };
+  }
+
+  /* ------------------------------------------------------ the bitmap LRU
+   * Decoding a JPEG costs 3-5 ms at 720p and the same frames are asked for
+   * again and again: the prompt stage, the hover scrub, the polish window,
+   * every export loop. The cache is bounded in BYTES rather than frames, so a
+   * 1080p clip holds a third as many as a 720p one and the ceiling is the same
+   * 48 MB either way.
+   *
+   * `frame()` hands out a COPY. app.js closes the bitmaps it evicts from its
+   * own LRU, and a cache whose entries can be closed from outside is not a
+   * cache. The copy is a GPU-side blit, an order of magnitude under the JPEG
+   * decode it replaces. */
+  dropBitmaps(w, h) {
+    this.bmp.forEach((b) => b.close?.());
+    this.bmp.clear();
+    this.bmpMax = Math.max(4, Math.floor(BITMAP_BUDGET / Math.max(1, w * h * 4)));
+  }
+
+  /** The cached bitmap for frame `i` — the engine's own, do not close it. */
+  async bitmapAt(i) {
+    const k = Math.max(0, Math.min(this.clip.nFrames - 1, i | 0));
+    const hit = this.bmp.get(k);
+    if (hit) { this.bmp.delete(k); this.bmp.set(k, hit); return hit; }
+    const made = await createImageBitmap(this.clip.frames[k]);
+    this.bmp.set(k, made);
+    while (this.bmp.size > this.bmpMax) {
+      const old = this.bmp.keys().next().value;
+      this.bmp.get(old).close?.();
+      this.bmp.delete(old);
+    }
+    return made;
   }
 
   async frame(i) {
-    const b = this.clip.frames[Math.max(0, Math.min(this.clip.nFrames - 1, i))];
-    return createImageBitmap(b);
+    return createImageBitmap(await this.bitmapAt(i));
   }
 
   /** RGBA of frame `i` resized into the tracker's square. */
   async trackerInput(i, S) {
-    const bmp = await this.frame(i);
+    const bmp = await this.bitmapAt(i);
     const c = this._sq || (this._sq = new OffscreenCanvas(S, S));
     if (c.width !== S) { c.width = S; c.height = S; }
     const g = c.getContext('2d', { willReadFrequently: true });
     g.drawImage(bmp, 0, 0, S, S);
-    bmp.close?.();
     return g.getImageData(0, 0, S, S).data;
   }
 
@@ -569,8 +656,9 @@ export class BrowserEngine {
                  area: step.area });
     }
     return { objects: out, elapsedS: (performance.now() - t0) / 1000,
-             imageSize: S, backend: this.ep, frameIdx,
-             note: notes.join(' · ') };
+             imageSize: S, backend: this.ep, backendLine: this.backendLine(),
+             frameIdx,
+             note: [notes.join(' · '), this.epNote || ''].filter(Boolean).join(' · ') };
   }
 
   /** A conditioning frame: heads_prompt (points) or heads_mask (a drawn shape). */
@@ -689,9 +777,11 @@ export class BrowserEngine {
       frames: N, elapsedS: +el.toFixed(2),
       fps: +(total / Math.max(el, 1e-6)).toFixed(2),
       device: this.ep.toUpperCase(), backend: this.fp16 ? 'fp16' : 'fp32',
+      backendLine: this.backendLine(),
       imageSize: S, steps: total,
       note: [objects.length > 1 ? `${objects.length} subjects, one pass each` : '',
-             this.epNote || '', notes.join(' · ')].filter(Boolean).join(' · '),
+             this.decodeNote(), this.epNote || '',
+             notes.join(' · ')].filter(Boolean).join(' · '),
     };
   }
 
@@ -806,12 +896,33 @@ export class BrowserEngine {
     };
   }
 
-  /* MediaRecorder over `captureStream(0)` + `requestFrame()`: the recorder
-   * timestamps each frame when we hand it over, so pacing the loop to the
-   * clip's own frame interval gives a file that plays at the right speed. If a
-   * frame takes longer than that interval to dither, the export runs behind and
-   * the result is slower than real time — the returned `fps` says whether it
-   * did.
+  /* MediaRecorder over a canvas capture stream. Two ways to drive it, because
+   * `requestFrame` is not everywhere:
+   *
+   *   captureStream(0) + requestFrame()   one frame per call, exactly when we
+   *                                       say. The recorder timestamps it on
+   *                                       arrival, so pacing the loop to the
+   *                                       clip's frame interval gives a file
+   *                                       that plays at the right speed.
+   *   captureStream(fps)                  the compositor samples the canvas
+   *                                       instead. No frame is guaranteed and
+   *                                       none is exactly placed.
+   *
+   * The first is the standard `CanvasCaptureMediaStreamTrack.requestFrame()`;
+   * Firefox has the older `CanvasCaptureMediaStream.requestFrame()` on the
+   * STREAM instead, which is why both are looked for. Safari has neither, and
+   * calling the missing one is what "vtrack.requestFrame is not a function"
+   * was. When neither exists the stream is rebuilt at `fps` and each painted
+   * frame is given a compositor frame plus its interval to be picked up —
+   * and the result is COUNTED rather than assumed: on that path only, the
+   * finished WebM is demuxed and the number of frames in it reported, with a
+   * note when it is not the number that went in. (Only on that path: counting
+   * reads the whole export back into memory, and on the requestFrame path it
+   * would be hundreds of megabytes spent confirming a tautology.)
+   *
+   * If a frame takes longer than the interval to dither, the export runs
+   * behind and the result is slower than real time — the returned `fps` says
+   * whether it did.
    *
    * The container is WebM (VP9, VP8 on older builds). Writing H.264 MP4 in the
    * tab would mean shipping an encoder; ffmpeg.wasm is ~32 MB and would have to
@@ -833,8 +944,23 @@ export class BrowserEngine {
     const mime = types.find((t) => window.MediaRecorder
       && MediaRecorder.isTypeSupported(t));
     if (!mime) throw new Error('this browser has no MediaRecorder WebM encoder');
-    const stream = cv.captureStream(0);
-    const vtrack = stream.getVideoTracks()[0];
+    let stream = cv.captureStream(0);
+    let vtrack = stream.getVideoTracks()[0];
+    /* Which of the three, and it matters beyond "does it throw". Only the
+     * track-level call captures the canvas SYNCHRONOUSLY; Firefox's
+     * stream-level one queues the grab for the next paint, so two calls inside
+     * one paint interval collapse into one frame and the file comes out short.
+     * Both of the async kinds therefore get a compositor frame each. */
+    const kind = typeof vtrack.requestFrame === 'function' ? 'track'
+      : typeof stream.requestFrame === 'function' ? 'stream' : 'compositor';
+    let push = kind === 'track' ? () => vtrack.requestFrame()
+      : kind === 'stream' ? () => stream.requestFrame() : null;
+    if (!push) {
+      // nothing can hand this stream a frame, so let the compositor take them
+      vtrack.stop();
+      stream = cv.captureStream(fps);
+      vtrack = stream.getVideoTracks()[0];
+    }
     const chunks = [];
     const rec = new MediaRecorder(stream, {
       mimeType: mime,
@@ -855,14 +981,19 @@ export class BrowserEngine {
       const img = await renderFrame(from + i, w, h);   // ImageData from app.js
       if (alpha) g.clearRect(0, 0, w, h);
       g.putImageData(img, 0, 0);
-      vtrack.requestFrame();
+      if (push) push();
+      if (kind !== 'track') await raf();   // let the compositor take it
       if (onProgress) onProgress({ done: i + 1, total: nFrames,
                                    text: `${i + 1}/${nFrames}` });
       const left = dt - (performance.now() - fs);
       await sleep(Math.max(0, left));
     }
-    // give the encoder the last frame's full interval before cutting
-    await sleep(dt * 2);
+    // Give the encoder the last frame's full interval before cutting — plus a
+    // fixed tail, because on the two asynchronous paths the final grab has not
+    // necessarily happened yet when the loop ends. Measured: without it Firefox
+    // writes 59 of 60 frames.
+    await raf();
+    await sleep(dt * 2 + (kind === 'track' ? 0 : 250));
     rec.stop();
     await stopped;
     vtrack.stop();
@@ -874,13 +1005,25 @@ export class BrowserEngine {
         + `${real.toFixed(1)} s clip) — the WebM is paced to wall clock, so it `
         + 'plays slow; pick a lighter look or use the local server'
       : '';
+    // Count what actually landed in the file — but only on the compositor
+    // path, where it is genuinely unknown. Counting means reading the whole
+    // export back into an ArrayBuffer, and on the requestFrame path that is a
+    // few hundred megabytes spent confirming what the loop already guaranteed.
+    const written = kind === 'track' ? 0 : await countWebMFrames(blob);
+    const short = written && written !== nFrames
+      ? `${written} of ${nFrames} frames reached the file — this browser hands `
+        + 'the recorder frames asynchronously, so the cut is approximate. Use '
+        + 'Chrome or Safari, or the local server, for an exact one'
+      : '';
     return {
       url: URL.createObjectURL(blob), mime, ext: 'webm', playable: true,
       alpha: !!alpha,
-      frames: nFrames, elapsedS: +el.toFixed(2),
+      frames: nFrames, framesWritten: written || nFrames,
+      paced: kind,
+      elapsedS: +el.toFixed(2),
       fps: +(nFrames / Math.max(el, 1e-6)).toFixed(2),
       bytes: blob.size,
-      note: slow || (alpha
+      note: short || slow || (alpha
         ? `${mime} with an alpha channel — the server writes ProRes 4444 too`
         : `${mime} — the server engine writes H.264 MP4`),
     };
@@ -888,6 +1031,8 @@ export class BrowserEngine {
 
   dispose() {
     this.clip = null;
+    this.bmp.forEach((b) => b.close?.());
+    this.bmp.clear();
     this.masks.clear();
     this.promptFrames.clear();
   }

@@ -47,8 +47,10 @@ product: drop a clip or a still, point at a person, export. No account, no
 upload, nothing leaves the tab. The first track downloads ~55 MB of weights once
 and the browser caches them.
 
-It runs on WebGPU, so a current Chrome or Edge (or Safari 26+) is the fast path;
-anything else falls back to multi-threaded WASM and says so in the header.
+**Fastest in Chrome and Safari; Firefox works but is slower.** Tracking runs on
+WebGPU, so a current Chrome, Edge or Safari 26 is the fast path; anything else
+falls back to WASM and says so in the header. See
+[Browsers](#browsers) for what was measured where.
 
 Measured against that deployment, headless Chromium with WebGPU, nothing local
 running: page to a live engine in **1.08 s**, `sample.mp4` decoded to 150 frames
@@ -367,7 +369,7 @@ M-series laptop, CoreML backend:
 
 | | server engine | browser engine |
 |---|---|---|
-| open it (upload + decode, through the UI) | **2.8 s** | **344 s = 5.7 min** |
+| open it (upload + decode, through the UI) | **2.8 s** | **16.5 s** (was 344 s) |
 | all 2,700 frames arrived | yes | yes |
 | frames kept | 137 MB on disk, 51 KB/frame | 290 MB of JPEG blobs in the tab |
 | JS heap after the decode | — | 11 MB (the blobs are not on the heap) |
@@ -377,10 +379,16 @@ M-series laptop, CoreML backend:
 | re-cut 30–45 s afterwards | **0.5 s**, no upload | **64 s**, re-decoded from the `File`, no re-pick |
 | console errors | 0 | 0 |
 
-The gap in the first row is the whole argument for the two engines: ffmpeg reads
-the clip in one pass, while the tab pays for 2,700 individual `<video>` seeks.
-Both got there — `docs/w-long-loaded-browser.png` is the tab afterwards, scrubber
-reading *0 / 2699*, on the free engine with no server involved.
+The first row used to read *344 s = 5.7 min*, and it is the reason
+`web/engines/decode.js` exists. The tab paid for 2,700 individual `<video>`
+seeks, each of which re-primes the decoder and walks back to a keyframe; it now
+demuxes the file itself and runs one `VideoDecoder` over the stream in a module
+Worker, which is the pass ffmpeg was already doing. Same frames — byte-identical
+JPEGs, checked both ways in `verify-web.mjs` — about a tenth of the time, and
+none of it on the main thread. See [Decoding](#decoding) for the measurements.
+Both engines got there either way; `docs/w-long-loaded-browser.png` is the tab
+afterwards, scrubber reading *0 / 2699*, on the free engine with no server
+involved.
 
 The estimate the panel showed for that clip was *≈ 243 MB on the server ·
 tracking one subject ≈ 2m 9s at balanced · 768 px* (and *≈ 789 MB in this tab ·
@@ -402,7 +410,9 @@ The two guardrails, fired for real:
 A camera recording has one wrinkle worth knowing: `MediaRecorder` WebM carries no
 duration in its header until it has been seeked past its end, so both the
 filmstrip and the browser decoder ask for it that way before deciding how many
-frames there are.
+frames there are. It is also the file the old seek loop was worst on — no Cues
+either, so every seek was a scan — and correspondingly the file the WebCodecs
+path helps most: **16.0 s → 1.26 s** for 149 frames of VP8.
 
 ### 2 · Subjects
 Two choices, and they read differently depending on what you dropped:
@@ -1311,6 +1321,69 @@ chaining: `encoder → memattn → heads` is wired with
 `preferredOutputLocation: 'gpu-buffer'`, so 9.4 MB of feature maps per frame
 never come back to JS.
 
+<a id="decoding"></a>
+#### Decoding
+
+Getting frames out of a file used to be one `currentTime =` and one `seeked`
+event per frame, on the main thread. That is the slowest way a browser can be
+asked for pictures — every seek re-primes the decoder and re-decodes the gap
+back to a keyframe — and on a cue-less WebM it is a scan of the file each time.
+
+The tab now demuxes the container itself (`web/workers/demux-mp4.js`,
+`web/workers/demux-webm.js` — both written here, no vendored demuxer) and runs
+`VideoDecoder` once over the stream inside a module Worker, resizing and JPEG
+encoding on six `OffscreenCanvas`es as the frames come out. The `<video>` seek
+loop is still there and still correct; it is the fallback, and which one ran is
+in the engine's decode stats.
+
+Measured in the same headless Chromium on an M-series laptop, the same clip down
+both paths, `DV_DECODE_SLOW=1 node verify-web.mjs`:
+
+| clip | `<video>` seek | WebCodecs · worker | |
+|---|---|---|---|
+| `sample.mp4` — 150 frames, H.264 720p | 4.43 s | **0.97 s** | 4.6× |
+| `docs/entry-clip.mp4` — 149 frames, H.264 | 5.59 s | **1.23 s** | 4.5× |
+| VP8 WebM, no Cues, no Duration (a camera recording) | 16.05 s | **1.26 s** | 12.8× |
+| `sample.mp4` looped to 90 s — 2,700 frames | 192.5 s | **16.5 s** | 11.7× |
+
+The frames are not merely equivalent, they are **byte-identical**: same JPEG
+bytes, same total, same FNV hash on the first and last frame of every clip in
+that table. Both paths hand the same RGBA to the same encoder, and the grid —
+frame `i` is the picture on screen at `t0 + (i + 0.5)/fps` — is computed once,
+from the same `<video>` metadata, before either path runs. Nothing downstream
+can tell which one decoded the clip.
+
+Where the remaining time goes, for the 150-frame H.264 row:
+
+| | |
+|---|---|
+| reading the `File` into memory | 6 ms |
+| the worker booting (its whole module graph) | 6 ms |
+| demuxing 150 samples | 1 ms |
+| `drawImage(VideoFrame)` — all 150 | 15 ms |
+| decode + JPEG, six canvases deep | 957 ms |
+
+So it is now the JPEG encoder, not the decoder: 4.9 s of `convertToBlob` across
+six parallel canvases. The blobs are what everything downstream is built on —
+the memory model the estimate panel states out loud, `frameURL()`, and the
+sequence library's snapshots, which outlive the clip they came from — so they
+stay. Raising the parallelism past six does not help; this was measured.
+
+**It does not block.** Neither path ever produced a long task over 50 ms, because
+the seek loop awaited too. What changed is the occupancy: a 16 ms interval
+running through the decode came back **0.6 ms late on average on the worker
+path against 0.9 ms on the seek path**, over five times fewer ticks.
+
+**Tracking is not in a worker, and here is why.** During a 150-frame single-
+subject track (23.1 s wall), the main thread accumulated **69 ms of long tasks
+in total** — one task — and that same 16 ms interval ran 2.1 ms late on average.
+The ONNX work is already off-thread: `encoder → memattn → heads` is chained on
+the GPU and only 192² mask candidates come back. What is left on the main thread
+is `preprocess()` normalising 768×768×3 floats, a few ms a frame. Moving the
+sessions into a worker would mean moving frame access, the preview path and
+`segmentImage` with them, for a UI that is already at ~87% idle. It is written
+down as a plan in `docs/track-web.md` rather than done.
+
 **Download.** The page itself is ~200 KB. The first time you track something, the
 browser engine pulls **83 MB** — 55.3 MB of fp16 ONNX graphs and 27.7 MB of
 onnxruntime-web — and caches it. Nothing comes from a CDN.
@@ -1887,10 +1960,52 @@ why the setting exists rather than a silently lowered default.
 
 ## Limits
 
+<a id="browsers"></a>
+### Browsers
+
+Chrome and Safari are the tested and tuned targets. Firefox works and is not
+optimised for. Everything below is feature-detected at run time, not sniffed,
+and what actually ran is in the stats lines.
+
+| | Chromium 145 | Firefox 146 | WebKit / Safari 26 |
+|---|---|---|---|
+| WebGPU tracking | **yes**, fp16 | yes, fp16 | not in the headless build tested |
+| WebCodecs decode in a worker | **yes** | **yes** | **yes** |
+| 60 frames of 720p decoded | 0.49 s | 0.15 s | 1.66 s |
+| `MediaRecorder` WebM | VP9 | VP8 (no VP9) | VP9 |
+| canvas `requestFrame()` | on the **track** | on the **stream** | on the **track** |
+| a 60-frame export is exactly 60 frames | **yes** | 59 of 60, and it says so | **yes** |
+
+Two of those rows are the same bug seen from two sides. `requestFrame()` is a
+method on `CanvasCaptureMediaStreamTrack` in Chromium and WebKit and a method on
+the *stream* in Firefox, which is why the export threw *"vtrack.requestFrame is
+not a function"* there; and Firefox's version queues the grab for the next paint
+rather than taking it there and then, so a render slower than real time loses
+the odd frame. All three forms are handled — track, stream, and neither (the
+compositor samples the canvas instead, which no shipping engine needs today and
+is tested by deleting the API) — and on the two asynchronous ones the finished
+file is **demuxed and counted**, so a short cut says it is short instead of
+looking fine.
+
+WebGPU tracking was verified in Chromium and Firefox. Headless WebKit offers no
+adapter, so Safari's tracking speed is **not measured here** and is not claimed;
+its decode and its export are.
+
 ### The browser engine
 * **WebGPU or nothing much.** Chrome, Edge and current Safari have it. Without it
-  the page falls back to multi-threaded WASM at **2.05 fps** — usable for a short
-  clip, not for a 300-frame one — and says so on the chip.
+  the page falls back to WASM and says so in the header: **2.05 fps** with eight
+  threads, and **0.5 fps** on one — which is what a plain static host gets,
+  because threads need `SharedArrayBuffer` and that needs COOP+COEP. Usable for
+  a still or a handful of frames, not for a clip.
+* **WebGPU can be present and still refused.** Brave blocks `requestAdapter()`
+  by default through Shields' fingerprinting protection, and Chrome does it on
+  blocklisted GPUs. The engine asks for an adapter *before* it asks onnxruntime
+  for anything, so that case lands on WASM instead of on *"no available backend
+  found"*, and the note names the setting: Shields → fingerprinting → Standard,
+  or `brave://flags/#enable-unsafe-webgpu`.
+* **fp16 is a GPU feature, not a given.** Without `shader-f16` the fp32 graphs
+  are loaded instead — bigger download, ~20% slower, same masks — rather than
+  emulating half floats or dropping to WASM.
 * **83 MB before the first track.** Cached afterwards, but it is a real cost on a
   first visit, and the weights are not in git (see `web/README.md`).
 * **One tracker resolution.** 768 px only. 512 and 1024 would triple the
@@ -1908,9 +2023,20 @@ why the setting exists rather than a silently lowered default.
   that happened.
 * **Memory.** A 150-frame 720p clip is ~15 MB of JPEG blobs plus ~22 MB of mask
   logits per subject; a 90-second one measured **290 MB** of blobs (the JS heap
-  stays ~11 MB — blobs do not live on it). The estimate panel adds it up before
-  you commit and suggests the server engine over ~2 GB. Six subjects on a long
-  clip is still not a good idea in a tab; it is just no longer forbidden.
+  stays ~11 MB — blobs do not live on it). On top of that the engine keeps a
+  bitmap LRU bounded at **48 MB** and app.js keeps forty more frames, both in
+  RGBA. The estimate panel adds it up before you commit and suggests the server
+  engine over ~2 GB. Six subjects on a long clip is still not a good idea in a
+  tab; it is just no longer forbidden.
+* **The whole file is read into memory to decode it.** The WebCodecs path needs
+  the container, and a demuxer that streamed instead would be a different piece
+  of software. A 90-second 720p MP4 is ~24 MB; a long 4K one is not, and that is
+  the case where the seek path's laziness was an advantage.
+* **The fast decode is a codec question, not a browser question.** MP4/MOV
+  (H.264, HEVC, AV1, VP9) and WebM (VP8, VP9, AV1) are demuxed here; anything
+  else, or any codec `VideoDecoder.isConfigSupported` turns down, falls through
+  to the `<video>` seek loop and says so in the decode stats. Chromium was
+  measured; other engines are feature-detected, not claimed.
 
 ### The server engine
 * **macOS + Apple Silicon, for the fast path.** Tracking is CoreML + MPS.

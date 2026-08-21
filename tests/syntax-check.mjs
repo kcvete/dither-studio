@@ -54,7 +54,12 @@ const MODULES = [
   'web/track.js',
   'web/engines/index.js',
   'web/engines/browser.js',
+  'web/engines/decode.js',
   'web/engines/remote.js',
+  'web/workers/decode-core.js',
+  'web/workers/decode-worker.js',
+  'web/workers/demux-mp4.js',
+  'web/workers/demux-webm.js',
   'web/player/dither-player.mjs',
   'server/parity.mjs',
 ];

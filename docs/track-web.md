@@ -127,3 +127,47 @@ this export scores 0.9681 (fp32) / 0.9666 (fp16) when it is fed frames resized
 the way torch resizes them. The browser's 0.9535 is the canvas resampler —
 re-running the Python loop with a box filter instead of bilinear moves it to
 0.9295 with the model untouched.
+
+## Frames into the tracker
+
+`web/engines/decode.js` decides how the clip's frames are obtained, and it is a
+separate question from this file: the tracker takes RGBA at `image_size²` and
+does not care where it came from. Since the WebCodecs path landed, decoding
+150 frames of 720p costs ~1.0 s rather than ~4.4 s, and none of it is on the
+main thread — see **Decoding** in the root README for the table.
+
+What still runs on the main thread is this file's loop. Measured during a
+150-frame single-subject track on an M4 Pro (WebGPU fp16, 23.1 s wall):
+
+| | |
+|---|---|
+| long tasks over 50 ms | **1**, 69 ms |
+| total main-thread blocking | **69 ms in 23.1 s** |
+| a 16 ms interval, average lateness | 2.1 ms |
+| worst single lateness | 61 ms |
+
+That is a UI at roughly 87% idle for the whole track, which is why the ONNX
+sessions are still where they are. The chaining is doing the work: `encoder →
+memattn → heads` never returns its 9.4 MB of feature maps to JS, so the only
+per-frame JS cost is `preprocess()` — 768×768×3 float normalisations — plus the
+192² logits coming back.
+
+### If it ever does need to move
+
+The plan, written down so it is not re-derived:
+
+1. A `web/workers/track-worker.js` that imports `ort` and `WebTracker`, holds
+   the sessions, and answers three messages: `load`, `step` and `reset`.
+2. Frames go in as JPEG `Blob`s (cloned by reference across `postMessage`, so
+   the pixels are not serialised) and the worker does its own
+   `createImageBitmap` → `S×S` canvas → `getImageData`. That moves
+   `trackerInput()` as well, which is where the JPEG decode lives.
+3. `previewFrame()` and `segmentImage()` have to move with it or the model set
+   is loaded twice — 47 MB of fp16 graphs and a WebGPU device each. That is the
+   part that makes this a bigger change than it looks.
+4. `masks` stays on the main thread: the logits come back per frame the way
+   they do now, so `mask()`, `snapshot()` and the sequence library are untouched.
+
+The measurement above is the reason it has not been done, not an argument that
+it never should be. A slower machine, a bigger `image_size` or several subjects
+at once all push the per-frame JS cost up.

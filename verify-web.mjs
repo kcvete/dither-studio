@@ -46,7 +46,7 @@
  * Screenshots go to docs/, the report to docs/verify-web-report.json.
  * Exits non-zero on any console error, page error, or a failed assertion.
  */
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -155,6 +155,14 @@ async function newPage(pref, opts = {}) {
     try { localStorage.setItem('dither-studio.engine', JSON.stringify(p)); }
     catch (e) { /* storage blocked */ }
   }, pref);
+  // engines/decode.js reads this before it picks a path. Forcing one is how the
+  // same clip gets decoded both ways and the frames compared; a forced path
+  // does not fall back, so a failure here is a failure and not a silent detour.
+  if (opts.decodePath) {
+    await ctx.addInitScript((d) => { window.DV_DECODE_PATH = d; }, opts.decodePath);
+  }
+  // for taking an API away from the page on purpose
+  if (opts.init) await ctx.addInitScript(opts.init);
   const page = await ctx.newPage();
   page.on('console', (m) => {
     if (m.type() !== 'error') return;
@@ -169,6 +177,10 @@ async function newPage(pref, opts = {}) {
   page.on('pageerror', (e) => R.pageErrors.push(String(e)));
   page.on('requestfailed', (rq) => {
     const why = (rq.failure() || {}).errorText || '';
+    // Taking a download off a blob: URL cancels the request that started it.
+    // Chromium does not report that; Firefox and WebKit do, as "cancelled" on
+    // a blob: URL, and it is the success path rather than a failure.
+    if (/^blob:/.test(rq.url()) && /^(cancelled|NS_BINDING_ABORTED)$/i.test(why)) return;
     if (why !== 'net::ERR_ABORTED' && !expected(rq.url())) {
       R.consoleErrors.push('requestfailed ' + rq.url() + ' ' + why);
     }
@@ -381,6 +393,39 @@ async function runStill() {
   check('still exports a PNG', !/failed/.test(r.export), r.export);
   r.bytes = await saveDownload(page, path.join(DOCS, 'w-still-export.png'));
   r.probe = probe(path.join(DOCS, 'w-still-export.png'));
+
+  /* The slow-tracking hint. The browser engine is the free tier and it is the
+   * slow one; when a run is genuinely long the page says where the fast one
+   * is. DV_slowHint(etaSeconds, fps) is the simulator -- a real slow run is
+   * minutes, and this check is about the sentence, not the wait. */
+  await openStep(page, 'st2');
+  // the hint lives under the tracking progress line, so the subject controls
+  // have to be the ones on screen
+  await page.click('#scope .chip[data-scope="track"]');
+  await sleep(400);
+  r.slowQuiet = await page.evaluate(() => window.DV_slowHint(5, 30));
+  r.slowQuietVisible = await page.isVisible('#slowhint');
+  check('a quick run says nothing',
+        r.slowQuiet === false && r.slowQuietVisible === false,
+        `${r.slowQuiet} / ${r.slowQuietVisible}`);
+  r.slowShown = await page.evaluate(() => window.DV_slowHint(120, 2));
+  await sleep(200);
+  r.slowVisible = await page.isVisible('#slowhint');
+  r.slowText = (await page.textContent('#slowhint')).replace(/\s+/g, ' ').trim();
+  r.slowHref = await page.getAttribute('#slowmain a', 'href');
+  check('a slow run on the browser engine offers the local one',
+        r.slowShown === true && r.slowVisible === true,
+        `shown=${r.slowShown} visible=${r.slowVisible} quiet=${r.slowQuiet}/`
+        + `${r.slowQuietVisible} · ${r.slowText}`);
+  check('the offer carries the repository link',
+        /github\.com\/kcvete\/dither-studio/.test(r.slowHref || ''), r.slowHref);
+  check('the offer names the speed-up in words',
+        /run it on your machine/i.test(r.slowText), r.slowText);
+  await page.screenshot({ path: path.join(DOCS, 'ux-after', 'slow-hint-browser.png') });
+  await page.click('#bSlowNo'); await sleep(200);
+  check('dismissing it is remembered for the session',
+        (await page.isVisible('#slowhint')) === false
+        && (await page.evaluate(() => window.DV_slowHint(600, 1))) === false);
   await ctx.close();
   return r;
 }
@@ -1247,6 +1292,18 @@ async function runCamera(engineId, deep) {
     await sleep(400);
     r.trimmedFrames = await page.evaluate(() => window.DV.nFrames);
     r.upstat = (await page.textContent('#upstat')).trim();
+    if (engineId === 'browser') {
+      // A camera recording is the file the seek loop was worst on: MediaRecorder
+      // WebM, no Cues, no Duration in the header. This is the only place the
+      // real thing (not an ffmpeg imitation of it) goes through the demuxer.
+      r.decode = await page.evaluate(() => window.DV.engine.lastDecode);
+      check('browser · the camera recording decodes through WebCodecs',
+            r.decode && r.decode.path === 'webcodecs-worker',
+            JSON.stringify(r.decode && r.decode.line));
+      check('browser · and it is recognised as WebM',
+            /webm/.test((r.decode && r.decode.note) || ''),
+            (r.decode && r.decode.note) || '');
+    }
     check(`${engineId} · the trim really shortened the clip`,
           r.trimmedFrames >= 50 && r.trimmedFrames <= 66,
           `${r.trimmedFrames} frames for a 2 s range (whole clip was ${r.wholeFrames})`);
@@ -2328,6 +2385,360 @@ async function runApiKey() {
   return r;
 }
 
+/* ====== WD: the two decode paths, over the same clip ========================
+ * The tab used to get its frames one `currentTime =` at a time. It now demuxes
+ * the file and runs VideoDecoder over the stream in a module Worker, and the
+ * only interesting question about that is whether the frames are the SAME
+ * frames: every mask index, every trim window and every number the rest of
+ * this file asserts on is an index into that grid.
+ *
+ * So each clip is decoded twice, once down each path, and the two are compared
+ * as pixels — a full-frame checksum for identity and a mean absolute
+ * difference for how wrong it would be if they ever stopped matching. They are
+ * expected to be byte-identical, because both paths hand the same RGBA to the
+ * same JPEG encoder.
+ *
+ * The 90 s clip is built here with ffmpeg rather than committed. Its seek-path
+ * half takes about three minutes, so it runs only under DV_DECODE_SLOW=1; the
+ * WebCodecs half always runs, because "does a 2,700-frame clip still decode"
+ * is not a performance question.
+ */
+async function decodeOnce(clipFile, decodePath) {
+  const { ctx, page } = await newPage(browserPref(), { decodePath });
+  try {
+    await loadClip(page, clipFile);
+    return await page.evaluate(async () => {
+      const E = window.DV.engine, n = window.DV.nFrames;
+      const big = document.createElement('canvas');
+      const bg = big.getContext('2d', { willReadFrequently: true });
+      const small = document.createElement('canvas');
+      small.width = 160; small.height = 90;
+      const sg = small.getContext('2d', { willReadFrequently: true });
+      const look = async (i) => {
+        const b = await E.frame(i);
+        big.width = b.width; big.height = b.height;
+        bg.drawImage(b, 0, 0);
+        sg.drawImage(b, 0, 0, 160, 90);
+        b.close();
+        // FNV-1a over every byte: identity, in eight hex digits
+        const d = bg.getImageData(0, 0, big.width, big.height).data;
+        let hsh = 0x811c9dc5;
+        for (let q = 0; q < d.length; q++) {
+          hsh ^= d[q]; hsh = Math.imul(hsh, 0x01000193) >>> 0;
+        }
+        return { hash: hsh.toString(16),
+                 thumb: Array.from(sg.getImageData(0, 0, 160, 90).data) };
+      };
+      return { n, w: window.DV.W, h: window.DV.H,
+               decode: E.lastDecode, support: E.supports.decodePaths,
+               bytes: E.clip.frames.reduce((a, b) => a + b.size, 0),
+               first: await look(0), last: await look(n - 1) };
+    });
+  } finally { await ctx.close(); }
+}
+
+const meanAbsArr = (a, b) => {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+  return s / a.length;
+};
+
+async function runDecodePaths() {
+  const r = { clips: {} };
+
+  const both = async (label, file, slowToo) => {
+    const fast = await decodeOnce(file, 'webcodecs-worker');
+    const out = { fast: { path: fast.decode.path, ms: fast.decode.ms,
+                          note: fast.decode.note, split: fast.decode.split,
+                          frames: fast.n, bytes: fast.bytes } };
+    check(`decode · ${label} · the worker path reports itself`,
+          fast.decode.path === 'webcodecs-worker'
+          && /WebCodecs/.test(fast.decode.label),
+          JSON.stringify(fast.decode.line));
+    check(`decode · ${label} · the stats line names the container and codec`,
+          /·\s*(mp4|webm)\s*·/.test(fast.decode.line), fast.decode.line);
+    check(`decode · ${label} · it says whether the decoder was hardware`,
+          fast.decode.accel === 'hardware' || fast.decode.accel === 'software',
+          String(fast.decode.accel));
+    if (slowToo) {
+      const slow = await decodeOnce(file, 'video-seek');
+      out.slow = { path: slow.decode.path, ms: slow.decode.ms, frames: slow.n,
+                   bytes: slow.bytes };
+      out.speedup = +(slow.decode.ms / Math.max(1, fast.decode.ms)).toFixed(2);
+      check(`decode · ${label} · both paths decode the same number of frames`,
+            fast.n === slow.n, `${fast.n} vs ${slow.n}`);
+      check(`decode · ${label} · the same decode size`,
+            fast.w === slow.w && fast.h === slow.h,
+            `${fast.w}x${fast.h} vs ${slow.w}x${slow.h}`);
+      out.firstMeanAbs = +meanAbsArr(fast.first.thumb, slow.first.thumb).toFixed(4);
+      out.lastMeanAbs = +meanAbsArr(fast.last.thumb, slow.last.thumb).toFixed(4);
+      check(`decode · ${label} · frame 0 is the same picture`,
+            out.firstMeanAbs < 1.5, String(out.firstMeanAbs));
+      check(`decode · ${label} · the last frame is the same picture`,
+            out.lastMeanAbs < 1.5, String(out.lastMeanAbs));
+      out.identical = fast.first.hash === slow.first.hash
+        && fast.last.hash === slow.last.hash && fast.bytes === slow.bytes;
+      check(`decode · ${label} · and in fact byte-identical`, out.identical,
+            `${fast.first.hash}/${slow.first.hash} `
+            + `${fast.last.hash}/${slow.last.hash} ${fast.bytes}/${slow.bytes}`);
+      check(`decode · ${label} · the worker path is the faster one`,
+            fast.decode.ms < slow.decode.ms,
+            `${fast.decode.ms} ms vs ${slow.decode.ms} ms`);
+    }
+    r.clips[label] = out;
+    out.support = fast.support;
+    return out;
+  };
+
+  const a = await both('sample.mp4', CLIP, true);
+  r.support = a.support;
+  check('decode · this browser advertises the worker path',
+        r.support && r.support.webcodecs && r.support.worker
+        && r.support.best === 'webcodecs-worker', JSON.stringify(r.support));
+  check('decode · 150 frames', a.fast.frames === 150, String(a.fast.frames));
+
+  // the clip that starts at 0.033 s: an off-by-one in the frame grid shows up
+  // here and nowhere else
+  await both('entry-clip.mp4', ENTRY, true);
+
+  // a WebM with no Cues and no Duration in its header — a camera recording, in
+  // other words, which is the file the seek loop is slowest on
+  const webm = path.join(DOCS, 'w-decode-camera-like.webm');
+  try {
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-i', CLIP, '-c:v', 'libvpx',
+      '-b:v', '2M', '-an', '-f', 'webm', '-live', '1', webm], { stdio: 'inherit' });
+    await both('cue-less WebM', webm, true);
+  } catch (e) {
+    r.webmSkipped = String(e.message || e);
+  } finally { fs.rmSync(webm, { force: true }); }
+
+  // 90 s, 2,700 frames
+  const long = path.join(DOCS, 'w-decode-long.mp4');
+  try {
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-stream_loop', '17', '-i', CLIP,
+      '-c', 'copy', long], { stdio: 'inherit' });
+    const l = await both('90 s clip', long, process.env.DV_DECODE_SLOW === '1');
+    check('decode · a 90 s clip is 2,700 frames', l.fast.frames === 2700,
+          String(l.fast.frames));
+    check('decode · and it decodes in under a minute', l.fast.ms < 60000,
+          `${l.fast.ms} ms`);
+  } catch (e) {
+    r.longSkipped = String(e.message || e);
+  } finally { fs.rmSync(long, { force: true }); }
+
+  return r;
+}
+
+/* ====== WB: the other two engines, and the export they used to crash in =====
+ * Chromium is what the numbers in this file were measured on. It is not the
+ * only browser the page has to survive, and one API is why: `requestFrame()`
+ * is a method on `CanvasCaptureMediaStreamTrack` in Chromium and WebKit, and
+ * in Firefox it is a method on the STREAM instead — so the export threw
+ * "vtrack.requestFrame is not a function" on the browser a user actually had.
+ *
+ * Three things are checked here and each is a different failure:
+ *   1. Firefox and WebKit open a still, decode a clip and export a WebM, with
+ *      no console errors. Tracking is not attempted: headless WebKit has no
+ *      WebGPU adapter, and asserting on the WASM fallback's speed would be
+ *      asserting on the harness.
+ *   2. Chromium with `requestFrame` DELETED off the prototype — the third
+ *      branch, where neither form exists and the compositor samples the canvas
+ *      instead. No shipping engine takes it today, which is exactly why it
+ *      needs a test.
+ */
+async function runOtherBrowsers() {
+  const out = {};
+  for (const [name, launcher] of [['firefox', firefox], ['webkit', webkit]]) {
+    let br = null;
+    try { br = await launcher.launch({ headless: true }); }
+    catch (e) { out[name] = { skipped: String(e.message).split('\n')[0] }; continue; }
+    const r = {};
+    try {
+      const { ctx, page } = await newPage(browserPref(), { browser: br });
+      r.ua = await page.evaluate(() => navigator.userAgent);
+      r.caps = await page.evaluate(async () => {
+        let adapter = false, f16 = null;
+        if (navigator.gpu) {
+          try { const a = await navigator.gpu.requestAdapter(); adapter = !!a;
+                if (a) f16 = a.features.has('shader-f16'); } catch (e) { f16 = 'threw'; }
+        }
+        const c = document.createElement('canvas'); c.width = 8; c.height = 8;
+        const st = c.captureStream(0), tr = st.getVideoTracks()[0];
+        const rf = { onTrack: typeof tr.requestFrame === 'function',
+                     onStream: typeof st.requestFrame === 'function' };
+        tr.stop();
+        return { webgpu: !!navigator.gpu, adapter, shaderF16: f16, requestFrame: rf,
+                 decode: window.DV.engine.supports.decodePaths };
+      });
+      check(`${name} · the page comes up on the browser engine`,
+            await page.evaluate(() => window.DV_engine().id === 'browser'));
+      check(`${name} · it has a WebCodecs decode path`,
+            r.caps.decode.webcodecs && r.caps.decode.worker,
+            JSON.stringify(r.caps.decode));
+      check(`${name} · requestFrame exists somewhere, or the compositor path is it`,
+            r.caps.requestFrame.onTrack || r.caps.requestFrame.onStream
+            || true, JSON.stringify(r.caps.requestFrame));
+
+      await page.setInputFiles('#file', STILL);
+      await page.waitForFunction(() => window.DV.kind === 'image', null, { timeout: 60000 });
+      await sleep(1200);
+      r.still = await page.evaluate(() => ({ w: window.DV.W, h: window.DV.H }));
+      check(`${name} · a still opens at its own resolution`,
+            r.still.w === 1280 && r.still.h === 720, JSON.stringify(r.still));
+      await page.screenshot({ path: path.join(DOCS, `w-${name}-still.png`) });
+
+      await loadClip(page, CLIP, 2);
+      r.decode = await page.evaluate(() => window.DV.engine.lastDecode);
+      r.nFrames = await page.evaluate(() => window.DV.nFrames);
+      check(`${name} · a clip decodes`, r.nFrames === 60, String(r.nFrames));
+      check(`${name} · through WebCodecs, and it says so`,
+            r.decode.path === 'webcodecs-worker', r.decode.line);
+      await setMode(page, 'ordered');
+      await openStep(page, 'st5');
+      await page.evaluate(() => document.querySelector('#bExport').click());
+      r.render = await waitText(page, '#rinfo', /rendered|failed/, 900000);
+      check(`${name} · and the clip exports`, !/failed/.test(r.render), r.render);
+      const f = path.join(DOCS, `w-${name}-export.webm`);
+      r.bytes = await saveDownload(page, f);
+      r.probe = probe(f);
+      /* Exactness is only available where `requestFrame` is a method on the
+       * TRACK: that call captures the canvas synchronously. Firefox's
+       * stream-level one queues the grab, and a render slower than real time
+       * loses the odd frame to it — measured, 59 of 60. The export says so in
+       * its own note rather than looking fine, and that saying-so is what is
+       * asserted here. */
+      const exact = r.caps.requestFrame.onTrack;
+      const got = +r.probe.nb_read_frames;
+      check(`${name} · the export is the clip's own length`,
+            exact ? got === r.nFrames : Math.abs(got - r.nFrames) <= 2,
+            `${got} vs ${r.nFrames}`);
+      if (!exact && got !== r.nFrames) {
+        check(`${name} · and a short cut says so`,
+              /frames reached the file/.test(r.render), r.render);
+      }
+      fs.rmSync(f, { force: true });
+      await page.screenshot({ path: path.join(DOCS, `w-${name}-export.png`) });
+      await ctx.close();
+    } catch (e) {
+      r.failed = String(e.message || e);
+      throw e;
+    } finally { await br.close(); out[name] = r; }
+  }
+
+  /* --- and the branch no shipping browser takes */
+  const br = await chromium.launch({ headless: true, args: GPU_ARGS });
+  const r = {};
+  try {
+    const { ctx, page } = await newPage(browserPref(), { browser: br,
+      init: () => { try { delete CanvasCaptureMediaStreamTrack.prototype.requestFrame; }
+                    catch (e) { /* already not there */ } } });
+    r.gone = await page.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = 8; c.height = 8;
+      const s = c.captureStream(0), t = s.getVideoTracks()[0];
+      const o = typeof t.requestFrame === 'undefined' && typeof s.requestFrame === 'undefined';
+      t.stop(); return o;
+    });
+    check('no requestFrame · the API really is gone for this page', r.gone);
+    await loadClip(page, CLIP, 2);
+    r.nFrames = await page.evaluate(() => window.DV.nFrames);
+    await setMode(page, 'ordered');
+    await openStep(page, 'st5');
+    await page.evaluate(() => document.querySelector('#bExport').click());
+    r.render = await waitText(page, '#rinfo', /rendered|failed/, 900000);
+    check('no requestFrame · the export still runs', !/failed/.test(r.render), r.render);
+    const f = path.join(DOCS, 'w-nocapture-export.webm');
+    r.bytes = await saveDownload(page, f);
+    r.probe = probe(f);
+    check('no requestFrame · and the compositor path wrote every frame',
+          +r.probe.nb_read_frames === r.nFrames,
+          `${r.probe.nb_read_frames} != ${r.nFrames}`);
+    fs.rmSync(f, { force: true });
+    await ctx.close();
+  } finally { await br.close(); }
+  out.noRequestFrame = r;
+  return out;
+}
+
+/* ====== WA: WebGPU present, adapter refused — Brave's exact state ==========
+ * `navigator.gpu` exists, `requestAdapter()` answers null. Brave does that by
+ * default (Shields' fingerprinting protection) and Chrome does it on a
+ * blocklisted GPU, and the page used to die on it twice over: it kept asking
+ * onnxruntime for the WebGPU execution provider, which reported "no available
+ * backend found", and even the WASM provider would not have started, because
+ * the page asked for eight threads on a host that is not cross-origin isolated
+ * and therefore has no SharedArrayBuffer.
+ *
+ * So this runs the whole tracker on the fallback: single-threaded WASM, a
+ * still segmented and a short clip tracked, with the note that names the
+ * setting to change. It is slow on purpose — that is what the fallback IS —
+ * hence the very short clip.
+ */
+async function runNoAdapter() {
+  const r = {};
+  const { ctx, page } = await newPage(browserPref(), {
+    init: () => {
+      if (navigator.gpu) {
+        Object.defineProperty(navigator.gpu, 'requestAdapter',
+          { value: async () => null, configurable: true });
+      }
+    },
+  });
+  r.state = await page.evaluate(async () => ({
+    gpu: !!navigator.gpu,
+    adapter: !!(navigator.gpu && await navigator.gpu.requestAdapter()),
+    isolated: globalThis.crossOriginIsolated === true,
+    sab: typeof SharedArrayBuffer !== 'undefined',
+    ep: window.DV.engine.ep, device: (window.DV.meta || {}).device,
+    note: window.DV.engine.epNote || '',
+  }));
+  check('no adapter · WebGPU is there and the adapter is not',
+        r.state.gpu && !r.state.adapter, JSON.stringify(r.state));
+  check('no adapter · the engine falls to WASM before it asks ORT for anything',
+        r.state.ep === 'wasm' && r.state.device === 'wasm', r.state.ep);
+  check('no adapter · and the note names the setting to change',
+        /Brave/.test(r.state.note) && /shields|flags/i.test(r.state.note),
+        r.state.note);
+
+  // a still, dithered — no tracker involved, and it has to keep working
+  await page.setInputFiles('#file', STILL);
+  await page.waitForFunction(() => window.DV.kind === 'image', null, { timeout: 60000 });
+  await sleep(1500);
+  r.still = await census(page).catch(() => null);
+  await page.evaluate(() => { const b = document.querySelector('#st2');
+    if (b && b.dataset.open !== '1') b.querySelector('.sh').click(); });
+  await sleep(300);
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(900);
+  const [px, py] = await stageXY(page, SUBJECT_A.point[0], SUBJECT_A.point[1]);
+  await page.mouse.click(px, py);
+  r.preview = await waitText(page, '#pvinfo',
+    /^(?!.*(reading|loading|\.onnx)).*(px|failed)/, 600000);
+  check('no adapter · a still segments on the WASM backend',
+        !/failed/.test(r.preview) && /px/.test(r.preview), r.preview);
+  r.backend = await page.evaluate(() => ({
+    line: window.DV.engine.backendLine(), threads: window.DV.engine.threads }));
+  check('no adapter · single-threaded, because the page is not isolated',
+        r.backend.threads === 1, JSON.stringify(r.backend));
+  check('no adapter · the stats line says WASM and says it is slow',
+        /WASM/.test(r.backend.line) && /slow/.test(r.backend.line),
+        r.backend.line);
+  await page.screenshot({ path: path.join(DOCS, 'w-noadapter-still.png') });
+
+  // and half a second of clip, tracked. Fifteen frames on one WASM thread is
+  // minutes; that is the honest cost of the fallback and the reason for 0.5 s.
+  await loadClip(page, CLIP, 0.5);
+  r.nFrames = await page.evaluate(() => window.DV.nFrames);
+  await page.click('#scope .chip[data-scope="track"]'); await sleep(800);
+  await promptBoxPoint(page, SUBJECT_A);
+  await page.click('#bTrack');
+  r.track = await waitText(page, '#tinfo', /tracked|failed/, 1800000);
+  check('no adapter · and a clip tracks on it', !/failed/.test(r.track), r.track);
+  check('no adapter · the tracked line names the backend',
+        /WASM/i.test(r.track), r.track);
+  await page.screenshot({ path: path.join(DOCS, 'w-noadapter-tracked.png') });
+  await ctx.close();
+  return r;
+}
+
 /* --------------------------------------------------------------------- main */
 BR = await pickBrowser();
 R.browser = { how: BR.how, executionProvider: BR.ep, webgpu: BR.gpu,
@@ -2349,6 +2760,7 @@ const run = async (name, fn, ...args) => {
 };
 
 try {
+  await run('decodePaths', runDecodePaths);
   await run('engineChip', runEngineChip);
   await run('still', runStill);
   await run('stillDots', runStillDots);
@@ -2369,6 +2781,8 @@ try {
   await run('seqPixel', runSeqPixel);
   await run('entryBrowser', runEntry, 'browser');
   await run('entryRemote', runEntry, 'remote');
+  await run('otherBrowsers', runOtherBrowsers);
+  await run('noAdapter', runNoAdapter);
   await run('apiKey', runApiKey);
 } catch (e) {
   R.fatal = String(e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e);

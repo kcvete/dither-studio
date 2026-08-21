@@ -28,10 +28,24 @@ engines/
   browser.js      everything in the tab: decode, track, dither, encode.
                   `snapshot()` hands out a detached handle on the open clip,
                   which is what lets a sequence item outlive it
+  decode.js       how a clip becomes frames: WebCodecs in a Worker, WebCodecs
+                  on the main thread, or the original <video> seek loop, picked
+                  by feature detection and verified by trying. All three
+                  produce the same grid — frame i is the picture at
+                  t0 + (i + 0.5)/fps — and the same JPEG bytes
   remote.js       the REST API in server/ — local or rented, same client.
                   `snapshot()` is the same idea: the two job routes with the
                   id already bound
 track.js          EdgeTAM's tracking loop in JS over the ONNX graphs
+workers/
+  decode-worker.js  a module Worker: demux + VideoDecoder + JPEG, so a decode
+                    never touches the main thread
+  decode-core.js    the decode itself, importable from the worker OR the page
+  demux-mp4.js      a minimal MP4/MOV sample table reader — ordinary moov+stbl
+                    and fragmented moof+trun, edit lists included. Written
+                    here; nothing vendored
+  demux-webm.js     the same for WebM/Matroska, including the unknown-size
+                    Segments and Clusters MediaRecorder writes
 vendor/
   gifenc.js       a GIF89a/LZW encoder, ~220 lines, no dependencies
 player/
@@ -85,8 +99,16 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-They are not required. WebGPU — the fast path, and what a current Chrome or Edge
-uses — needs neither.
+They are not required. WebGPU — the fast path, and what a current Chrome, Edge
+or Safari 26 uses — needs neither. Without them the page detects that it is not
+cross-origin isolated and asks onnxruntime for **one** WASM thread rather than
+eight: eight would not be a slower fast path, it would be a failed init, because
+threads need `SharedArrayBuffer` and that needs these headers. One thread tracks
+at ~0.5 fps, which is a still and a handful of frames, not a clip.
+
+**Browsers.** Fastest in Chrome and Safari; Firefox works but is slower, and its
+WebM export can come up a frame short on a slow render (it says so when it
+does). See *Browsers* in the root README for the measured table.
 
 ## The models
 
