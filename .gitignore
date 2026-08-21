@@ -13,6 +13,9 @@ node_modules/
 # the suites' default input: `node verify.mjs` with no arguments has to work
 # from a fresh clone, so the 5 s parkour clip and its first frame are here.
 !sample.mp4
+# the landing hero's "before" half: 75 KB of the same clip, cropped and cut to
+# the dots' own time base. The page is nothing without it.
+!web/demo/demo-before.mp4
 bench/_res/
 .claude/
 

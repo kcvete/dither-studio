@@ -421,10 +421,24 @@
   <main id="stage">
     <div id="empty">
       <div class="hero">
-        <!-- the landing is already running: a prebaked .dots.gz of the demo
-             clip, played by the shipped player — the actual product output,
-             animating, for the cost of a small image. -->
-        <div id="herowrap"><canvas id="herocv"></canvas></div>
+        <!-- the landing is already running, and it shows the whole idea in one
+             picture: the real footage on the left, the same frame as Solvd dots
+             on the right, split by a divider that sweeps back and forth. Both
+             halves are the identical crop at 3:2 and the identical time base
+             (frame i of each is source frame 20+2i), so the athlete's body
+             carries across the seam. Prebaked — no model, no GPU. -->
+        <div id="herowrap" data-mode="live">
+          <div id="herostack">
+            <video id="herovid" muted playsinline loop preload="auto"
+                   poster="./demo/demo-poster.jpg" src="./demo/demo-before.mp4"
+                   aria-hidden="true"></video>
+            <canvas id="herocv" width="540" height="360" role="img"
+                    aria-label="the same clip, cut out and turned into dots"></canvas>
+            <b id="heroline" aria-hidden="true"><i></i></b>
+            <em class="herocap" id="hcapA" aria-hidden="true">before</em>
+            <em class="herocap" id="hcapB" aria-hidden="true">after</em>
+          </div>
+        </div>
         <h1>Dither Studio</h1>
         <p>Point at anything in a photo or a clip — it is cut out, tracked,
            and turned into dots. Or dither the whole frame.</p>

@@ -151,12 +151,11 @@ function showStage(which) {
   $('#bCmp').hidden = which !== 'result';
   if (!onPix) closeStats();
   paintTray(); paintInfo();
-  // the hero demo runs only while the landing is what is on stage
+  // the hero demo runs only while the landing is what is on stage. Reduced
+  // motion parks the divider (initHero) but the footage still loops, so the
+  // before/after is not a still life for the people who asked for calm.
   if (typeof HERO !== 'undefined' && HERO) {
-    if (which === 'empty'
-        && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      HERO.play();
-    } else HERO.pause();
+    if (which === 'empty') HERO.play(); else HERO.pause();
   }
 }
 
@@ -5717,9 +5716,12 @@ async function checkModels() {
 }
 
 /* ============================================== first-run: the demo =======
- * The landing is already running: a prebaked demo.dots.gz plays in the hero
- * (the shipped player — no model, no GPU, works in every webview), and the
- * remove.bg-style sample row skips a first-timer straight into the flow.
+ * The landing is already running, and it says what the tool does without a
+ * word: the athlete's backflip as real footage on the left, the same instant
+ * as Solvd dots on the right, a divider sweeping between them. Both halves are
+ * prebaked (demo-before.mp4 and demo.dots.gz, one crop rect, one time base) —
+ * no model, no GPU, works in every webview. Then the remove.bg-style sample row
+ * skips a first-timer straight into the flow.
  * The 30-second script: tap the sample clip → one pulsing in-canvas hint →
  * tap the athlete → instant tint → Track → Solvd applies itself → playing.
  * Any real action dismisses the hint; nothing here is a modal. (spec §5) */
@@ -5787,26 +5789,179 @@ function paintHeroLooks() {
   }).catch(() => {});
 }
 
+/* ------------------------------------------------- the split before/after
+ * One controller drives three things off one clock:
+ *   - the <video> (the untouched footage) plays and loops itself;
+ *   - the dots frame is read back OFF the video — requestVideoFrameCallback
+ *     where the browser has it, otherwise currentTime in the rAF — so the
+ *     body is continuous across the seam, whatever the divider is doing;
+ *   - the divider sweeps left↔right on that same video clock, eased, with a
+ *     hold at each end, repainted every rAF rather than every video frame so
+ *     it glides instead of stepping at 15 fps.
+ * If the mp4 will not autoplay we show its poster and run the dots off the
+ * clock instead; if the mp4 will not load at all the dots take the whole box.
+ * Off-screen or in a background tab it all stops, and showStage() pauses it
+ * the moment a real picture takes the stage. */
+const HERO_FPS = 15, HERO_N = 53;        // demo.dots.gz and demo-before.mp4 both
+const HERO_DUR = HERO_N / HERO_FPS;      // 3.53 s — one replay of the backflip
+/* One there-and-back over four replays: a 7.1-second leg, and phase-locked to
+ * the clip rather than to the wall clock, so the seam meets the athlete at the
+ * same places every time instead of drifting. He travels left to right as the
+ * seam does, so leg one holds him astride the divider — half flesh, half dots —
+ * and leg two hands him over to the dots entirely. */
+const HERO_SWEEP_MS = HERO_DUR * 4000;
+const HERO_HOLD = 0.14;                  // share of each leg spent parked
+/* The range is deliberately left of centre and stops short of the right edge,
+ * and the sweep starts a sixth of the way in: the athlete lives in the left
+ * half for most of the replay, so a seam that ran out to 0.9 would leave the
+ * dots half an empty sliver of sage. As tuned against his tracked bounding box
+ * the seam crosses his body for 67% of the cycle and puts him wholly in dots
+ * for another 12%, leaving only a fifth of the loop with a flat right half. */
+const HERO_MIN = 0.16, HERO_MAX = 0.58, HERO_PHASE = 0.15;
+
+function heroSplitAt(ms) {
+  const u = (ms / HERO_SWEEP_MS + HERO_PHASE) % 1;
+  const tri = u < 0.5 ? u * 2 : (1 - u) * 2;                 // 0→1→0
+  let q = (tri - HERO_HOLD) / (1 - 2 * HERO_HOLD);
+  q = q < 0 ? 0 : q > 1 ? 1 : q;
+  const e = q < 0.5 ? 2 * q * q : 1 - Math.pow(-2 * q + 2, 2) / 2;
+  return HERO_MIN + e * (HERO_MAX - HERO_MIN);
+}
+
+function makeHero(player, video, wrap) {
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const H = {
+    player, video, wrap,
+    on: false, raf: 0, vfc: 0, clock: false, dead: false, visible: true,
+    t0: performance.now(), loops: 0, last: 0,
+    /* the video's own clock, unwrapped past its loop point — the divider rides
+       this, not performance.now(), so the sweep can never drift off the clip */
+    elapsed(sec) {
+      if (sec < H.last - 0.5) H.loops++;
+      H.last = sec;
+      return H.loops * HERO_DUR + sec;
+    },
+    setSplit(s) {
+      wrap.style.setProperty('--split', s.toFixed(4));
+      // the captions get out of the way when the seam crowds their corner
+      const fade = (d) => (d < 0.06 ? 0 : d > 0.16 ? 1 : (d - 0.06) / 0.1);
+      wrap.style.setProperty('--capa', fade(s - HERO_MIN + 0.06).toFixed(2));
+      wrap.style.setProperty('--capb', fade(HERO_MAX - s + 0.06).toFixed(2));
+    },
+    drawAt(sec) {
+      const f = Math.round(sec * HERO_FPS) % HERO_N;
+      if (f !== player.frame) player.draw(f);
+    },
+    tick() {
+      if (!H.on) return;
+      const total = H.clock ? (performance.now() - H.t0) / 1000
+                            : H.elapsed(video.currentTime || 0);
+      if (!reduce.matches) H.setSplit(heroSplitAt(total * 1000));
+      // rVFC owns the frame when it works; otherwise the clock we have
+      if (!H.vfc) H.drawAt(total);
+      H.raf = requestAnimationFrame(H.tick);
+    },
+    onVideoFrame(_now, meta) {
+      if (!H.on) return;
+      H.drawAt(meta && meta.mediaTime !== undefined ? meta.mediaTime
+                                                    : video.currentTime || 0);
+      H.vfc = video.requestVideoFrameCallback(H.onVideoFrame);
+    },
+    play() {
+      if (H.on || !H.visible || document.hidden) return;
+      H.on = true;
+      if (H.clock) H.t0 = performance.now() - H.last * 1000;
+      if (!H.clock) {
+        const p = video.play();
+        if (p && p.catch) p.catch(() => H.fallback());
+      }
+      if (!H.clock && video.requestVideoFrameCallback) {
+        H.vfc = video.requestVideoFrameCallback(H.onVideoFrame);
+      }
+      H.raf = requestAnimationFrame(H.tick);
+    },
+    pause() {
+      H.on = false;
+      if (H.raf) cancelAnimationFrame(H.raf);
+      H.raf = 0;
+      if (H.vfc && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(H.vfc);
+      H.vfc = 0;
+      if (H.clock) H.last = (performance.now() - H.t0) / 1000;
+      if (!video.paused) video.pause();
+    },
+    /* the host will not serve the mp4 at all: no footage, no poster, no seam —
+       the dots take the whole box and run off the clock */
+    lost() {
+      if (H.dead) return;
+      H.dead = true; H.clock = true; H.t0 = performance.now(); H.last = 0;
+      wrap.setAttribute('data-mode', 'dots');
+      if (H.vfc && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(H.vfc);
+      H.vfc = 0;
+    },
+    /* autoplay refused: the poster stands in for the footage and the dots run
+       off the wall clock, so the hero is never a blank rectangle */
+    fallback() {
+      if (H.clock || H.dead) return;
+      H.clock = true;
+      H.t0 = performance.now();
+      wrap.setAttribute('data-mode', 'poster');
+      if (H.vfc && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(H.vfc);
+      H.vfc = 0;
+      // a tap anywhere is a gesture: try the footage once more
+      const retry = () => {
+        const p = video.play();
+        if (p && p.then) p.then(() => {
+          H.clock = false;
+          wrap.setAttribute('data-mode', 'live');
+          if (H.on && video.requestVideoFrameCallback) {
+            H.vfc = video.requestVideoFrameCallback(H.onVideoFrame);
+          }
+        }).catch(() => {});
+      };
+      document.addEventListener('pointerdown', retry, { once: true });
+    },
+  };
+  H.setSplit(reduce.matches ? 0.45 : heroSplitAt(0));
+  return H;
+}
+
 async function initHero() {
   paintHeroLooks();
   const ring = $('#dShapeCv');
   if (ring) drawRing(ring.getContext('2d'), ring.width, ring.height);
-  const hc = $('#herocv');
-  if (!hc) return;
+  const hc = $('#herocv'), hv = $('#herovid'), wrap = $('#herowrap');
+  if (!hc || !wrap) return;
   try {
     const res = await fetch('./demo/demo.dots.gz');
     if (!res.ok) throw new Error('no demo asset');
     const bytes = new Uint8Array(await res.arrayBuffer());
     const P = await playerLib();
     const doc = await P.unpack(bytes);
-    HERO = new P.Player(hc, { loop: true });
-    HERO.setDoc(doc);
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) HERO.draw(0);
-    else if (!$('#empty').hidden) HERO.play();
-    else HERO.draw(0);
+    // the player only rasterises here — the frame number comes from the video
+    const player = new P.Player(hc, { loop: false });
+    player.setDoc(doc);
+    if (!hv) { wrap.setAttribute('data-mode', 'dots'); return; }
+    HERO = makeHero(player, hv, wrap);
+    // an mp4 this host will not serve: the dots take the whole box, no seam.
+    // The <video> carries its src in the markup, so it can have failed long
+    // before this ran — ask it, do not only listen.
+    hv.addEventListener('error', () => HERO.lost());
+    if (hv.error || hv.networkState === 3) HERO.lost();
+    // pause off-screen and in a background tab — the landing is cheap or it is
+    // not worth having
+    if (window.IntersectionObserver) {
+      new IntersectionObserver((es) => {
+        HERO.visible = es[0].isIntersecting;
+        if (HERO.visible) { if (!$('#empty').hidden) HERO.play(); } else HERO.pause();
+      }, { threshold: 0.05 }).observe(wrap);
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) HERO.pause();
+      else if (!$('#empty').hidden) HERO.play();
+    });
+    if (!$('#empty').hidden) HERO.play();
   } catch (e) {
-    const w = $('#herowrap');
-    if (w) w.hidden = true;      // a static host without the asset: plain hero
+    wrap.hidden = true;          // a static host without the asset: plain hero
   }
 }
 $('#bPickCam') && $('#bPickCam').addEventListener('click', () => camOpen());
@@ -5855,6 +6010,15 @@ $('#dTryShape') && $('#dTryShape').addEventListener('click', () => seqAdd('shape
                               modelsMissing: S.modelsMissing,
                               tried: S.engineTried });
   window.DV_switchEngine = switchEngine;
+  /* the landing's before/after, for the verifiers and for a console: which
+     frame the dots are on, where the seam is, and which of the three modes
+     (live footage / poster fallback / dots-only) the hero settled into */
+  window.DV_hero = () => (HERO ? {
+    mode: HERO.wrap.getAttribute('data-mode'), running: HERO.on, clock: HERO.clock,
+    frame: HERO.player.frame, videoTime: HERO.video.currentTime,
+    paused: HERO.video.paused, vfc: !!HERO.vfc,
+    split: parseFloat(HERO.wrap.style.getPropertyValue('--split')),
+  } : null);
   window.DV_composeAt = composeAt;
   /* the undithered frame the matched cut is made of — the verifiers compare
      the exported original against this, which is the only ground truth the
